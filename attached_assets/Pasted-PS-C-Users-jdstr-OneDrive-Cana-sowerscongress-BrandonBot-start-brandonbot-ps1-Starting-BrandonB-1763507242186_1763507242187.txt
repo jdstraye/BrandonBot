@@ -1,0 +1,126 @@
+PS C:\Users\jdstr\OneDrive\Cana\sowerscongress\BrandonBot> .\start_brandonbot.ps1
+Starting BrandonBot...
+time="2025-11-18T15:05:54-08:00" level=warning msg="C:\\Users\\jdstr\\OneDrive\\Cana\\sowerscongress\\BrandonBot\\docker-compose.yml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion"
+[+] Building 10.2s (10/11)
+ => [internal] load local bake definitions                                                                         0.0s
+ => => reading from stdin 602B                                                                                     0.0s
+ => [internal] load build definition from Dockerfile                                                               0.0s
+ => => transferring dockerfile: 318B                                                                               0.0s
+ => [internal] load metadata for docker.io/library/python:3.11-slim                                                0.5s
+ => [internal] load .dockerignore                                                                                  0.0s
+ => => transferring context: 2B                                                                                    0.0s
+ => [1/6] FROM docker.io/library/python:3.11-slim@sha256:8ef21a26e7c342e978a68cf2d6b07627885930530064f572f432ea42  0.0s
+ => => resolve docker.io/library/python:3.11-slim@sha256:8ef21a26e7c342e978a68cf2d6b07627885930530064f572f432ea42  0.0s
+ => [internal] load build context                                                                                  0.0s
+ => => transferring context: 392B                                                                                  0.0s
+ => CACHED [2/6] WORKDIR /app                                                                                      0.0s
+ => CACHED [3/6] RUN apt-get update && apt-get install -y     gcc     && rm -rf /var/lib/apt/lists/*               0.0s
+ => CACHED [4/6] COPY requirements.txt .                                                                           0.0s
+ => ERROR [5/6] RUN pip install --no-cache-dir -r requirements.txt                                                 9.3s
+------
+ > [5/6] RUN pip install --no-cache-dir -r requirements.txt:
+1.922 Collecting fastapi==0.104.1 (from -r requirements.txt (line 1))
+2.148   Downloading fastapi-0.104.1-py3-none-any.whl.metadata (24 kB)
+2.251 Collecting uvicorn==0.24.0 (from uvicorn[standard]==0.24.0->-r requirements.txt (line 2))
+2.274   Downloading uvicorn-0.24.0-py3-none-any.whl.metadata (6.4 kB)
+2.427 Collecting weaviate-client==4.4.0 (from -r requirements.txt (line 3))
+2.469   Downloading weaviate_client-4.4.0-py3-none-any.whl.metadata (3.4 kB)
+2.530 Collecting sentence-transformers==2.2.2 (from -r requirements.txt (line 4))
+2.582   Downloading sentence-transformers-2.2.2.tar.gz (85 kB)
+2.637      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 86.0/86.0 kB 1.9 MB/s eta 0:00:00
+2.660   Preparing metadata (setup.py): started
+2.990   Preparing metadata (setup.py): finished with status 'done'
+3.014 Collecting ollama==0.1.6 (from -r requirements.txt (line 5))
+3.032   Downloading ollama-0.1.6-py3-none-any.whl.metadata (3.8 kB)
+3.186 Collecting pydantic==2.5.0 (from -r requirements.txt (line 6))
+3.205   Downloading pydantic-2.5.0-py3-none-any.whl.metadata (174 kB)
+3.267      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 174.6/174.6 kB 2.9 MB/s eta 0:00:00
+3.297 Collecting python-multipart==0.0.6 (from -r requirements.txt (line 7))
+3.309   Downloading python_multipart-0.0.6-py3-none-any.whl.metadata (2.5 kB)
+3.335 Collecting aiosqlite==0.19.0 (from -r requirements.txt (line 8))
+3.350   Downloading aiosqlite-0.19.0-py3-none-any.whl.metadata (4.3 kB)
+3.396 Collecting anyio<4.0.0,>=3.7.1 (from fastapi==0.104.1->-r requirements.txt (line 1))
+3.423   Downloading anyio-3.7.1-py3-none-any.whl.metadata (4.7 kB)
+3.500 Collecting starlette<0.28.0,>=0.27.0 (from fastapi==0.104.1->-r requirements.txt (line 1))
+3.515   Downloading starlette-0.27.0-py3-none-any.whl.metadata (5.8 kB)
+3.562 Collecting typing-extensions>=4.8.0 (from fastapi==0.104.1->-r requirements.txt (line 1))
+3.570   Downloading typing_extensions-4.15.0-py3-none-any.whl.metadata (3.3 kB)
+3.644 Collecting click>=7.0 (from uvicorn==0.24.0->uvicorn[standard]==0.24.0->-r requirements.txt (line 2))
+3.660   Downloading click-8.3.1-py3-none-any.whl.metadata (2.6 kB)
+3.694 Collecting h11>=0.8 (from uvicorn==0.24.0->uvicorn[standard]==0.24.0->-r requirements.txt (line 2))
+3.715   Downloading h11-0.16.0-py3-none-any.whl.metadata (8.3 kB)
+3.770 Collecting requests<3.0.0,>=2.30.0 (from weaviate-client==4.4.0->-r requirements.txt (line 3))
+3.785   Downloading requests-2.32.5-py3-none-any.whl.metadata (4.9 kB)
+3.819 Collecting httpx==0.26.0 (from weaviate-client==4.4.0->-r requirements.txt (line 3))
+3.838   Downloading httpx-0.26.0-py3-none-any.whl.metadata (7.6 kB)
+3.888 Collecting validators==0.22.0 (from weaviate-client==4.4.0->-r requirements.txt (line 3))
+3.953   Downloading validators-0.22.0-py3-none-any.whl.metadata (4.7 kB)
+4.024 Collecting authlib<2.0.0,>=1.2.1 (from weaviate-client==4.4.0->-r requirements.txt (line 3))
+4.050   Downloading authlib-1.6.5-py2.py3-none-any.whl.metadata (9.8 kB)
+5.294 Collecting grpcio<2.0.0,>=1.57.0 (from weaviate-client==4.4.0->-r requirements.txt (line 3))
+5.306   Downloading grpcio-1.76.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (3.7 kB)
+6.086 Collecting grpcio-tools<2.0.0,>=1.57.0 (from weaviate-client==4.4.0->-r requirements.txt (line 3))
+6.103   Downloading grpcio_tools-1.76.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (5.3 kB)
+6.245 Collecting grpcio-health-checking<2.0.0,>=1.57.0 (from weaviate-client==4.4.0->-r requirements.txt (line 3))
+6.279   Downloading grpcio_health_checking-1.76.0-py3-none-any.whl.metadata (1.1 kB)
+6.436 Collecting transformers<5.0.0,>=4.6.0 (from sentence-transformers==2.2.2->-r requirements.txt (line 4))
+6.474   Downloading transformers-4.57.1-py3-none-any.whl.metadata (43 kB)
+6.511      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 44.0/44.0 kB 1.6 MB/s eta 0:00:00
+6.616 Collecting tqdm (from sentence-transformers==2.2.2->-r requirements.txt (line 4))
+6.663   Downloading tqdm-4.67.1-py3-none-any.whl.metadata (57 kB)
+6.687      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 57.7/57.7 kB 12.9 MB/s eta 0:00:00
+6.838 Collecting torch>=1.6.0 (from sentence-transformers==2.2.2->-r requirements.txt (line 4))
+6.878   Downloading torch-2.9.1-cp311-cp311-manylinux_2_28_x86_64.whl.metadata (30 kB)
+7.068 Collecting torchvision (from sentence-transformers==2.2.2->-r requirements.txt (line 4))
+7.115   Downloading torchvision-0.24.1-cp311-cp311-manylinux_2_28_x86_64.whl.metadata (5.9 kB)
+7.512 Collecting numpy (from sentence-transformers==2.2.2->-r requirements.txt (line 4))
+7.538   Downloading numpy-2.3.5-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl.metadata (62 kB)
+7.550      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 62.1/62.1 kB 8.7 MB/s eta 0:00:00
+7.674 Collecting scikit-learn (from sentence-transformers==2.2.2->-r requirements.txt (line 4))
+7.696   Downloading scikit_learn-1.7.2-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (11 kB)
+7.875 Collecting scipy (from sentence-transformers==2.2.2->-r requirements.txt (line 4))
+7.887   Downloading scipy-1.16.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (62 kB)
+7.911      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 62.0/62.0 kB 3.5 MB/s eta 0:00:00
+7.952 Collecting nltk (from sentence-transformers==2.2.2->-r requirements.txt (line 4))
+7.980   Downloading nltk-3.9.2-py3-none-any.whl.metadata (3.2 kB)
+8.059 Collecting sentencepiece (from sentence-transformers==2.2.2->-r requirements.txt (line 4))
+8.076   Downloading sentencepiece-0.2.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl.metadata (10 kB)
+8.236 Collecting huggingface-hub>=0.4.0 (from sentence-transformers==2.2.2->-r requirements.txt (line 4))
+8.253   Downloading huggingface_hub-1.1.4-py3-none-any.whl.metadata (13 kB)
+8.263 INFO: pip is looking at multiple versions of ollama to determine which version is compatible with other requirements. This could take a while.
+8.278 ERROR: Cannot install -r requirements.txt (line 3) and -r requirements.txt (line 5) because these package versions have conflicting dependencies.
+8.279
+8.279 The conflict is caused by:
+8.279     weaviate-client 4.4.0 depends on httpx==0.26.0
+8.279     ollama 0.1.6 depends on httpx<0.26.0 and >=0.25.2
+8.279
+8.279 To fix this you could try to:
+8.279 1. loosen the range of package versions you've specified
+8.279 2. remove package versions to allow pip attempt to solve the dependency conflict
+8.279
+8.279 ERROR: ResolutionImpossible: for help visit https://pip.pypa.io/en/latest/topics/dependency-resolution/#dealing-with-dependency-conflicts
+8.403
+8.403 [notice] A new release of pip is available: 24.0 -> 25.3
+8.403 [notice] To update, run: pip install --upgrade pip
+------
+Dockerfile:10
+
+--------------------
+
+   8 |
+
+   9 |     COPY requirements.txt .
+
+  10 | >>> RUN pip install --no-cache-dir -r requirements.txt
+
+  11 |
+
+  12 |     COPY . .
+
+--------------------
+
+failed to solve: process "/bin/sh -c pip install --no-cache-dir -r requirements.txt" did not complete successfully: exit code: 1
+
+
+BrandonBot is running!
+Access it at: http://localhost:8000
