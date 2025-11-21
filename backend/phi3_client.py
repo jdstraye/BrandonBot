@@ -1,5 +1,6 @@
 import logging
 import os
+from typing import Optional
 import onnxruntime_genai as og
 
 logger = logging.getLogger(__name__)
@@ -38,7 +39,8 @@ DISCLAIMER: While I've been trained on Brandon's positions, I may make mistakes.
             logger.error(f"Failed to load Phi-3 model: {str(e)}")
             return False
     
-    async def generate_response(self, query: str, context: str, confidence: float) -> dict:
+    async def generate_response(self, query: str, context: str, confidence: float, 
+                               system_prompt: Optional[str] = None) -> dict:
         try:
             if not self.model or not self.tokenizer:
                 ready = await self.ensure_model_ready()
@@ -48,6 +50,8 @@ DISCLAIMER: While I've been trained on Brandon's positions, I may make mistakes.
                         "model": "error-model-not-loaded",
                         "error": "Phi-3 model not available"
                     }
+            
+            active_system_prompt = system_prompt if system_prompt else self.system_prompt
             
             if confidence < 0.5:
                 prompt = f"""Based on the limited information available:
@@ -66,14 +70,16 @@ Context from Brandon's statements and platform:
 
 Provide a clear, conversational answer as BrandonBot. Keep it concise (2-4 sentences for simple questions, longer for complex topics)."""
             
-            full_prompt = f"{self.system_prompt}\n\n{prompt}"
+            full_prompt = f"<|system|>{active_system_prompt}<|end|><|user|>{prompt}<|end|><|assistant|>"
+            logger.info(f"Phi-3 full prompt length: {len(full_prompt)}, confidence: {confidence}")
             
             tokens = self.tokenizer.encode(full_prompt)
+            logger.info(f"Encoded {len(tokens)} tokens")
             
             params = og.GeneratorParams(self.model)
             params.input_ids = tokens
             params.set_search_options(
-                max_length=512,
+                max_length=2048,
                 temperature=0.7,
                 top_p=0.9
             )
@@ -81,11 +87,15 @@ Provide a clear, conversational answer as BrandonBot. Keep it concise (2-4 sente
             generator = og.Generator(self.model, params)
             
             response_text = ""
+            token_count = 0
             while not generator.is_done():
                 generator.compute_logits()
                 generator.generate_next_token()
                 new_token = generator.get_next_tokens()[0]
                 response_text += self.tokenizer.decode([new_token])
+                token_count += 1
+            
+            logger.info(f"Generated {token_count} tokens, response length: {len(response_text)}")
             
             return {
                 "response": response_text.strip(),

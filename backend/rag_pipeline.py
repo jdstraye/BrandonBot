@@ -3,6 +3,7 @@ from typing import Dict, List, Optional
 from weaviate_manager import WeaviateManager
 from phi3_client import Phi3Client
 from database import DatabaseManager
+from analysis_pipeline import QuestionAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -12,29 +13,34 @@ class RAGPipeline:
         self.weaviate = weaviate_manager
         self.phi3 = phi3_client
         self.db = db_manager
+        self.question_analyzer = QuestionAnalyzer(phi3_client)
         
         self.confidence_thresholds = {
-            "BrandonPlatform": 0.8,
-            "PreviousQA": 0.8,
-            "PartyPlatform": 0.6,
-            "MarketGurus": 0.25
+            "BrandonPlatform": 0.3,
+            "PreviousQA": 0.3,
+            "PartyPlatform": 0.25
         }
         
-        self.collection_order = [
+        self.content_collections = [
             "BrandonPlatform",
             "PreviousQA", 
-            "PartyPlatform",
-            "MarketGurus"
+            "PartyPlatform"
         ]
     
     async def process_query(self, query: str, user_id: Optional[str] = None, 
                            consent_given: bool = False) -> Dict:
         try:
-            all_results = []
+            try:
+                question_analysis = self.question_analyzer.analyze_question(query)
+            except Exception as e:
+                logger.warning(f"Question analysis failed, using defaults: {e}")
+                question_analysis = None
+            
+            content_results = []
             best_confidence = 0.0
             primary_source = None
             
-            for collection in self.collection_order:
+            for collection in self.content_collections:
                 results = await self.weaviate.search(
                     collection_name=collection,
                     query=query,
@@ -45,27 +51,35 @@ class RAGPipeline:
                 
                 for result in results:
                     if result["confidence"] >= threshold:
-                        all_results.append({
+                        content_results.append({
                             **result,
                             "collection": collection
                         })
                         if result["confidence"] > best_confidence:
                             best_confidence = result["confidence"]
                             primary_source = collection
-                
-                if all_results and primary_source in ["BrandonPlatform", "PreviousQA"]:
-                    break
+            
+            style_guidance = []
+            if question_analysis and best_confidence >= 0.7:
+                style_guidance = await self._get_style_guidance(question_analysis)
+            
+            content_results.sort(key=lambda x: x["confidence"], reverse=True)
+            all_results = content_results
             
             if not all_results or best_confidence < 0.5:
                 response_text = self._generate_low_confidence_response(query)
                 offer_callback = True
             else:
-                context = self._build_context(all_results[:5])
+                content_context = self._build_context(all_results[:5])
+                system_prompt = self._build_system_prompt(question_analysis, style_guidance)
+                logger.info(f"System prompt length: {len(system_prompt)}, Question analysis: {question_analysis is not None}")
                 llm_response = await self.phi3.generate_response(
                     query=query,
-                    context=context,
+                    context=content_context,
+                    system_prompt=system_prompt,
                     confidence=best_confidence
                 )
+                logger.info(f"LLM response length: {len(llm_response.get('response', ''))}, Model: {llm_response.get('model')}")
                 response_text = llm_response["response"]
                 offer_callback = best_confidence < 0.7
             
@@ -120,3 +134,88 @@ class RAGPipeline:
             "This is an important topic that deserves an accurate answer directly from Brandon. "
             "Would you like him to call you back to discuss this personally?"
         )
+    
+    async def _get_style_guidance(self, question_analysis) -> List[Dict]:
+        """
+        Query MarketGurus collection for communication style guidance based on question analysis.
+        Returns copywriting principles that match the user's awareness level and emotional tone.
+        """
+        if not question_analysis.marketgurus_keywords:
+            return []
+        
+        keywords_query = " ".join(question_analysis.marketgurus_keywords)
+        
+        try:
+            results = await self.weaviate.search(
+                collection_name="MarketGurus",
+                query=keywords_query,
+                limit=5
+            )
+            
+            return [r for r in results if r["confidence"] >= 0.3]
+        except Exception as e:
+            logger.warning(f"Failed to get MarketGuru style guidance: {e}")
+            return []
+    
+    def _build_system_prompt(self, question_analysis, style_guidance: List[Dict]) -> str:
+        """
+        Build system prompt that includes:
+        - Marketing strategy (awareness level + emotional tone)
+        - Stylistic directives ONLY (no raw MarketGuru content)
+        """
+        if not question_analysis:
+            return "You are BrandonBot, speaking AS Brandon Sowers in first person. Be direct, conversational, and benefit-focused."
+        
+        prompt_parts = [
+            "You are BrandonBot, speaking AS Brandon Sowers in first person.",
+            f"\nCommunication Strategy: {question_analysis.marketing_strategy}"
+        ]
+        
+        if style_guidance:
+            style_directives = self._extract_style_directives(question_analysis, style_guidance)
+            if style_directives:
+                prompt_parts.append(f"\nStyle Instructions:\n{style_directives}")
+        
+        prompt_parts.extend([
+            "\nKey Guidelines:",
+            "- Speak in first person ('I believe', 'my position')",
+            "- Be direct, conversational, benefit-focused",
+            "- Match the user's awareness level and emotional tone"
+        ])
+        
+        return "\n".join(prompt_parts)
+    
+    def _extract_style_directives(self, question_analysis, style_guidance: List[Dict]) -> str:
+        """
+        Extract ONLY stylistic directives from MarketGuru content.
+        Returns template instructions, NOT raw text that could introduce factual claims.
+        """
+        awareness = question_analysis.awareness_level
+        tone = question_analysis.emotional_tone
+        
+        directives = []
+        
+        if awareness == "unaware":
+            directives.append("- Lead with the problem, not the solution")
+            directives.append("- Build awareness before pitching")
+        elif awareness == "problem_aware":
+            directives.append("- Acknowledge their pain point immediately")
+            directives.append("- Position your solution as the answer")
+        elif awareness == "solution_aware":
+            directives.append("- Show why your approach is superior")
+            directives.append("- Use specific evidence and comparisons")
+        elif awareness in ["product_aware", "most_aware"]:
+            directives.append("- Reinforce their existing knowledge")
+            directives.append("- Add depth and nuance")
+        
+        if tone == "concerned":
+            directives.append("- Address concerns with empathy and evidence")
+        elif tone == "frustrated":
+            directives.append("- Acknowledge frustration, offer concrete solutions")
+        elif tone == "curious":
+            directives.append("- Satisfy curiosity with clear explanations")
+        elif tone == "skeptical":
+            directives.append("- Provide verifiable facts and citations")
+        
+        return "\n".join(directives) if directives else ""
+
