@@ -1,0 +1,90 @@
+~/workspace$ cd backend
+uvicorn main:app --host 0.0.0.0 --port 5000
+uvicorn: command not installed. Multiple versions of this command were found in Nix.
+Select one to run (or press Ctrl-C to cancel):
+python312Packages.uvicorn  0.34.0  Lightning-fast ASGI server
+Adding python312Packages.uvicorn to .replit
+Traceback (most recent call last):
+  File "/nix/store/6cj5gf0x27v4rs0xnb0wrjf15gv5ngj6-python3.12-uvicorn-0.34.0/bin/.uvicorn-wrapped", line 9, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/click/core.py", line 1485, in __call__
+    return self.main(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/click/core.py", line 1406, in main
+    rv = self.invoke(ctx)
+         ^^^^^^^^^^^^^^^^
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/click/core.py", line 1269, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/click/core.py", line 824, in invoke
+    return callback(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/uvicorn/main.py", line 423, in main
+    run(
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/uvicorn/main.py", line 593, in run
+    server.run()
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/uvicorn/server.py", line 67, in run
+    return asyncio_run(self.serve(sockets=sockets), loop_factory=self.config.get_loop_factory())
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/nix/store/h097imm3w6dpx10qynrd2sz9fks2wbq8-python3-3.12.11/lib/python3.12/asyncio/runners.py", line 195, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/nix/store/h097imm3w6dpx10qynrd2sz9fks2wbq8-python3-3.12.11/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/nix/store/h097imm3w6dpx10qynrd2sz9fks2wbq8-python3-3.12.11/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/uvicorn/server.py", line 71, in serve
+    await self._serve(sockets)
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/uvicorn/server.py", line 78, in _serve
+    config.load()
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/uvicorn/config.py", line 439, in load
+    self.loaded_app = import_from_string(self.app)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+    raise exc from None
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+    module = importlib.import_module(module_str)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/nix/store/h097imm3w6dpx10qynrd2sz9fks2wbq8-python3-3.12.11/lib/python3.12/importlib/__init__.py", line 90, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "/home/runner/workspace/backend/main.py", line 1, in <module>
+    from fastapi import FastAPI, HTTPException, Request
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/fastapi/__init__.py", line 7, in <module>
+    from .applications import FastAPI as FastAPI
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/fastapi/applications.py", line 17, in <module>
+    from fastapi import routing
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/fastapi/routing.py", line 28, in <module>
+    from fastapi import params, temp_pydantic_v1_params
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/fastapi/params.py", line 6, in <module>
+    from fastapi.openapi.models import Example
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/fastapi/openapi/models.py", line 4, in <module>
+    from fastapi._compat import (
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/fastapi/_compat/__init__.py", line 1, in <module>
+    from .main import BaseConfig as BaseConfig
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/fastapi/_compat/main.py", line 12, in <module>
+    from fastapi._compat import may_v1
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/fastapi/_compat/may_v1.py", line 4, in <module>
+    from fastapi.types import ModelNameMap
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/fastapi/types.py", line 5, in <module>
+    from pydantic import BaseModel
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pydantic/__init__.py", line 5, in <module>
+    from ._migration import getattr_migration
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pydantic/_migration.py", line 4, in <module>
+    from pydantic.warnings import PydanticDeprecatedSince20
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pydantic/warnings.py", line 5, in <module>
+    from .version import version_short
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pydantic/version.py", line 7, in <module>
+    from pydantic_core import __version__ as __pydantic_core_version__
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pydantic_core/__init__.py", line 8, in <module>
+    from ._pydantic_core import (
+ModuleNotFoundError: No module named 'pydantic_core._pydantic_core'

@@ -43,7 +43,7 @@ outputType = "webview"
 
 [nix]
 channel = "stable-25_05"
-packages = ["libxcrypt", "openssh"]
+packages = ["libxcrypt", "openssh", "python312Packages.uvicorn"]
 
 [[ports]]
 localPort = 5000
