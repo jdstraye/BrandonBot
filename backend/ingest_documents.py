@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import List, Dict
 import pypdf
 import docx
+import weaviate as weaviate_client
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from weaviate_manager import WeaviateManager
@@ -22,7 +23,6 @@ COLLECTION_MAP = {
     "brandon": "BrandonPlatform",
     "party": "PartyPlatform",
     "market": "MarketGurus",
-    "internet": "InternetSources",
     "qa": "PreviousQA"
 }
 
@@ -132,13 +132,20 @@ async def ingest_directory(data_dir: str):
     logger.info("")
     
     weaviate = WeaviateManager("./weaviate_data")
-    await weaviate.initialize()
+    try:
+        logger.info("Connecting to existing Weaviate instance...")
+        weaviate.client = await asyncio.to_thread(
+            lambda: weaviate_client.connect_to_local(host="localhost", port=8079, grpc_port=50050)
+        )
+        logger.info("Connected to existing Weaviate instance")
+    except Exception as e:
+        logger.info(f"No existing instance found, starting embedded mode: {e}")
+        await weaviate.initialize()
     
     expected_structure = {
         "brandon_platform": ("brandon", "Brandon's Platform"),
         "party_platforms": ("party", "Party Platforms"),
         "market_gurus": ("market", "Marketing Books"),
-        "internet_sources": ("internet", "Internet Research"),
         "previous_qa": ("qa", "Previous Q&A")
     }
     
@@ -196,7 +203,6 @@ if __name__ == "__main__":
         logger.info("    brandon_platform/     (Brandon's own statements & platform)")
         logger.info("    party_platforms/       (Republican, RNC platforms)")
         logger.info("    market_gurus/          (Marketing/copywriting books)")
-        logger.info("    internet_sources/      (Research articles)")
         logger.info("    previous_qa/           (Historical Q&A)")
         sys.exit(1)
     

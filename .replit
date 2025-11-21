@@ -12,38 +12,23 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "validate"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
 args = "BrandonBot Server"
-
-[[workflows.workflow]]
-name = "validate"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "python validate.py"
-
-[workflows.workflow.metadata]
-outputType = "console"
 
 [[workflows.workflow]]
 name = "BrandonBot Server"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd backend && uvicorn main:app --host 0.0.0.0 --port 5000"
-waitForPort = 5000
-
 [workflows.workflow.metadata]
 outputType = "webview"
 
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd backend && python3.11 -m uvicorn main:app --host 0.0.0.0 --port 5000"
+waitForPort = 5000
+
 [nix]
 channel = "stable-25_05"
-packages = ["libxcrypt", "openssh", "python312Packages.uvicorn", "xcodebuild", "zlib"]
+packages = ["libxcrypt", "oneDNN", "openssh", "python312Packages.uvicorn", "re2", "xcodebuild", "zlib"]
 
 [[ports]]
 localPort = 5000
@@ -51,11 +36,7 @@ externalPort = 80
 
 [[ports]]
 localPort = 6060
-externalPort = 3001
-
-[[ports]]
-localPort = 46669
-externalPort = 8008
+externalPort = 8000
 
 [[ports]]
 localPort = 46737
@@ -72,6 +53,14 @@ externalPort = 9000
 [[ports]]
 localPort = 46740
 externalPort = 8099
+
+[[ports]]
+localPort = 50837
+externalPort = 3001
+
+[[ports]]
+localPort = 50838
+externalPort = 8008
 
 [[ports]]
 localPort = 51003
