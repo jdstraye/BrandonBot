@@ -6,12 +6,14 @@ Processes PDFs, DOCX, and TXT files into the 4-tier collection system
 import os
 import sys
 import asyncio
+import argparse
 import logging
 from pathlib import Path
 from typing import List, Dict
 import pypdf
 import docx
 import weaviate as weaviate_client
+import re
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from weaviate_manager import WeaviateManager
@@ -59,31 +61,81 @@ def extract_text_from_txt(file_path: str) -> str:
         return ""
 
 def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> List[str]:
-    """Split text into overlapping chunks"""
+    """
+    Split text into overlapping chunks with smart boundary detection.
+    Respects boundaries in priority order: sections > paragraphs > sentences > characters.
+    
+    Args:
+        text: Text to chunk
+        chunk_size: Target maximum chunk size in characters (must be > 0)
+        overlap: Number of characters to overlap between chunks (must be >= 0 and < chunk_size)
+        
+    Returns:
+        List of text chunks
+        
+    Raises:
+        ValueError: If chunk_size or overlap parameters are invalid
+    """
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be > 0, got {chunk_size}")
+    if overlap < 0:
+        raise ValueError(f"overlap must be >= 0, got {overlap}")
+    if overlap >= chunk_size:
+        raise ValueError(f"overlap ({overlap}) must be < chunk_size ({chunk_size})")
+    
     if len(text) <= chunk_size:
         return [text]
     
     chunks = []
     start = 0
+    
     while start < len(text):
-        end = start + chunk_size
-        chunk = text[start:end]
+        end = min(start + chunk_size, len(text))
         
-        if end < len(text):
-            last_period = chunk.rfind('.')
-            last_newline = chunk.rfind('\n')
-            cutoff = max(last_period, last_newline)
-            if cutoff > chunk_size * 0.7:
-                end = start + cutoff + 1
-                chunk = text[start:end]
+        if end >= len(text):
+            chunk = text[start:].strip()
+            if chunk:
+                chunks.append(chunk)
+            break
         
-        chunks.append(chunk.strip())
+        chunk_text_raw = text[start:end]
+        best_break = None
+        
+        search_window = chunk_text_raw[int(chunk_size * 0.6):]
+        
+        section_pattern = r'\n\n+'
+        section_matches = list(re.finditer(section_pattern, search_window))
+        if section_matches:
+            best_match = section_matches[0]
+            best_break = int(chunk_size * 0.6) + best_match.end()
+        
+        if not best_break:
+            para_pattern = r'\n'
+            para_matches = list(re.finditer(para_pattern, search_window))
+            if para_matches:
+                best_match = para_matches[0]
+                best_break = int(chunk_size * 0.6) + best_match.end()
+        
+        if not best_break:
+            sentence_pattern = r'[.!?][\s\n]'
+            sentence_matches = list(re.finditer(sentence_pattern, search_window))
+            if sentence_matches:
+                best_match = sentence_matches[0]
+                best_break = int(chunk_size * 0.6) + best_match.end()
+        
+        if best_break:
+            end = start + best_break
+        
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        
         start = end - overlap
     
     return chunks
 
 async def ingest_file(weaviate: WeaviateManager, file_path: str, collection_key: str, 
-                     category: str = "") -> int:
+                     category: str = "", chunk_size: int = 1000, overlap: int = 200) -> int:
     """Ingest a single file into specified collection"""
     file_ext = Path(file_path).suffix.lower()
     file_name = Path(file_path).name
@@ -107,7 +159,7 @@ async def ingest_file(weaviate: WeaviateManager, file_path: str, collection_key:
         logger.error(f"Invalid collection key: {collection_key}")
         return 0
     
-    chunks = chunk_text(text)
+    chunks = chunk_text(text, chunk_size=chunk_size, overlap=overlap)
     logger.info(f"  Processing {file_name}: {len(chunks)} chunks")
     
     success_count = 0
@@ -124,11 +176,12 @@ async def ingest_file(weaviate: WeaviateManager, file_path: str, collection_key:
     
     return success_count
 
-async def ingest_directory(data_dir: str):
+async def ingest_directory(data_dir: str, chunk_size: int = 1000, overlap: int = 200):
     """Ingest all documents from structured directory"""
     logger.info("=" * 70)
     logger.info("BrandonBot Document Ingestion")
     logger.info("=" * 70)
+    logger.info(f"Chunk size: {chunk_size} chars | Overlap: {overlap} chars")
     logger.info("")
     
     weaviate = WeaviateManager("./weaviate_data")
@@ -170,7 +223,8 @@ async def ingest_directory(data_dir: str):
         
         for file_name in files:
             file_path = os.path.join(dir_path, file_name)
-            chunks = await ingest_file(weaviate, file_path, collection_key, display_name)
+            chunks = await ingest_file(weaviate, file_path, collection_key, display_name, 
+                                      chunk_size=chunk_size, overlap=overlap)
             if chunks > 0:
                 total_docs += 1
                 total_chunks += chunks
@@ -193,10 +247,47 @@ async def ingest_directory(data_dir: str):
         weaviate.client.close()
 
 if __name__ == "__main__":
-    data_directory = sys.argv[1] if len(sys.argv) > 1 else "./documents"
+    parser = argparse.ArgumentParser(
+        description="Ingest documents into BrandonBot knowledge base with smart chunking",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Default chunking (1000 chars, 200 overlap)
+  python ingest_documents.py documents/
+  
+  # Optimized small chunks (128 chars, 51 overlap = 40%)
+  python ingest_documents.py documents/ --chunk-size 128 --overlap 51
+  
+  # Custom configuration
+  python ingest_documents.py documents/ --chunk-size 256 --overlap 100
+        """
+    )
     
-    if not os.path.exists(data_directory):
-        logger.error(f"Data directory not found: {data_directory}")
+    parser.add_argument(
+        "data_directory",
+        nargs="?",
+        default="./documents",
+        help="Path to documents directory (default: ./documents)"
+    )
+    
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=1000,
+        help="Maximum chunk size in characters (default: 1000)"
+    )
+    
+    parser.add_argument(
+        "--overlap",
+        type=int,
+        default=200,
+        help="Overlap between chunks in characters (default: 200)"
+    )
+    
+    args = parser.parse_args()
+    
+    if not os.path.exists(args.data_directory):
+        logger.error(f"Data directory not found: {args.data_directory}")
         logger.info("")
         logger.info("Expected directory structure:")
         logger.info("  documents/")
@@ -206,4 +297,4 @@ if __name__ == "__main__":
         logger.info("    previous_qa/           (Historical Q&A)")
         sys.exit(1)
     
-    asyncio.run(ingest_directory(data_directory))
+    asyncio.run(ingest_directory(args.data_directory, chunk_size=args.chunk_size, overlap=args.overlap))
