@@ -43,7 +43,7 @@ outputType = "webview"
 
 [nix]
 channel = "stable-25_05"
-packages = ["libxcrypt", "openssh", "python312Packages.uvicorn"]
+packages = ["libxcrypt", "openssh", "python312Packages.uvicorn", "xcodebuild", "zlib"]
 
 [[ports]]
 localPort = 5000
@@ -72,10 +72,6 @@ externalPort = 9000
 [[ports]]
 localPort = 46740
 externalPort = 8099
-
-[[ports]]
-localPort = 50050
-externalPort = 8000
 
 [[ports]]
 localPort = 51003
