@@ -220,7 +220,7 @@ Replit provides a cloud-based development environment that's perfect for running
   - Custom domains
 - **Best for**: Production use with moderate traffic
 
-### Setting Up BrandonBot on Replit (Free Tier)
+### Setting Up BrandonBot on Replit
 
 #### Step 1: Create a New Repl
 
@@ -284,39 +284,497 @@ pip install -r requirements.txt
 
 #### Step 4: Handle Large Model Files
 
-The Phi-3 model files are too large to store in Git. You have two options:
-
-**Option A: Download on first run (Recommended for Free Tier)**
-
-Create a `download_phi3_model.py` script that downloads the model only if it doesn't exist:
-
-```python
-import os
-import urllib.request
-
-MODEL_DIR = "backend/phi3_model"
-MODEL_URL = "https://your-storage-url/phi3-model.tar.gz"  # Use your own hosting
-
-if not os.path.exists(f"{MODEL_DIR}/phi3-mini-4k-instruct-cpu-int4-rtn-block-32-acc-level-4.onnx"):
-    print("Downloading Phi-3 model...")
-    os.makedirs(MODEL_DIR, exist_ok=True)
-    urllib.request.urlretrieve(MODEL_URL, f"{MODEL_DIR}/model.tar.gz")
-    # Extract and cleanup
-    os.system(f"tar -xzf {MODEL_DIR}/model.tar.gz -C {MODEL_DIR}")
-    os.remove(f"{MODEL_DIR}/model.tar.gz")
-    print("Model downloaded successfully!")
+The Phi-3 model files are too large to store in Git. You have to download it if it is not already present. A script exists for this purpose:
+```shell-script
+python ~/workspace/download_phi3_model.py
 ```
-
-**Option B: Use Replit Storage (Better for persistence)**
-
-Upload the model files to Replit Storage:
-1. In your Repl, go to the "Storage" tab
-2. Upload your model files
-3. Access them in your code via the storage path
 
 #### Step 5: Run BrandonBot
 
-Click the green "Run" button at the top of the Repl, or in the Shell:
+##### Step 5a: Precheck BrandonBot
+A common problem is the loss of the data in the weaviate storage. Here's some examples of what should be found:
+```shell-script
+~/workspace$ tree -L 2  documents/
+documents/
+├── brandon_platform
+│   ├── PROJECT 535_1763508963695.docx
+│   └── Sowers Booklet_1763508963695.pdf
+├── market_gurus
+│   ├── boron_letters
+│   ├── David_Ogilvy_10_Commandments.txt
+│   ├── Eugene_Schwartz_5_Stages_of_Awareness.txt
+│   ├── Lost_Secrets_Breakthrough_Advertising_Schwartz.pdf
+│   ├── Robert_Collier_Letter_Principles.txt
+│   ├── scientific_advertising_hopkins.pdf
+│   └── tested_advertising_methods_caples.pdf
+├── party_platforms
+│   ├── 2024 Republican Party Platform _ The American Presidency Project_1763508995052.pdf
+│   ├── 2025 Majority Plan – Arizona House GOP Conference_1763508995053.pdf
+│   ├── About - AZGOP_1763508995053.pdf
+│   └── TheIndependentParty-TIPUSAP20180526_1763508995053.pdf
+└── previous_qa
+~/workspace$ tree backend/weaviate_data/
+backend/weaviate_data/
+├── brandonplatform
+│   ├── U3f0j3dCpbt2
+│   │   ├── indexcount
+│   │   ├── lsm
+│   │   │   ├── objects
+│   │   │   │   ├── segment-1763709285269276943.bloom
+│   │   │   │   ├── segment-1763709285269276943.cna
+│   │   │   │   ├── segment-1763709285269276943.db
+│   │   │   │   ├── segment-1763709285269276943.secondary.0.bloom
+│   │   │   │   └── segment-1763709517064706047.wal
+│   │   │   ├── property_category
+│   │   │   │   ├── segment-1763709285279904592.bloom
+│   │   │   │   ├── segment-1763709285279904592.db
+│   │   │   │   └── segment-1763709517165727500.wal
+│   │   │   ├── property_category_searchable
+│   │   │   │   ├── segment-1763709285280061692.bloom
+│   │   │   │   ├── segment-1763709285280061692.db
+│   │   │   │   └── segment-1763709517166435330.wal
+│   │   │   ├── property_confidence_tier
+│   │   │   │   ├── segment-1763709285275846852.bloom
+│   │   │   │   ├── segment-1763709285275846852.db
+│   │   │   │   └── segment-1763709517157566600.wal
+│   │   │   ├── property_content
+│   │   │   │   ├── segment-1763709285273368392.bloom
+│   │   │   │   ├── segment-1763709285273368392.db
+│   │   │   │   └── segment-1763709517109878774.wal
+│   │   │   ├── property_content_searchable
+│   │   │   │   ├── segment-1763709285273469182.bloom
+│   │   │   │   ├── segment-1763709285273469182.db
+│   │   │   │   └── segment-1763709517137485412.wal
+│   │   │   ├── property_date
+│   │   │   │   └── segment-1763709285276206882.wal
+│   │   │   ├── property_date_searchable
+│   │   │   │   └── segment-1763709285276345332.wal
+│   │   │   ├── property__id
+│   │   │   │   ├── segment-1763709285273189262.bloom
+│   │   │   │   ├── segment-1763709285273189262.db
+│   │   │   │   └── segment-1763709517090752155.wal
+│   │   │   ├── property_metadata
+│   │   │   │   ├── segment-1763709285275998282.bloom
+│   │   │   │   ├── segment-1763709285275998282.db
+│   │   │   │   └── segment-1763709517159843960.wal
+│   │   │   ├── property_metadata_searchable
+│   │   │   │   ├── segment-1763709285276578542.bloom
+│   │   │   │   ├── segment-1763709285276578542.db
+│   │   │   │   └── segment-1763709517163110140.wal
+│   │   │   ├── property_source
+│   │   │   │   ├── segment-1763709285273551732.bloom
+│   │   │   │   ├── segment-1763709285273551732.db
+│   │   │   │   └── segment-1763709517155408780.wal
+│   │   │   └── property_source_searchable
+│   │   │       ├── segment-1763709285277173992.bloom
+│   │   │       ├── segment-1763709285277173992.db
+│   │   │       └── segment-1763709517164997740.wal
+│   │   ├── main.hnsw.commitlog.d
+│   │   │   └── 1763709285
+│   │   ├── proplengths
+│   │   ├── proplengths.bak
+│   │   └── version
+│   └── yR2xryZKXLxI
+│       ├── indexcount
+│       ├── lsm
+│       │   ├── objects
+│       │   │   ├── segment-1763595020048008516.bloom
+│       │   │   ├── segment-1763595020048008516.cna
+│       │   │   ├── segment-1763595020048008516.db
+│       │   │   ├── segment-1763595020048008516.secondary.0.bloom
+│       │   │   ├── segment-1763595020048008516.secondary.1.bloom
+│       │   │   ├── segment-1763598970247566727.bloom
+│       │   │   ├── segment-1763598970247566727.cna
+│       │   │   ├── segment-1763598970247566727.db
+│       │   │   ├── segment-1763598970247566727.secondary.0.bloom
+│       │   │   └── segment-1763598970247566727.secondary.1.bloom
+│       │   ├── property_category
+│       │   │   ├── segment-1763595020050176696.bloom
+│       │   │   ├── segment-1763595020050176696.db
+│       │   │   ├── segment-1763598970246907386.bloom
+│       │   │   └── segment-1763598970246907386.db
+│       │   ├── property_category_searchable
+│       │   │   ├── segment-1763595020050598336.bloom
+│       │   │   ├── segment-1763595020050598336.db
+│       │   │   ├── segment-1763598970250656237.bloom
+│       │   │   └── segment-1763598970250656237.db
+│       │   ├── property_confidence_tier
+│       │   │   ├── segment-1763595020051912126.bloom
+│       │   │   ├── segment-1763595020051912126.db
+│       │   │   ├── segment-1763598970248532757.bloom
+│       │   │   └── segment-1763598970248532757.db
+│       │   ├── property_content
+│       │   │   ├── segment-1763595020049410746.bloom
+│       │   │   ├── segment-1763595020049410746.db
+│       │   │   ├── segment-1763598970248027387.bloom
+│       │   │   └── segment-1763598970248027387.db
+│       │   ├── property_content_searchable
+│       │   │   ├── segment-1763595020052429496.bloom
+│       │   │   ├── segment-1763595020052429496.db
+│       │   │   ├── segment-1763598970249992367.bloom
+│       │   │   └── segment-1763598970249992367.db
+│       │   ├── property_date
+│       │   ├── property_date_searchable
+│       │   ├── property__id
+│       │   │   ├── segment-1763595020047541386.bloom
+│       │   │   ├── segment-1763595020047541386.db
+│       │   │   ├── segment-1763598970245611406.bloom
+│       │   │   └── segment-1763598970245611406.db
+│       │   ├── property_metadata
+│       │   │   ├── segment-1763595020052092336.bloom
+│       │   │   ├── segment-1763595020052092336.db
+│       │   │   ├── segment-1763598970248609947.bloom
+│       │   │   └── segment-1763598970248609947.db
+│       │   ├── property_metadata_searchable
+│       │   │   ├── segment-1763595020052525766.bloom
+│       │   │   ├── segment-1763595020052525766.db
+│       │   │   ├── segment-1763598970251423137.bloom
+│       │   │   └── segment-1763598970251423137.db
+│       │   ├── property_source
+│       │   │   ├── segment-1763595020050786606.bloom
+│       │   │   ├── segment-1763595020050786606.db
+│       │   │   ├── segment-1763598970248676197.bloom
+│       │   │   └── segment-1763598970248676197.db
+│       │   └── property_source_searchable
+│       │       ├── segment-1763595020051150526.bloom
+│       │       ├── segment-1763595020051150526.db
+│       │       ├── segment-1763598970251389057.bloom
+│       │       └── segment-1763598970251389057.db
+│       ├── main.hnsw.commitlog.d
+│       │   └── 1763594512
+│       ├── proplengths
+│       └── version
+├── classifications.db
+├── marketgurus
+│   ├── vEBoa8ByJIs4
+│   │   ├── indexcount
+│   │   ├── lsm
+│   │   │   ├── objects
+│   │   │   │   ├── segment-1763709285351088007.bloom
+│   │   │   │   ├── segment-1763709285351088007.cna
+│   │   │   │   ├── segment-1763709285351088007.db
+│   │   │   │   ├── segment-1763709285351088007.secondary.0.bloom
+│   │   │   │   └── segment-1763709612870485447.wal
+│   │   │   ├── property_category
+│   │   │   │   ├── segment-1763709285351742477.bloom
+│   │   │   │   ├── segment-1763709285351742477.db
+│   │   │   │   └── segment-1763709612896754965.wal
+│   │   │   ├── property_category_searchable
+│   │   │   │   ├── segment-1763709285352386187.bloom
+│   │   │   │   ├── segment-1763709285352386187.db
+│   │   │   │   └── segment-1763709613023477056.wal
+│   │   │   ├── property_confidence_tier
+│   │   │   │   ├── segment-1763709285351577187.bloom
+│   │   │   │   ├── segment-1763709285351577187.db
+│   │   │   │   └── segment-1763709612890888746.wal
+│   │   │   ├── property_content
+│   │   │   │   ├── segment-1763709285352159757.bloom
+│   │   │   │   ├── segment-1763709285352159757.db
+│   │   │   │   └── segment-1763709612907603154.wal
+│   │   │   ├── property_content_searchable
+│   │   │   │   ├── segment-1763709285352274177.bloom
+│   │   │   │   ├── segment-1763709285352274177.db
+│   │   │   │   └── segment-1763709612974081339.wal
+│   │   │   ├── property_date
+│   │   │   │   └── segment-1763709285352458317.wal
+│   │   │   ├── property_date_searchable
+│   │   │   │   └── segment-1763709285353236206.wal
+│   │   │   ├── property__id
+│   │   │   │   ├── segment-1763709285351433087.bloom
+│   │   │   │   ├── segment-1763709285351433087.db
+│   │   │   │   └── segment-1763709612877204376.wal
+│   │   │   ├── property_metadata
+│   │   │   │   ├── segment-1763709285351613077.bloom
+│   │   │   │   ├── segment-1763709285351613077.db
+│   │   │   │   └── segment-1763709612891724445.wal
+│   │   │   ├── property_metadata_searchable
+│   │   │   │   ├── segment-1763709285351818307.bloom
+│   │   │   │   ├── segment-1763709285351818307.db
+│   │   │   │   └── segment-1763709612897611205.wal
+│   │   │   ├── property_source
+│   │   │   │   ├── segment-1763709285352819767.bloom
+│   │   │   │   ├── segment-1763709285352819767.db
+│   │   │   │   └── segment-1763709613024631196.wal
+│   │   │   └── property_source_searchable
+│   │   │       ├── segment-1763709285353347926.bloom
+│   │   │       ├── segment-1763709285353347926.db
+│   │   │       └── segment-1763709613026301075.wal
+│   │   ├── main.hnsw.commitlog.d
+│   │   │   └── 1763709285
+│   │   ├── proplengths
+│   │   ├── proplengths.bak
+│   │   └── version
+│   └── w1a1sAWE90GW
+│       ├── indexcount
+│       ├── lsm
+│       │   ├── objects
+│       │   │   ├── segment-1763683478040965939.bloom
+│       │   │   ├── segment-1763683478040965939.cna
+│       │   │   ├── segment-1763683478040965939.db
+│       │   │   ├── segment-1763683478040965939.secondary.0.bloom
+│       │   │   ├── segment-1763683478040965939.secondary.1.bloom
+│       │   │   ├── segment-1763683539257207798.bloom
+│       │   │   ├── segment-1763683539257207798.cna
+│       │   │   ├── segment-1763683539257207798.db
+│       │   │   ├── segment-1763683539257207798.secondary.0.bloom
+│       │   │   └── segment-1763683539257207798.secondary.1.bloom
+│       │   ├── property_category
+│       │   ├── property_category_searchable
+│       │   ├── property_chunk_index
+│       │   │   ├── segment-1763683225930889393.bloom
+│       │   │   ├── segment-1763683225930889393.db
+│       │   │   ├── segment-1763683478329668455.bloom
+│       │   │   ├── segment-1763683478329668455.db
+│       │   │   ├── segment-1763683539615533143.bloom
+│       │   │   └── segment-1763683539615533143.db
+│       │   ├── property_confidence_tier
+│       │   ├── property_content
+│       │   │   ├── segment-1763683478148849167.bloom
+│       │   │   ├── segment-1763683478148849167.db
+│       │   │   ├── segment-1763683539321047227.bloom
+│       │   │   └── segment-1763683539321047227.db
+│       │   ├── property_content_searchable
+│       │   │   ├── segment-1763683478209637696.bloom
+│       │   │   ├── segment-1763683478209637696.db
+│       │   │   ├── segment-1763683539366833937.bloom
+│       │   │   └── segment-1763683539366833937.db
+│       │   ├── property_date
+│       │   ├── property_date_searchable
+│       │   ├── property__id
+│       │   │   ├── segment-1763683477968373410.bloom
+│       │   │   ├── segment-1763683477968373410.db
+│       │   │   ├── segment-1763683539179989830.bloom
+│       │   │   └── segment-1763683539179989830.db
+│       │   ├── property_metadata
+│       │   ├── property_metadata_searchable
+│       │   ├── property_source
+│       │   │   ├── segment-1763683478282540535.bloom
+│       │   │   ├── segment-1763683478282540535.db
+│       │   │   ├── segment-1763683539437398116.bloom
+│       │   │   └── segment-1763683539437398116.db
+│       │   ├── property_source_searchable
+│       │   │   ├── segment-1763683478300552175.bloom
+│       │   │   ├── segment-1763683478300552175.db
+│       │   │   ├── segment-1763683539588321423.bloom
+│       │   │   └── segment-1763683539588321423.db
+│       │   ├── property_topic
+│       │   │   ├── segment-1763678986640658981.bloom
+│       │   │   └── segment-1763678986640658981.db
+│       │   ├── property_topic_searchable
+│       │   │   ├── segment-1763678986651166931.bloom
+│       │   │   └── segment-1763678986651166931.db
+│       │   └── property_total_chunks
+│       │       ├── segment-1763683225949322103.bloom
+│       │       ├── segment-1763683225949322103.db
+│       │       ├── segment-1763683478350573815.bloom
+│       │       ├── segment-1763683478350573815.db
+│       │       ├── segment-1763683539638813113.bloom
+│       │       └── segment-1763683539638813113.db
+│       ├── main.hnsw.commitlog.d
+│       │   └── 1763594513
+│       ├── proplengths
+│       └── version
+├── migration1.19.filter2search.skip.flag
+├── migration1.19.filter2search.state
+├── migration1.22.fs.hierarchy
+├── modules.db
+├── partyplatform
+│   ├── 0kpNCWZLwQv4
+│   │   ├── indexcount
+│   │   ├── lsm
+│   │   │   ├── objects
+│   │   │   │   ├── segment-1763709285328411258.bloom
+│   │   │   │   ├── segment-1763709285328411258.cna
+│   │   │   │   ├── segment-1763709285328411258.db
+│   │   │   │   ├── segment-1763709285328411258.secondary.0.bloom
+│   │   │   │   └── segment-1763709537283836963.wal
+│   │   │   ├── property_category
+│   │   │   │   ├── segment-1763709285329542808.bloom
+│   │   │   │   ├── segment-1763709285329542808.db
+│   │   │   │   └── segment-1763709537321726990.wal
+│   │   │   ├── property_category_searchable
+│   │   │   │   ├── segment-1763709285330198428.bloom
+│   │   │   │   ├── segment-1763709285330198428.db
+│   │   │   │   └── segment-1763709537367240957.wal
+│   │   │   ├── property_confidence_tier
+│   │   │   │   ├── segment-1763709285329367948.bloom
+│   │   │   │   ├── segment-1763709285329367948.db
+│   │   │   │   └── segment-1763709537320977410.wal
+│   │   │   ├── property_content
+│   │   │   │   ├── segment-1763709285329927898.bloom
+│   │   │   │   ├── segment-1763709285329927898.db
+│   │   │   │   └── segment-1763709537325129550.wal
+│   │   │   ├── property_content_searchable
+│   │   │   │   ├── segment-1763709285330274438.bloom
+│   │   │   │   ├── segment-1763709285330274438.db
+│   │   │   │   └── segment-1763709537356899678.wal
+│   │   │   ├── property_date
+│   │   │   │   └── segment-1763709285329577818.wal
+│   │   │   ├── property_date_searchable
+│   │   │   │   └── segment-1763709285330305188.wal
+│   │   │   ├── property__id
+│   │   │   │   ├── segment-1763709285329091138.bloom
+│   │   │   │   ├── segment-1763709285329091138.db
+│   │   │   │   └── segment-1763709537287284013.wal
+│   │   │   ├── property_metadata
+│   │   │   │   ├── segment-1763709285329863988.bloom
+│   │   │   │   ├── segment-1763709285329863988.db
+│   │   │   │   └── segment-1763709537352584808.wal
+│   │   │   ├── property_metadata_searchable
+│   │   │   │   ├── segment-1763709285330321418.bloom
+│   │   │   │   ├── segment-1763709285330321418.db
+│   │   │   │   └── segment-1763709537368991207.wal
+│   │   │   ├── property_source
+│   │   │   │   ├── segment-1763709285329625748.bloom
+│   │   │   │   ├── segment-1763709285329625748.db
+│   │   │   │   └── segment-1763709537324214660.wal
+│   │   │   └── property_source_searchable
+│   │   │       ├── segment-1763709285330400908.bloom
+│   │   │       ├── segment-1763709285330400908.db
+│   │   │       └── segment-1763709537368109977.wal
+│   │   ├── main.hnsw.commitlog.d
+│   │   │   └── 1763709285
+│   │   ├── proplengths
+│   │   ├── proplengths.bak
+│   │   └── version
+│   └── cOVPRwJHILay
+│       ├── indexcount
+│       ├── lsm
+│       │   ├── objects
+│       │   │   ├── segment-1763598970246144756.bloom
+│       │   │   ├── segment-1763598970246144756.cna
+│       │   │   ├── segment-1763598970246144756.db
+│       │   │   ├── segment-1763598970246144756.secondary.0.bloom
+│       │   │   ├── segment-1763598970246144756.secondary.1.bloom
+│       │   │   ├── segment-1763599923793751035.bloom
+│       │   │   ├── segment-1763599923793751035.cna
+│       │   │   ├── segment-1763599923793751035.db
+│       │   │   ├── segment-1763599923793751035.secondary.0.bloom
+│       │   │   └── segment-1763599923793751035.secondary.1.bloom
+│       │   ├── property_category
+│       │   │   ├── segment-1763598970247636307.bloom
+│       │   │   ├── segment-1763598970247636307.db
+│       │   │   └── segment-1763599923882243362.wal
+│       │   ├── property_category_searchable
+│       │   │   ├── segment-1763598970248711707.bloom
+│       │   │   ├── segment-1763598970248711707.db
+│       │   │   └── segment-1763599923944623092.wal
+│       │   ├── property_confidence_tier
+│       │   │   ├── segment-1763598970248555177.bloom
+│       │   │   ├── segment-1763598970248555177.db
+│       │   │   └── segment-1763599923917182857.wal
+│       │   ├── property_content
+│       │   │   ├── segment-1763598970249923937.bloom
+│       │   │   ├── segment-1763598970249923937.db
+│       │   │   ├── segment-1763599923963729460.bloom
+│       │   │   └── segment-1763599923963729460.db
+│       │   ├── property_content_searchable
+│       │   │   ├── segment-1763598970251449317.bloom
+│       │   │   ├── segment-1763598970251449317.db
+│       │   │   ├── segment-1763599924117949457.bloom
+│       │   │   └── segment-1763599924117949457.db
+│       │   ├── property_date
+│       │   ├── property_date_searchable
+│       │   ├── property__id
+│       │   │   ├── segment-1763598970245685886.bloom
+│       │   │   ├── segment-1763598970245685886.db
+│       │   │   └── segment-1763599923586997426.wal
+│       │   ├── property_metadata
+│       │   │   ├── segment-1763598970248104067.bloom
+│       │   │   ├── segment-1763598970248104067.db
+│       │   │   ├── segment-1763599923896821420.bloom
+│       │   │   └── segment-1763599923896821420.db
+│       │   ├── property_metadata_searchable
+│       │   │   ├── segment-1763598970249980097.bloom
+│       │   │   ├── segment-1763598970249980097.db
+│       │   │   ├── segment-1763599923994937495.bloom
+│       │   │   └── segment-1763599923994937495.db
+│       │   ├── property_source
+│       │   │   ├── segment-1763598970248710977.bloom
+│       │   │   ├── segment-1763598970248710977.db
+│       │   │   ├── segment-1763599923929759425.bloom
+│       │   │   └── segment-1763599923929759425.db
+│       │   └── property_source_searchable
+│       │       ├── segment-1763598970251390327.bloom
+│       │       ├── segment-1763598970251390327.db
+│       │       ├── segment-1763599924051363947.bloom
+│       │       └── segment-1763599924051363947.db
+│       ├── main.hnsw.commitlog.d
+│       │   └── 1763594513
+│       ├── proplengths
+│       └── version
+├── previousqa
+│   ├── fR8VD5nO5Hqr
+│   │   ├── indexcount
+│   │   ├── lsm
+│   │   │   ├── objects
+│   │   │   │   └── segment-1763709285299718030.wal
+│   │   │   ├── property_category
+│   │   │   │   └── segment-1763709285300965300.wal
+│   │   │   ├── property_category_searchable
+│   │   │   │   └── segment-1763709285301439950.wal
+│   │   │   ├── property_confidence_tier
+│   │   │   │   └── segment-1763709285301010660.wal
+│   │   │   ├── property_content
+│   │   │   │   └── segment-1763709285300687390.wal
+│   │   │   ├── property_content_searchable
+│   │   │   │   └── segment-1763709285301910390.wal
+│   │   │   ├── property_date
+│   │   │   │   └── segment-1763709285300778210.wal
+│   │   │   ├── property_date_searchable
+│   │   │   │   └── segment-1763709285302397820.wal
+│   │   │   ├── property__id
+│   │   │   │   └── segment-1763709285300385260.wal
+│   │   │   ├── property_metadata
+│   │   │   │   └── segment-1763709285300926690.wal
+│   │   │   ├── property_metadata_searchable
+│   │   │   │   └── segment-1763709285301257010.wal
+│   │   │   ├── property_source
+│   │   │   │   └── segment-1763709285301152030.wal
+│   │   │   └── property_source_searchable
+│   │   │       └── segment-1763709285302089720.wal
+│   │   ├── main.hnsw.commitlog.d
+│   │   │   └── 1763709285
+│   │   ├── proplengths
+│   │   ├── proplengths.bak
+│   │   └── version
+│   └── JJWQSRujItrQ
+│       ├── indexcount
+│       ├── lsm
+│       │   ├── objects
+│       │   ├── property_category
+│       │   ├── property_category_searchable
+│       │   ├── property_confidence_tier
+│       │   ├── property_content
+│       │   ├── property_content_searchable
+│       │   ├── property_date
+│       │   ├── property_date_searchable
+│       │   ├── property__id
+│       │   ├── property_metadata
+│       │   ├── property_metadata_searchable
+│       │   ├── property_source
+│       │   └── property_source_searchable
+│       ├── main.hnsw.commitlog.d
+│       │   └── 1763594512
+│       ├── proplengths
+│       └── version
+├── raft
+│   ├── db_users
+│   │   └── users.json
+│   ├── raft.db
+│   └── snapshots
+├── schema.db
+└── tx.db
+```
+If the weaviate data is missing but the source files exist in documents/, they can be ingested with 
+```
+python backend/ingest_documents.py documents/ --chunk-size 128 --overlap 51
+```
+
+##### Step 5b: Launch
+
+
+The "right" way is to launch the workflow by clicking the green "Run" button at the top of the Repl. Alternatively, in a Shell tab:
 ```bash
 cd backend
 python -m uvicorn main:app --host 0.0.0.0 --port 5000
