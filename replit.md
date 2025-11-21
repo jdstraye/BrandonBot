@@ -32,7 +32,7 @@ BrandonBot is a 100% open-source RAG-based AI chatbot for a political candidate.
 3. **Mac** - Compatible (Linux/macOS only for Weaviate embedded)
 4. **Windows** - Not supported (Weaviate embedded is Linux/macOS only)
 
-## Current State (November 20, 2025)
+## Current State (November 21, 2025 - Alpha r0v0)
 - ✅ 100% open-source architecture (no Docker, no API costs)
 - ✅ Weaviate embedded mode integrated and fully functional
 - ✅ Phi-3 Mini ONNX Runtime client with graceful degradation
@@ -46,7 +46,9 @@ BrandonBot is a 100% open-source RAG-based AI chatbot for a political candidate.
 - ✅ **Repetition Prevention**: Added repetition_penalty=1.2 to prevent repetitive output loops
 - ✅ **Bible Verse Logic Fixed**: Truth-seeking questions now properly cite Scripture (only when explicitly asking about faith/morality)
 - ✅ **Truth-Seeking Pattern Refinement**: Narrowed patterns to only match explicit faith/biblical/moral questions, not general policy questions
-- ✅ **Chunking Strategy Optimized**: 128-char chunks with 40% overlap (51 chars) achieves 56.95% avg confidence (16% improvement over 512-char)
+- ✅ **Smart Boundary-Aware Chunking**: Enhanced ingest_documents.py with intelligent boundary detection (sections > paragraphs > sentences > characters) and CLI args --chunk-size/--overlap
+- ✅ **Smoke Test Suite Created**: Comprehensive A/B testing (bash + Python versions) for RAG validation, comparison tests, MarketGuru impact, web search, and chunking optimization
+- ✅ **Baseline Performance Measured** (1000-char chunks): Confidence scores 0.34-0.61 range across policy questions, MarketGuru queries, and comparisons
 - ✅ **Lazy Loading Implementation**: Phi-3 model unloads after 5 min idle to free ~2GB RAM
 - ✅ **LLM-Based Query Expansion**: Implemented but testing shows no improvement over dictionary expansion
 - ✅ **DuckDuckGo Web Search**: Real search integration with domain trust scoring (2x boost for brandonsowers.com in search rankings)
@@ -56,7 +58,7 @@ BrandonBot is a 100% open-source RAG-based AI chatbot for a political candidate.
 - ✅ **Callback Request Detection**: Auto-detects callback requests in chat messages (11 patterns: "call me back", "contact me", etc.)
 - ✅ Vector search fully operational with trust-based weighting
 - ✅ SQLite logging with opt-in consent
-- ✅ Document ingestion scripts (PDF/DOCX/TXT) with configurable chunk sizes
+- ✅ Document ingestion scripts (PDF/DOCX/TXT) with configurable chunk sizes and smart boundary detection
 - ✅ Replit workflow configured and running
 - ✅ **MarketGurus collection populated with 14,058 chunks** - 6 comprehensive marketing resources:
   1. Gary Halbert "The Boron Letters" (25 chapters, 2,097 chunks)
@@ -69,6 +71,12 @@ BrandonBot is a 100% open-source RAG-based AI chatbot for a political candidate.
 - ✅ **Bible verse collection (12 topics)** - immigration, stewardship, justice, truth, integrity, etc.
 - ✅ **Character-breaking behavior** - stays/breaks character based on question type
 - ✅ User uploaded documents to brandon_platform and party_platforms collections
+- ⏳ **Chunk Size Optimization (RECOMMENDED NEXT STEP)**:
+  - Current baseline (1000-char chunks): 0.34-0.61 confidence range
+  - Architect recommendation: Test 256-char chunks with 80-char overlap FIRST (not 128-char - too granular)
+  - Test command: `python backend/ingest_documents.py documents/brandon_platform/ --chunk-size 256 --overlap 80`
+  - After validating improvement, batch-ingest full corpus with Weaviate bulk API (~64 vectors/payload) + asyncio.Semaphore
+  - Expected: Tighter semantic windows improve policy question matching (currently hitting MarketGurus instead of BrandonPlatform)
 - ⏳ **96-char chunk testing**: Deferred - user can manually run: `python backend/ingest_documents.py documents/ --chunk-size 96 --overlap 38`
 - ⏳ **LLM expansion re-testing**: Needs validation with functioning Phi-3 on 512 and 96-char chunks
 - ⏳ Frontend UI (functional chat interface, could use visual enhancements)
