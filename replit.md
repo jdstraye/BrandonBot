@@ -32,18 +32,23 @@ BrandonBot is a 100% open-source RAG-based AI chatbot for a political candidate.
 3. **Mac** - Compatible (Linux/macOS only for Weaviate embedded)
 4. **Windows** - Not supported (Weaviate embedded is Linux/macOS only)
 
-## Current State (November 21, 2025 - Alpha r0v0)
+## Current State (November 21, 2025 - Alpha r0v1)
 - ✅ 100% open-source architecture (no Docker, no API costs)
 - ✅ Weaviate embedded mode integrated and fully functional
 - ✅ Phi-3 Mini ONNX Runtime client with graceful degradation
 - ✅ Sentence-transformers embeddings (CPU-only, 384-dim vectors)
 - ✅ FastAPI backend with all endpoints operational
 - ✅ Weaviate manager with 3-tier RAG + 1 guidance collection (all collections created)
-- ✅ RAG pipeline with trust multiplier confidence scoring **TESTED & WORKING**
-- ✅ **Phi-3 ONNX API Fixed**: Removed deprecated compute_logits() call - model now generates responses successfully
-- ✅ **Token Limit Optimized**: Reduced max_output_tokens from 500 to 150 for 3x faster responses (~26-34 seconds)
-- ✅ **Prompt Formatting Fixed**: Using Phi-3 chat template (<|system|><|user|><|assistant|>) prevents instruction leakage
-- ✅ **Repetition Prevention**: Added repetition_penalty=1.2 to prevent repetitive output loops
+- ✅ **RAG Pipeline Refactored (Content vs Style Separation)** - MarketGuru no longer pollutes content search:
+  - Content search: Only queries BrandonPlatform, PreviousQA, PartyPlatform for WHAT to answer
+  - Style guidance: Queries MarketGurus separately based on question analysis for HOW to answer
+  - Confidence guardrails: Style guidance only applied when content confidence >= 0.7
+  - Template directives: Marketing strategy converted to HOW-to-answer rules (no raw MarketGuru text)
+  - **VALIDATED**: Policy questions now cite BrandonPlatform (conf 0.52), comparisons cite PartyPlatform (conf 0.61)
+- ✅ **Prompt Formatting Fixed**: Using Phi-3 chat template (`<|system|>...<|end|><|user|>...<|end|><|assistant|>`) prevents instruction leakage
+- ✅ **Token Limit Increased**: max_length raised from 512 to 2048 tokens to accommodate longer contexts
+- ✅ **Confidence Thresholds Lowered**: BrandonPlatform 0.8→0.3, PartyPlatform 0.6→0.25 (more results pass through)
+- ✅ **Results Sorted by Confidence**: Top sources shown first regardless of collection order
 - ✅ **Bible Verse Logic Fixed**: Truth-seeking questions now properly cite Scripture (only when explicitly asking about faith/morality)
 - ✅ **Truth-Seeking Pattern Refinement**: Narrowed patterns to only match explicit faith/biblical/moral questions, not general policy questions
 - ✅ **Smart Boundary-Aware Chunking**: Enhanced ingest_documents.py with intelligent boundary detection (sections > paragraphs > sentences > characters) and CLI args --chunk-size/--overlap
@@ -71,14 +76,19 @@ BrandonBot is a 100% open-source RAG-based AI chatbot for a political candidate.
 - ✅ **Bible verse collection (12 topics)** - immigration, stewardship, justice, truth, integrity, etc.
 - ✅ **Character-breaking behavior** - stays/breaks character based on question type
 - ✅ User uploaded documents to brandon_platform and party_platforms collections
-- ⏳ **Chunk Size Optimization (RECOMMENDED NEXT STEP)**:
-  - Current baseline (1000-char chunks): 0.34-0.61 confidence range
+- ⏳ **Dual-Source Retrieval for Comparisons (RECOMMENDED NEXT STEP)**:
+  - Current: Comparison questions show highest-confidence sources (may be Brandon-only or Party-only)
+  - Goal: Ensure comparison questions always include at least one Brandon and one Party source
+  - Implementation: Balanced query logic or explicit dual-source enforcement before Phi-3 generation
+- ⏳ **Wire Auxiliary Subsystems to Question Analysis**:
+  - Current: QuestionAnalyzer detects needs_external_search and needs_bible_verse but doesn't trigger services
+  - Goal: Actually invoke web search when detected, retrieve Bible verses when needed
+  - Implementation: Connect analysis_pipeline outputs to web_search_service and Bible collection queries
+- ⏳ **Chunk Size Optimization**:
+  - Current baseline (1000-char chunks): 0.30-0.61 confidence range  
   - Architect recommendation: Test 256-char chunks with 80-char overlap FIRST (not 128-char - too granular)
   - Test command: `python backend/ingest_documents.py documents/brandon_platform/ --chunk-size 256 --overlap 80`
   - After validating improvement, batch-ingest full corpus with Weaviate bulk API (~64 vectors/payload) + asyncio.Semaphore
-  - Expected: Tighter semantic windows improve policy question matching (currently hitting MarketGurus instead of BrandonPlatform)
-- ⏳ **96-char chunk testing**: Deferred - user can manually run: `python backend/ingest_documents.py documents/ --chunk-size 96 --overlap 38`
-- ⏳ **LLM expansion re-testing**: Needs validation with functioning Phi-3 on 512 and 96-char chunks
 - ⏳ Frontend UI (functional chat interface, could use visual enhancements)
 - ⏳ PreviousQA collection (awaiting historical Q&A data)
 
