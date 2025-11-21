@@ -1,9 +1,15 @@
 # BrandonBot - Git Setup & Deployment Guide
 
-This document has 3 parts:
-1: Pushing a replit codebase to your github repos
-2: Running the repo locally (not done because it does not work with Windows)
-3: Running on replit and sharing the URL for testing
+This document has a general flow:
+Managing Github → Running (either in Replit or locally as a GitHub clone) → Test scripts → Open to testers & refine.
+
+## Table of Contents
+- [Part 1: Push to GitHub](#part-1-push-to-github)
+- [Part 2: Running in Replit](#part-2-running-in-replit)
+- [Part 3: Clone and Run Locally on Your Laptop](#part-3-clone-and-run-locally-on-your-laptop)
+- [Part 4: Running Tests and Grading Responses](#part-4-running-tests-and-grading-responses)
+- [Part 5: Deploy to Web (Low-Cost Options)](#part-5-deploy-to-web-low-cost-options)
+- [Part 6: Ongoing Development Workflow](#part-6-ongoing-development-workflow)
 
 ## Current Status ✅
 - Git repository has been reinitialized (you ran: `rm -fr .git`, `git init`, `git add .`, `git commit`)
@@ -34,10 +40,54 @@ gitsafe-backup  git://gitsafe:5418/backup.git (push)
 origin  git@github.com:jdstraye/BrandonBot.git (fetch)
 origin  git@github.com:jdstraye/BrandonBot.git (push)
 ```
-The gitsafe-backup are on a local replit server and used by replit as an emergency backup and restore.
-origin (git@github.com) is for my github repos.
+The gitsafe-backup remotes are on a local Replit server and used by Replit as an emergency backup and restore.
+The origin remote (git@github.com) is for your GitHub repos.
 
-### Step 3: Push to GitHub
+### Step 3: Remove Large Files from Git History
+
+Before pushing, check for large files that might exceed GitHub's limits:
+
+```bash
+# Find largest objects in Git history
+git rev-list --objects --all | \
+  git cat-file --batch-check='%(objecttype) %(objectname) %(objectsize) %(rest)' | \
+  sed -n 's/^blob //p' | \
+  sort -k2 -nr | \
+  head -n 20 | \
+  numfmt --field=2 --to=iec-i --suffix=B
+```
+
+If you see files over 100MB (or a total pack size approaching 2GB), you need to remove them from history:
+
+```bash
+# Install git-filter-repo (if not available, use filter-branch alternative below)
+pip install git-filter-repo
+
+# Remove large files (example: .onnx.data files)
+git filter-repo --path 'backend/phi3_model/*.onnx.data' --invert-paths
+
+# Alternative using git filter-branch (slower but works everywhere)
+git filter-branch --force --index-filter \
+  "git rm --cached --ignore-unmatch backend/phi3_model/*.onnx.data" \
+  --prune-empty --tag-name-filter cat -- --all
+
+# Clean up
+git reflog expire --expire=now --all
+git gc --prune=now --aggressive
+
+# Verify the size is now manageable
+git count-objects -vH
+```
+
+Add large files to `.gitignore` to prevent re-adding:
+```bash
+echo "backend/phi3_model/*.onnx.data" >> .gitignore
+echo "backend/phi3_model/*.onnx" >> .gitignore
+git add .gitignore
+git commit -m "Add large model files to gitignore"
+```
+
+### Step 4: Push to GitHub
 ```bash
 # First push requires -u flag to set upstream tracking
 git push -u origin main
@@ -49,54 +99,59 @@ git push -u origin main
 
 **Option A: SSH Key (Recommended)**
 
-**1): Check that there are no pre-existing keys**.
+**1) Check for pre-existing keys**
 ```bash
 ls -l ~/.ssh
 ```
-Example:
-```shell-script
-~/workspace$ ls -l ~/.ssh
+Example output if no keys exist:
+```
 ls: cannot access '/home/runner/.ssh': No such file or directory
 ```
-If you do not see a key file (like replit/replit.pub and github/github.pub), you’ll need to generate new keypair(s).
 
-**2): Generate new SSH Keypairs; separate ones for replit and for github**
-If you need to create a new keypair, use the following command:
+**2) Generate new SSH Keypairs**
 
-```shell-script
+Generate separate keypairs for Replit and GitHub:
+```bash
 ssh-keygen -t ed25519 -f ~/.ssh/replit -q -N ""
 ssh-keygen -t ed25519 -f ~/.ssh/github -q -N ""
 ```
-The `ed25519` algorithm was selected because it is a modern and secure elliptic-curve cryptography standard used for generating SSH keys. It offers better security than the older RSA algorithm with shorter key lengths, making it a preferred choice for generating SSH keys in new applications.
 
-**3): Add the Public Key to Your Accounts**
+The `ed25519` algorithm is a modern and secure elliptic-curve cryptography standard that offers better security than older RSA with shorter key lengths.
 
-To display the contents of your public key(s):
-```
+**3) Add the Public Keys to Your Accounts**
+
+Display your public keys:
+```bash
 for account in replit github; do
-    echo "${account} = ".$(cat ~/.ssh/${account}.pub)
+    echo "=== ${account} public key ==="
+    cat ~/.ssh/${account}.pub
+    echo ""
 done
 ```
-Copy the output and navigate to the corresponding account to add the SSH key:
 
-Replit - 
-1. Click on SSH keys in the replit account settings.
-2. Select Add SSH Key.
-3. Paste the public key you copied (the one ending in .pub).
+**For Replit:**
+1. Go to Replit Account Settings
+2. Click on "SSH keys"
+3. Select "Add SSH Key"
+4. Paste the Replit public key (ending in `.pub`)
 
-Github - 
-1. Copy the entire output
+**For GitHub:**
+1. Copy the GitHub public key output
 2. Go to: https://github.com/settings/keys
 3. Click "New SSH key"
-4. Paste the public key
+4. Give it a title (e.g., "Replit SSH Key")
+5. Paste the public key
+6. Click "Add SSH key"
 
 **4) Configure SSH**
-Make sure your ~/.ssh/config file is set up correctly. You can create or edit it using:
-```shell-script
+
+Create or edit your SSH config file:
+```bash
 mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/config && chmod 600 ~/.ssh/config
 ```
-Then add:
-```
+
+Add the configuration:
+```bash
 cat >> ~/.ssh/config << 'EOF'
 Host *.replit.dev
     Port 22
@@ -109,36 +164,238 @@ Host github.com
 EOF
 ```
 
-**5): Test the SSH Connection**
+**5) Test the SSH Connection**
 
-Now you can test the connection with `ssh -T git@github.com`. For example:
+Test your GitHub connection:
+```bash
+ssh -T git@github.com
 ```
-~/workspace$ ssh -T git@github.com
+
+Expected output:
+```
 Hi <username>! You've successfully authenticated, but GitHub does not provide shell access.
 ```
-If everything is set up correctly, you should be able to push to your remote repository using:
+
+If successful, update your remote URL to use SSH and push:
 ```bash
 git remote set-url origin git@github.com:jdstraye/BrandonBot.git
 git push -u origin main
 ```
 
 **Option B: Personal Access Tokens (PAT) (not recommended)**
-**Overview**:
-1. Generate a Personal Access Token (PAT): Go to GitHub > Settings > Developer settings > Personal access tokens > Generate new token.
-2. Set Required Scopes: Choose the appropriate scopes (like repo for full control of private repositories).
-3. Copy the Token: Save the generated token securely.
-4. Use the Token for Authentication: When prompted for a username and password during Git operations, use your GitHub username as the username and the PAT as the password.
-5. Update Remote URL (if needed): If necessary, set the remote URL to use HTTPS:
 
-### Step 4: Verify Push Success
-Go to https://github.com/jdstraye/BrandonBot.git and verify you see all your files.
+1. Generate a Personal Access Token: Go to GitHub → Settings → Developer settings → Personal access tokens → Generate new token
+2. Set Required Scopes: Choose `repo` for full control of private repositories
+3. Copy the Token: Save it securely (you won't see it again)
+4. Use the Token: When Git prompts for credentials, use your GitHub username and the PAT as the password
+
+### Step 5: Verify Push Success
+Go to https://github.com/jdstraye/BrandonBot and verify you see all your files.
 
 ---
 
-## Part 2: Clone and Run Locally on Your Laptop
+## Part 2: Running in Replit
+
+Replit provides a cloud-based development environment that's perfect for running BrandonBot without needing to set up local dependencies.
+
+### Understanding Replit Tiers
+
+**Free Tier (Starter)**
+- **Cost**: $0/month
+- **Resources**: 0.5 vCPU, 512MB RAM, 512MB disk
+- **Limitations**:
+  - Repls sleep after inactivity
+  - Limited compute power
+  - No always-on capability
+  - Limited to public Repls
+- **Best for**: Development, testing, demos
+
+**Core Tier**
+- **Cost**: $20/month
+- **Resources**: 2 vCPU, 4GB RAM, 20GB disk
+- **Benefits**:
+  - Always-on Repls (deployments)
+  - Private Repls
+  - More compute power
+  - Custom domains
+- **Best for**: Production use with moderate traffic
+
+### Setting Up BrandonBot on Replit (Free Tier)
+
+#### Step 1: Create a New Repl
+
+1. Go to https://replit.com
+2. Sign up or log in
+3. Click "Create Repl"
+4. Choose "Import from GitHub"
+5. Paste your repository URL: `https://github.com/jdstraye/BrandonBot.git`
+6. Click "Import from GitHub"
+
+Alternatively, if you already have a Repl:
+1. Open the Repl
+2. In the Shell, run:
+   ```bash
+   git clone https://github.com/jdstraye/BrandonBot.git .
+   ```
+
+#### Step 2: Configure the Repl
+
+Replit should auto-detect Python. Verify the configuration:
+
+1. Click on the `.replit` file in the file tree (create it if it doesn't exist)
+2. Add this configuration:
+
+```toml
+run = "cd backend && python -m uvicorn main:app --host 0.0.0.0 --port 5000"
+language = "python3"
+
+[nix]
+channel = "stable-23_11"
+
+[deployment]
+run = ["sh", "-c", "cd backend && python -m uvicorn main:app --host 0.0.0.0 --port 5000"]
+deploymentTarget = "cloudrun"
+```
+
+#### Step 3: Install Dependencies
+
+In the Shell tab, run:
+```bash
+pip install fastapi uvicorn sentence-transformers weaviate-client pypdf python-docx duckduckgo-search onnxruntime onnxruntime-genai
+```
+
+Or create a `requirements.txt` file in the root:
+```txt
+fastapi==0.104.1
+uvicorn==0.24.0
+sentence-transformers==2.2.2
+weaviate-client==4.9.3
+pypdf==3.17.1
+python-docx==1.1.0
+duckduckgo-search==4.1.1
+onnxruntime==1.16.3
+onnxruntime-genai==0.5.3
+```
+
+Then install with:
+```bash
+pip install -r requirements.txt
+```
+
+#### Step 4: Handle Large Model Files
+
+The Phi-3 model files are too large to store in Git. You have two options:
+
+**Option A: Download on first run (Recommended for Free Tier)**
+
+Create a `download_phi3_model.py` script that downloads the model only if it doesn't exist:
+
+```python
+import os
+import urllib.request
+
+MODEL_DIR = "backend/phi3_model"
+MODEL_URL = "https://your-storage-url/phi3-model.tar.gz"  # Use your own hosting
+
+if not os.path.exists(f"{MODEL_DIR}/phi3-mini-4k-instruct-cpu-int4-rtn-block-32-acc-level-4.onnx"):
+    print("Downloading Phi-3 model...")
+    os.makedirs(MODEL_DIR, exist_ok=True)
+    urllib.request.urlretrieve(MODEL_URL, f"{MODEL_DIR}/model.tar.gz")
+    # Extract and cleanup
+    os.system(f"tar -xzf {MODEL_DIR}/model.tar.gz -C {MODEL_DIR}")
+    os.remove(f"{MODEL_DIR}/model.tar.gz")
+    print("Model downloaded successfully!")
+```
+
+**Option B: Use Replit Storage (Better for persistence)**
+
+Upload the model files to Replit Storage:
+1. In your Repl, go to the "Storage" tab
+2. Upload your model files
+3. Access them in your code via the storage path
+
+#### Step 5: Run BrandonBot
+
+Click the green "Run" button at the top of the Repl, or in the Shell:
+```bash
+cd backend
+python -m uvicorn main:app --host 0.0.0.0 --port 5000
+```
+
+You should see:
+```
+INFO:     Started server process
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:5000
+```
+
+#### Step 6: Access Your Application
+
+Replit provides a webview. Click on the "Webview" tab or look for the URL at the top of the Repl window. It will look like:
+```
+https://brandonbot.yourusername.repl.co
+```
+
+Test the API:
+```bash
+curl -X POST https://brandonbot.yourusername.repl.co/api/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "What is your position on immigration?",
+    "user_id": "test_user",
+    "consent_given": false
+  }'
+```
+
+### Managing Free Tier Limitations
+
+**Preventing Sleep:**
+- Free tier Repls sleep after inactivity
+- Use a service like UptimeRobot (https://uptimerobot.com - free) to ping your Repl every 5 minutes
+- Set up a monitor with your Repl URL: `https://brandonbot.yourusername.repl.co/health`
+
+**Optimizing for Limited Resources:**
+```python
+# In your main.py, add memory-efficient settings
+import gc
+
+@app.on_event("startup")
+async def startup_event():
+    # Force garbage collection on startup
+    gc.collect()
+    
+@app.middleware("http")
+async def cleanup_middleware(request, call_next):
+    response = await call_next(request)
+    gc.collect()  # Clean up after each request
+    return response
+```
+
+**Monitoring Resource Usage:**
+```bash
+# In Shell, check memory usage
+free -h
+
+# Check disk usage
+df -h
+```
+
+### Upgrading to Core Tier (Optional)
+
+When ready for production:
+1. Click "Upgrade" in your Repl
+2. Select "Core" plan ($20/month)
+3. Enable "Always On" for your deployment
+4. Configure custom domain if desired
+
+---
+
+## Part 3: Clone and Run Locally on Your Laptop
 
 ### Prerequisites
-- **OS**: Linux or macOS (Weaviate embedded doesn't support Windows)
+- **OS**: Linux or macOS (Weaviate embedded doesn't support Windows natively)
+  - Windows users: Use WSL2 (Windows Subsystem for Linux)
 - **Python**: 3.11 or higher
 - **RAM**: At least 4GB available (Phi-3 model uses ~2GB)
 - **Disk Space**: At least 5GB free (for model + dependencies)
@@ -157,6 +414,7 @@ python3.11 -m venv venv
 
 # Activate it
 source venv/bin/activate  # macOS/Linux
+# On Windows with WSL: source venv/bin/activate
 
 # Upgrade pip
 pip install --upgrade pip
@@ -167,7 +425,7 @@ pip install --upgrade pip
 # Install Python packages
 pip install fastapi uvicorn sentence-transformers weaviate-client pypdf python-docx duckduckgo-search onnxruntime onnxruntime-genai
 
-# Or if you create a requirements.txt:
+# Or if you have requirements.txt:
 pip install -r requirements.txt
 ```
 
@@ -189,7 +447,7 @@ onnxruntime-genai==0.5.3
 python download_phi3_model.py
 ```
 
-This downloads the ONNX INT4 quantized model to `models/phi3-mini-128k-instruct/cpu-int4-rtn-block-32-acc-level-4/`
+This downloads the ONNX INT4 quantized model to `backend/phi3_model/`
 
 ### Step 5: Verify Data Files
 ```bash
@@ -234,11 +492,11 @@ curl -X POST http://localhost:5000/api/query \
 
 ---
 
-## Part 3: Running Tests and Grading Responses
+## Part 4: Running Tests and Grading Responses
 
 ### Create Test Script
 
-Save this as `test_brandonbot.py`:
+Save this as `test_brandonbot.py` in your project root:
 
 ```python
 #!/usr/bin/env python3
@@ -252,7 +510,9 @@ import time
 from datetime import datetime
 from typing import Dict, List
 
+# Change this if testing a different URL
 BASE_URL = "http://localhost:5000"
+# For Replit: BASE_URL = "https://brandonbot.yourusername.repl.co"
 
 TEST_QUESTIONS = [
     {
@@ -430,8 +690,16 @@ if __name__ == "__main__":
 ```
 
 ### Run Tests
+
+**Locally:**
 ```bash
 chmod +x test_brandonbot.py
+python test_brandonbot.py
+```
+
+**On Replit:**
+```bash
+# Make sure BASE_URL in the script points to your Repl URL
 python test_brandonbot.py
 ```
 
@@ -561,7 +829,7 @@ certbot --nginx -d your-domain.com
 
 ---
 
-## Part 5: Ongoing Development Workflow
+## Part 6: Ongoing Development Workflow
 
 ### Making Changes on Replit
 ```bash
@@ -603,15 +871,33 @@ git pull origin main
 ## Troubleshooting
 
 ### Git Issues
+
+**Large files preventing push:**
 ```bash
-# If you get merge conflicts
+# Find large files in history
+git rev-list --objects --all | \
+  git cat-file --batch-check='%(objecttype) %(objectname) %(objectsize) %(rest)' | \
+  sed -n 's/^blob //p' | \
+  sort -k2 -nr | \
+  head -n 20
+
+# Remove them using git filter-repo
+pip install git-filter-repo
+git filter-repo --path 'path/to/large/file' --invert-paths
+```
+
+**Merge conflicts:**
+```bash
 git status
 # Manually resolve conflicts in files
 git add .
 git commit -m "Resolved merge conflicts"
 git push origin main
+```
 
-# If you need to force push (DANGEROUS - only if you're sure)
+**Force push (use with caution):**
+```bash
+# Only if you're sure and working alone
 git push --force origin main
 ```
 
@@ -635,7 +921,7 @@ pip install --upgrade -r requirements.txt
 python download_phi3_model.py
 
 # Verify model exists
-ls -la models/phi3-mini-128k-instruct/
+ls -la backend/phi3_model/
 ```
 
 ### Database Issues
@@ -645,25 +931,37 @@ rm -rf weaviate_data/
 python backend/ingest_documents.py documents/
 ```
 
+### Replit-Specific Issues
+
+**Repl keeps sleeping:**
+- Use UptimeRobot to ping your Repl every 5 minutes
+- Upgrade to Core tier for always-on
+
+**Out of memory:**
+```bash
+# Check memory usage
+free -h
+
+# Restart the Repl
+# Or upgrade to Core tier for more RAM
+```
+
+**Storage full:**
+```bash
+# Check disk usage
+df -h
+
+# Clear unnecessary files
+rm -rf __pycache__
+rm -rf .pytest_cache
+rm -rf *.pyc
+```
+
 ---
 
 ## Cost Comparison Summary
 
 | Option | Monthly Cost | Pros | Cons |
 |--------|-------------|------|------|
-| Replit Free | $0 | Easy, no setup | Limited hours, sleeps |
-| Replit Core | $20 | Always-on, easy | More expensive |
-| Railway | $5-10 | Simple, auto-scaling | Pay per usage |
-| DigitalOcean App | $5 | Fixed price, reliable | Basic resources |
-| VPS Self-Host | $4-6 | Full control, cheapest | Requires Linux skills |
-
-**Recommendation**: Start with **Replit free tier** for testing with your customers. If they use it a lot, switch to a **$5-6/month VPS** for the best long-term cost.
-
----
-
-## Need Help?
-
-- **Replit Docs**: https://docs.replit.com
-- **GitHub Issues**: Open issues on your repository
-- **FastAPI Docs**: https://fastapi.tiangolo.com
-- **Weaviate Docs**: https://weaviate.io/developers/weaviate
+| Replit Free | $0 | Easy, no setup, good for development | Limited hours, sleeps when inactive |
+| Replit
