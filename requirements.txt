@@ -1,0 +1,9 @@
+fastapi>=0.115.0
+uvicorn>=0.30.0
+weaviate-client>=4.9.0
+sentence-transformers>=3.0.0
+optimum[onnxruntime]>=1.22.0
+python-docx>=1.1.0
+PyPDF2>=3.0.0
+duckduckgo-search>=8.1.1
+lxml>=5.0.0
