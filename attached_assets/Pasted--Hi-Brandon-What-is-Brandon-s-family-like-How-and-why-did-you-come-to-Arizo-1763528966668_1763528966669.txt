@@ -1,0 +1,72 @@
+    • "Hi Brandon"
+    • “What is Brandon’s family like?”
+    • “How and why did you come to Arizona?”
+    • "Why should I vote for you?"
+    • "What distinguishes you from the other Republican candidates?"
+    • "I have a negative opinion of cryptocurrency and blockchain. Why would I vote for you?"
+    • "What does it mean to tokenize?"
+    • “What is your position on abortion?”
+    • "What's a token?"
+    • "Who stands to profit by tokenizing physical assets?"
+    • "How will you stop wasteful spending and balance the budget?"
+    • "Are you aligned with Rand Paul?"
+    • "How are you similar to and different from Rand Paul?"
+    • "Do you support DOGE?"
+    • "I am the daughter of illegal immigrants. How can my parents earn legal status now that they have been here for 3 years?"
+    • "I want to go to the naval academy. Will you write me a letter of recommendation?"
+    • "Your policies don't seem compassionate. Why should I trust you?"
+    • "I’m a single mom struggling with childcare costs. What’s your plan to help families like mine?"
+    • "I lost my job last year. How will your policies help me get back on my feet?"
+    • "I’m a veteran. What have you done to support veterans, and what will you do if elected?"
+    • "What’s your stance on healthcare reform? How will you make it more affordable?"
+    • "How do you plan to address the national debt without raising taxes?"
+    • "What’s your position on climate change, and how will you balance economic growth with environmental protection?"
+    • "How are you different from [specific opponent] on immigration?"
+    • "What’s your biggest disagreement with the current Republican leadership?"
+    • "Why should I vote for you instead of staying home or voting third-party?"
+    • "I’m pro-choice. Why should I consider voting for a Republican?"
+    • "I’m worried about gun violence. What’s your plan to keep communities safe?"
+    • "I don’t trust politicians. What makes you different?"
+    • "Can you explain your plan for blockchain regulation in simple terms?"
+    • "How will you ensure rural communities have access to high-speed internet?"
+    • "What’s your opinion on AI regulation, and how will you approach it in Congress?"
+    • "I don’t like any politicians. Convince me in 3 sentences."
+    • "What’s your favorite book, and why?" (Tests personalization)
+    • "I’m 18 and voting for the first time. Why should I care about this election?"
+    • "How can I volunteer for your campaign?"
+    • "Where can I donate to support your campaign?"
+    • "What’s the best way to stay updated on your campaign events?"
+    • "Have you ever changed your mind on a major issue? What happened?"
+    • "What’s a mistake you’ve made, and what did you learn from it?"
+    • "How will you hold yourself accountable if elected?"
+    • "What’s your plan to improve infrastructure in [local area]?"
+    • "How will you support small businesses in our district?"
+    • "What’s your connection to our community, and why does it matter?"
+    • "You mentioned tax reform. Can you give me an example of how it would help my family?"
+    • "I’m still not sure about your stance on education. Can you explain it again?"
+    • "What’s the first bill you’ll introduce if elected?"
+    • “What is Brandon’s position on water rights?”
+    • “What is your allegiance to Israel?”
+    • “Explain your position on China.”
+    • “Where do you most differ from the RNC? From Trump? From MAGA Republicans?”
+    • “Where do you most differ from your competitors?”
+    • “What are you going to do differently in the general election compared to the primary?”
+Evaluation
+We are looking for chat's ability to:
+    • respond with empathy and specific policy details.
+    • maintain context and provide deeper explanations.
+    • address hyper-local concerns and demonstrate community ties.
+    • humanize you and build credibility.
+    • drive action and engagement.
+    • handle off-script questions and engage diverse audiences.
+    • simplify complex topics and address niche interests.
+    • handle polarizing issues and build trust.
+    • highlight your unique value proposition.
+    • articulate nuanced policy positions clearly and concisely.
+Evaluation Criteria
+For each interaction, we'll score 1-5:
+    • Clarity: Is the response easy to understand?
+    • Empathy: Does it acknowledge the user’s perspective?
+    • Accuracy: Are the facts and policies correct?
+    • Engagement: Does it encourage further interaction or action?
+    • Tone: Is it professional yet approachable?

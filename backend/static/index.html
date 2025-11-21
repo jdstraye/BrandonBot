@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BrandonBot</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <h1>BrandonBot</h1>
+            <p class="subtitle">Ask about Brandon's positions and platform</p>
+        </div>
+        
+        <div id="consent-banner" class="consent-banner">
+            <p><strong>Privacy Notice:</strong> Would you like to help improve BrandonBot? Your questions and our conversations can be logged to help us provide better answers.</p>
+            <div class="consent-buttons">
+                <button onclick="handleConsent(true)" class="btn-primary">Yes, I consent to logging</button>
+                <button onclick="handleConsent(false)" class="btn-secondary">No thanks</button>
+            </div>
+        </div>
+        
+        <div class="messages" id="messages">
+            <div class="message bot-message">
+                <div class="message-content">
+                    <p><strong>👋 Hi! I'm BrandonBot.</strong></p>
+                    <p>I've been trained on Brandon's public positions and statements. I'll do my best to answer your questions accurately, but I may make mistakes.</p>
+                    <p>If I'm unsure about something or you need a detailed answer, I'll offer to have Brandon call you back personally.</p>
+                    <p>What would you like to know about Brandon's positions?</p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="input-container">
+            <input 
+                type="text" 
+                id="query-input" 
+                placeholder="Type your question..." 
+                autocomplete="off"
+            />
+            <button id="send-btn" onclick="sendQuery()">Send</button>
+        </div>
+        
+        <div id="callback-modal" class="modal">
+            <div class="modal-content">
+                <h2>Request a Personal Call from Brandon</h2>
+                <p class="modal-subtitle">Brandon will personally call you back to discuss your question.</p>
+                <form id="callback-form">
+                    <input type="text" id="callback-name" placeholder="Your Name" required />
+                    <input type="tel" id="callback-phone" placeholder="Phone Number" required />
+                    <input type="email" id="callback-email" placeholder="Email (optional)" />
+                    <textarea id="callback-question" placeholder="Your question..." required></textarea>
+                    <div class="modal-buttons">
+                        <button type="submit" class="btn-primary">Request Callback</button>
+                        <button type="button" onclick="closeCallbackModal()" class="btn-secondary">Cancel</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    
+    <script src="/static/app.js"></script>
+</body>
+</html>

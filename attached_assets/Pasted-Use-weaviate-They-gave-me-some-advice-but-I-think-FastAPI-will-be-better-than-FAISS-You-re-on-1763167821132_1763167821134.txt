@@ -1,0 +1,19 @@
+Use weaviate. They gave me some advice, but I think FastAPI will be better than FAISS- ''' You're on the right track - Elysia is probably overkill for your use case. Your Flask + .generate.near_text() setup is the fastest path to production.
+Before I give you specific recommendations, I need to understand three things:
+
+Volume - How many texts per day? Timeline - When do you need this live? Accuracy - Is a wrong answer just annoying, or does it create compliance risk? Your answers will determine whether you need optimizations or can ship as-is.
+
+Here's what matters based on your situation:
+
+If you're doing high volume (1000+ msgs/day), make sure you're reusing the same Weaviate client across requests instead of creating a new one per text. The instantiation overhead will slow you down.
+
+If accuracy is critical;
+
+Bump your limit from 2 to 5-10 results so the LLM has more context Add Autocut to filter out irrelevant stuff that causes hallucinations If problems persist, we can discuss reranking (adds a second step but improves accuracy) May be worht updating your prompt to avoid SMS encoding issues:
+
+##. grouped_task="Answer in "X" sentence. Plain text only - no quotes or special characters." This keeps you under 160 characters and prevents the message from switching to Unicode encoding (which cuts your limit to 70 chars and doubles your cost). ''' We will eventually need to pare the results to SMS formats, but, for now, let's just get all the chatting working satisfactorily with content. Answers to Weaviate's questions: 1k+, Monday for testing, Wrong answers are a serious problem (thus the need to identify low confidence answers and offer to call back instead). I think PyInstaller is best so that everything is self-contained in the file. I think the best organization of collections is:
+
+BrandonPlatform. These are his own statements/speeches, so we are taking the words straight from the horse's mouth. His synthesis of the RNC and Independent platforms would go in here. These share the highest confidence scores with Previous Q&A.
+Previous Q&A. This shares the highest confidence scores.
+PartyPlatform. These are the RNC and Independent platforms, for example. They are the lowest confidence score in Collections and are mostly for comparison purposes to what he believes. I need to add an Arizona-specific Republican platform, as I am sure there are local issues, like water rights, that are important but not mentioned in the national one.
+Internet (not really a collection). These are the lowest confidence scores. Everything from the internet must be accompanied with a citation.

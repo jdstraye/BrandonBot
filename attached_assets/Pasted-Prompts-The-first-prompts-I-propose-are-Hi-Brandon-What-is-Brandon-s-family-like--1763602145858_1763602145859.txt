@@ -1,0 +1,141 @@
+Prompts
+The first prompts I propose are
+    • "Hi Brandon"
+    • “What is Brandon’s family like?”
+    • “How and why did you come to Arizona?”
+    • "Why should I vote for you?"
+    • "What distinguishes you from the other Republican candidates?"
+    • "I have a negative opinion of cryptocurrency and blockchain. Why would I vote for you?"
+    • "What does it mean to tokenize?"
+    • “What is your position on abortion?”
+    • "What's a token?"
+    • "Who stands to profit by tokenizing physical assets?"
+    • "How will you stop wasteful spending and balance the budget?"
+    • "Are you aligned with Rand Paul?"
+    • "How are you similar to and different from Rand Paul?"
+    • "Do you support DOGE?"
+    • "I am the daughter of illegal immigrants. How can my parents earn legal status now that they have been here for 3 years?"
+    • "I want to go to the naval academy. Will you write me a letter of recommendation?"
+    • "Your policies don't seem compassionate. Why should I trust you?"
+    • "I’m a single mom struggling with childcare costs. What’s your plan to help families like mine?"
+    • "I lost my job last year. How will your policies help me get back on my feet?"
+    • "I’m a veteran. What have you done to support veterans, and what will you do if elected?"
+    • "What’s your stance on healthcare reform? How will you make it more affordable?"
+    • "How do you plan to address the national debt without raising taxes?"
+    • "What’s your position on climate change, and how will you balance economic growth with environmental protection?"
+    • "How are you different from [specific opponent] on immigration?"
+    • "What’s your biggest disagreement with the current Republican leadership?"
+    • "Why should I vote for you instead of staying home or voting third-party?"
+    • "I’m pro-choice. Why should I consider voting for a Republican?"
+    • "I’m worried about gun violence. What’s your plan to keep communities safe?"
+    • "I don’t trust politicians. What makes you different?"
+    • "Can you explain your plan for blockchain regulation in simple terms?"
+    • "How will you ensure rural communities have access to high-speed internet?"
+    • "What’s your opinion on AI regulation, and how will you approach it in Congress?"
+    • "I don’t like any politicians. Convince me in 3 sentences."
+    • "What’s your favorite book, and why?" (Tests personalization)
+    • "I’m 18 and voting for the first time. Why should I care about this election?"
+    • "How can I volunteer for your campaign?"
+    • "Where can I donate to support your campaign?"
+    • "What’s the best way to stay updated on your campaign events?"
+    • "Have you ever changed your mind on a major issue? What happened?"
+    • "What’s a mistake you’ve made, and what did you learn from it?"
+    • "How will you hold yourself accountable if elected?"
+    • "What’s your plan to improve infrastructure in [local area]?"
+    • "How will you support small businesses in our district?"
+    • "What’s your connection to our community, and why does it matter?"
+    • "You mentioned tax reform. Can you give me an example of how it would help my family?"
+    • "I’m still not sure about your stance on education. Can you explain it again?"
+    • "What’s the first bill you’ll introduce if elected?"
+    • “What is Brandon’s position on water rights?”
+    • “What is your allegiance to Israel?”
+    • “Explain your position on China.”
+    • “Where do you most differ from the RNC? From Trump? From MAGA Republicans?”
+    • “Where do you most differ from your competitors?”
+    • “What are you going to do differently in the general election compared to the primary?”
+    • “Is it true that the Covid-19 vaccine did more harm than good?”
+    • “What is a woman?”
+    • “Are you in favor of releasing UAP secrets? the Epstein files?”
+    • “Is ICE being too cruel in how it is rounding up immigrants, even children and those who have been here for over a decade?”
+A. Economic and Fiscal Policy (AZ-01 Core Anxiety: Financial Security)
+    • Inflation and Cost of Living: "With Arizona's cost of living outpacing wage growth, especially for groceries and gasoline, what two specific federal policy levers will you pull in Congress to reduce inflation without triggering a recession?"
+    • Taxation and Federal Spending: "AZ-01 is a high-tax-contributing district. Will you commit to a Net-Zero spending bill, where any new spending is fully offset by specific cuts, and what is your plan to secure lower federal income and capital gains tax rates?"
+    • Economic Growth and Regulation: "How will you utilize your position in the House to push for deregulation and tax incentives that specifically attract high-tech and finance companies to the Greater Phoenix area, supporting our district’s economy?"
+    • Social Security and Medicare Solvency: "Our senior population is highly dependent on Social Security and Medicare. What is your long-term plan to ensure their solvency for the next generation without raising taxes on current retirees or cutting benefits for those nearing retirement?"
+    • Housing Affordability and Supply: "What is the appropriate federal role in addressing Arizona’s housing crisis, and what legislative changes will you champion regarding federal land use, Fannie/Freddie Mac, or federal lending rates to increase supply?"
+    • Domestic Economy: “What are Arizona’s most important industries?”
+B. Arizona-Specific and Infrastructure Issues (AZ-01 Core Anxiety: Local Quality of Life)
+    • Border Security and Immigration Policy: "Given Arizona's status as a front-line state, what is the first bill you will introduce to secure the Southern Border, and will it include classifying drug cartels as Foreign Terrorist Organizations?"
+    • Water Rights and Conservation: "The Colorado River crisis is a direct threat to Arizona. What federal funding mechanisms or interstate compact enforcement changes will you pursue to secure Arizona's full allocation and invest in infrastructure like desalination or water recycling?"
+    • Federal Land Management: "Do you support increasing the amount of federally controlled land being returned to state or private control for economic development, energy production, and responsible grazing?"
+    • Energy Policy: "How do you propose using federal policy to ensure a stable, low-cost energy supply for Arizona, balancing the need for reliable natural gas with the potential for Arizona solar energy development?"
+    • Federal Highway and Infrastructure Funding: "What is your strategy to ensure AZ-01 receives its fair share of federal transportation funding to ease the severe traffic congestion on major corridors like the 101 and 51 freeways?"
+C. Government and Political Integrity (AZ-01 Core Anxiety: Trust and Accountability)
+    • Election Integrity and Reform: "What specific federal legislation do you support to increase voter confidence in election results, such as requiring national voter ID, securing mail-in ballot procedures, or banning unmonitored drop boxes?" (Source 3.1)
+    • National Debt and Deficit: "The national debt is a moral and economic crisis. As a Congressional representative, what is the single largest federal department or program you would target for reform or spending reduction to put us on a path to balance?"
+    • Congressional Ethics and Campaign Finance: "Given the public concern over 'dark money' and influence, what specific measures will you support to enforce term limits and increase transparency in Congressional stock trading and lobbying activity?"
+    • Term Limits for Congress: "Will you support and co-sponsor a constitutional amendment to impose term limits on all Members of Congress to prevent career politicians?"
+    • Big Tech and Censorship/Free Speech: "How should Congress regulate Big Tech platforms to ensure they do not unfairly censor political speech or interfere with election information, protecting the First Amendment rights of citizens?"
+D. Social and Domestic Issues (AZ-01 Core Anxiety: Values and Liberty)
+    • Healthcare Costs and Access: "Beyond repealing the Affordable Care Act (ACA), what is your detailed, market-based plan to lower out-of-pocket costs for Arizonans and reduce the price of prescription drugs?"
+    • Parental Rights in Education: "Do you support federal legislation that mandates full curriculum transparency and protects the right of parents to utilize school choice options like Empowerment Scholarship Accounts (ESAs) without federal interference?" (Source 3.1)
+    • Second Amendment Rights: "What is your position on any proposed federal legislation that would expand background checks or restrict the sales of certain firearms, and what will you do to unequivocally protect the Second Amendment?"
+    • Reproductive Rights/Abortion: "Do you believe the federal government has the authority to intervene in state-level decisions regarding abortion access, or should this issue be left entirely to the states and the Arizona legislature?"
+    • Crime and Public Safety: "How will you use your federal position to increase resources for local Arizona law enforcement, specifically to combat the surge in fentanyl trafficking and organized retail crime coming across the border?"
+E. Foreign Policy and National Security (AZ-01 Core Anxiety: Global Stability and Veterans)
+    • US-China Relations: "What legislative action will you take to decouple the US supply chain from China, specifically protecting Arizona's semiconductor industry from unfair competition and intellectual property theft?"
+    • Support for Veterans and Military Families: "What specific reforms will you advocate for to reduce wait times and improve the quality of care at the Phoenix VA facilities and better address veteran homelessness in our district?"
+    • Middle East and Israel Policy: "What is your stance on continued foreign aid and military support to key allies like Israel, and what is the Congressional role in maintaining stability in the Middle East?"
+    • Cybersecurity and AI Regulation: "Given the rapid rise of Generative AI, what is Congress's ethical and regulatory obligation to address the risks of deepfakes, bias, and foreign adversary use of AI without stifling innovation in American technology companies?"
+    • Trade Policy and Tariffs: "Do you believe the current federal trade policies are benefitting Arizona businesses, and what kind of new trade agreements or tariffs would you support to protect American manufacturing?"
+Evaluation
+We are looking for chat's ability to:
+    • respond with empathy and specific policy details.
+    • maintain context and provide deeper explanations.
+    • address hyper-local concerns and demonstrate community ties.
+    • humanize you and build credibility.
+    • drive action and engagement.
+    • handle off-script questions and engage diverse audiences.
+    • simplify complex topics and address niche interests.
+    • handle polarizing issues and build trust.
+    • highlight your unique value proposition.
+    • articulate nuanced policy positions clearly and concisely.
+Evaluation Criteria
+For each interaction, we'll score 1-5:
+    • Clarity: Is the response easy to understand?
+    • Empathy: Does it acknowledge the user’s perspective?
+    • Accuracy: Are the facts and policies correct?
+    • Engagement: Does it encourage further interaction or action?
+    • Tone: Is it professional yet approachable?
+    • Alignment with AZ-01 interests? In particular -
+
+A. Economic and Fiscal Policy (AZ-01 Focus: Wealth Preservation & Growth)
+        1. Inflation and Cost of Living: Specifically, addressing high costs for groceries, gasoline, and utilities, which disproportionately affect fixed-income seniors. AI can model voter sensitivity to different messaging on this.
+        2. Taxation and Federal Spending: Advocating for lower federal income and capital gains taxes (crucial for high-income/high-net-worth constituents) and federal spending restraint/deficit reduction (Incumbent's committee focus).
+        3. Economic Growth and Regulation: Focusing on deregulation and policies that support small businesses and high-tech/finance sectors prevalent in the district.
+        4. Social Security and Medicare Solvency: A high-priority issue for the older demographic (Source 4.2). Messaging must be precise and reassuring on long-term funding.
+        5. Housing Affordability and Supply: While a local issue, the federal role in interest rates, Fannie/Freddie Mac reform, and tax incentives for investment is critical to Arizona's rising housing costs.
+B. Arizona-Specific and Infrastructure Issues (AZ-01 Focus: Water, Border, Federal Land)
+        1. Border Security and Immigration Policy: Given Arizona's location, this is a top-tier issue. Primary voters will demand a strong federal response (Source 3.3, referencing the "Drug Cartels as Terrorist Organizations" measure).
+        2. Water Rights and Conservation: The long-term security of the Colorado River and Arizona's water supply is existential. Federal funding for water infrastructure (desalination, conservation projects) is paramount.
+        3. Federal Land Management: Policies concerning federal lands and their use for energy production, recreation, and limiting federal overreach (key conservative concern).
+        4. Energy Policy: Balancing traditional energy (natural gas, oil) with renewable sources like solar (Arizona's strength) to ensure energy independence and affordability (Incumbent's focus on Hydropower, Source 1.3).
+        5. Federal Highway and Infrastructure Funding: For local traffic and commerce corridors, particularly in the growing Northeast Valley.
+C. Government and Political Integrity (AZ-01 Focus: Trust and Transparency)
+        1. Election Integrity and Reform: Addressing voter confidence concerns, including debate over voter ID, ballot procedures, and post-election audits (Source 3.4).
+        2. National Debt and Deficit: A central conservative/fiscal policy pillar, stressing the moral and economic hazard of excessive federal borrowing.
+        3. Congressional Ethics and Campaign Finance: Focus on "draining the swamp," limiting "dark money" (relevant to AZ's 2022 law, Source 3.1), and tackling official corruption.
+        4. Term Limits for Congress: A popular reform measure across many political lines, reflecting anti-establishment sentiment (Incumbent's pledge, Source 1.2).
+        5. Big Tech and Censorship/Free Speech: Federal oversight of social media platforms, content moderation, and protecting free speech from private or government suppression (Source 3.4).
+D. Social and Domestic Issues (AZ-01 Focus: Values and Personal Liberty)
+        1. Healthcare Costs and Access: Focus on lowering premiums and drug prices, market-based reforms, and protecting choices in care (Incumbent's committee focus on Health, Source 1.1).
+        2. Parental Rights in Education: Federal-level support for parental control over curriculum and school choices (relevant to 2025 Ballot Measures, Source 3.1).
+        3. Second Amendment Rights: Strong, unequivocal defense of gun ownership rights, a non-negotiable for many primary voters.
+        4. Reproductive Rights/Abortion: Navigating the post-Roe landscape and defining the appropriate federal and state role (relevant to AZ 2025 Ballot Measures, Source 2.4).
+        5. Crime and Public Safety: Federal support for local law enforcement and addressing the national drug and opioid crisis.
+E. Foreign Policy and National Security (AZ-01 Focus: Global Stability and Veterans)
+        1. US-China Relations: Specifically, economic competition, trade imbalances, and supply chain security (chip manufacturing/semiconductors are vital to AZ's economy).
+        2. Support for Veterans and Military Families: Improving VA healthcare access, addressing veteran homelessness, and ensuring benefits (high veteran population, Source 4.2).
+        3. Middle East and Israel Policy: Strong, consistent foreign policy, given the high national focus on global stability.
+        4. Cybersecurity and AI Regulation: Protecting critical infrastructure from foreign adversaries and engaging in the ethical/economic debate over AI governance.
+        5. Trade Policy and Tariffs: Advocating for trade deals that benefit American businesses and workers without harming Arizona's specific industries.
