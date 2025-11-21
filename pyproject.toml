@@ -1,22 +1,5 @@
-[tool.poetry]
-name = "repl-nix-workspace"
-version = "0.1.0"
-description = "BrandonBot"
-authors = ["Jayson Strayer <jdstrayer.js@gmail.com>"]
-
-[tool.poetry.dependencies]
-python = "^3.11"
-duckduckgo-search = ">=8.1.1"
-uvicorn = "^0.34.0"
-lxml = "^5.0.0"
-python-docx = "^1.1.0"
-PyPDF2 = "^3.0.0"
-
-[build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
-
 [project]
 name = "brandonbot"
 version = "0.1.0"
+description = "BrandonBot - 100% Open-Source RAG Political Chatbot"
 requires-python = ">=3.11"
