@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 from typing import Optional
 import onnxruntime_genai as og
 
@@ -90,14 +91,57 @@ Provide a clear, conversational answer as BrandonBot. Keep it concise (2-4 sente
             
             response_text = ""
             token_count = 0
-            while not generator.is_done():
-                generator.compute_logits()
-                generator.generate_next_token()
-                new_token = generator.get_next_tokens()[0]
-                response_text += self.tokenizer.decode([new_token])
-                token_count += 1
+            max_new_tokens = min(4096 - len(tokens), 2048)
+            generation_timeout = 60.0
+            start_time = time.monotonic()
+            timeout_triggered = False
+            truncated_by_limit = False
             
-            logger.info(f"Generated {token_count} tokens, response length: {len(response_text)}")
+            while not generator.is_done() and token_count < max_new_tokens:
+                elapsed = time.monotonic() - start_time
+                if elapsed > generation_timeout:
+                    logger.error(f"Generation timeout after {elapsed:.1f}s, aborting")
+                    timeout_triggered = True
+                    break
+                
+                try:
+                    generator.compute_logits()
+                    generator.generate_next_token()
+                    new_tokens = generator.get_next_tokens()
+                    
+                    if not new_tokens or len(new_tokens) == 0:
+                        logger.error("Generator returned empty tokens, aborting")
+                        break
+                    
+                    new_token = new_tokens[0]
+                    response_text += self.tokenizer.decode([new_token])
+                    token_count += 1
+                except Exception as gen_error:
+                    logger.error(f"Error during token generation: {gen_error}")
+                    break
+            
+            if token_count >= max_new_tokens and not timeout_triggered:
+                logger.warning(f"Generation stopped at max token limit ({max_new_tokens})")
+                truncated_by_limit = True
+            
+            elapsed_total = time.monotonic() - start_time
+            logger.info(f"Generated {token_count} tokens in {elapsed_total:.1f}s, response length: {len(response_text)}")
+            
+            if timeout_triggered:
+                return {
+                    "response": "I'm having trouble generating a complete response. Would you like Brandon to call you back?",
+                    "model": "phi-3-mini-onnx",
+                    "error": "generation_timeout",
+                    "truncated": True
+                }
+            
+            if not response_text.strip():
+                logger.error("Generation produced empty response")
+                return {
+                    "response": "I'm having trouble processing your question right now. Would you like Brandon to call you back?",
+                    "model": "phi-3-mini-onnx",
+                    "error": "empty_generation"
+                }
             
             return {
                 "response": response_text.strip(),
