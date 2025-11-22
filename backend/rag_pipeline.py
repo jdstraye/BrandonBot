@@ -80,76 +80,45 @@ class RAGPipeline:
                        f"Best confidence: {retrieval_context.best_confidence:.2f}, " +
                        f"Dual sources: {retrieval_context.has_dual_sources}")
             
-            if not retrieval_context.content_results or retrieval_context.best_confidence < 0.2:
-                # Completely no information - use fallback
-                logger.info(f"Very low/no confidence ({retrieval_context.best_confidence}), using fallback response")
-                response_text = self._generate_low_confidence_response(query, question_analysis)
+            # SIMPLIFIED RETRIEVAL-FIRST ARCHITECTURE
+            # Always build context from what we found and let Phi-3 decide how to respond
+            facts_context = self._build_facts_context(retrieval_context.content_results[:10])
+            external_context = self._build_external_context(
+                retrieval_context.bible_results,
+                retrieval_context.web_results
+            )
+            communication_strategy = self._build_communication_strategy(
+                question_analysis,
+                retrieval_context.marketguru_results
+            )
+            
+            system_prompt = self._build_multi_section_prompt(
+                question_analysis,
+                facts_context,
+                external_context,
+                communication_strategy,
+                callback_requested=callback_requested
+            )
+            
+            logger.info(f"System prompt length: {len(system_prompt)} chars")
+            
+            llm_response = await self.phi3.generate_response(
+                query=query,
+                context="",
+                system_prompt=system_prompt,
+                confidence=retrieval_context.best_confidence
+            )
+            
+            response_text = llm_response["response"]
+            best_confidence = retrieval_context.best_confidence
+            
+            # Determine callback offer
+            offer_callback = callback_requested or (best_confidence < 0.4)
+            
+            # ESSENTIAL: Enforce dual-source requirement for comparisons
+            if question_analysis and question_analysis.needs_dual_sources and not retrieval_context.has_dual_sources:
+                logger.warning("Comparison question without dual sources - offering callback for complete information")
                 offer_callback = True
-                best_confidence = retrieval_context.best_confidence
-            elif callback_requested:
-                # User explicitly requested callback - acknowledge it
-                logger.info("User explicitly requested callback - building acknowledgment response")
-                facts_context = self._build_facts_context(retrieval_context.content_results[:5])
-                external_context = self._build_external_context(
-                    retrieval_context.bible_results,
-                    retrieval_context.web_results
-                )
-                communication_strategy = self._build_communication_strategy(
-                    question_analysis,
-                    retrieval_context.marketguru_results
-                )
-                
-                system_prompt = self._build_multi_section_prompt(
-                    question_analysis,
-                    facts_context,
-                    external_context,
-                    communication_strategy
-                ) + "\n\nIMPORTANT: The user has requested a callback. Acknowledge this in your response and let them know they can use the callback form to provide their contact information."
-                
-                llm_response = await self.phi3.generate_response(
-                    query=query,
-                    context="",
-                    system_prompt=system_prompt,
-                    confidence=retrieval_context.best_confidence
-                )
-                
-                response_text = llm_response["response"]
-                best_confidence = retrieval_context.best_confidence
-                offer_callback = True
-            else:
-                facts_context = self._build_facts_context(retrieval_context.content_results[:5])
-                external_context = self._build_external_context(
-                    retrieval_context.bible_results,
-                    retrieval_context.web_results
-                )
-                communication_strategy = self._build_communication_strategy(
-                    question_analysis,
-                    retrieval_context.marketguru_results
-                )
-                
-                system_prompt = self._build_multi_section_prompt(
-                    question_analysis,
-                    facts_context,
-                    external_context,
-                    communication_strategy
-                )
-                
-                logger.info(f"System prompt length: {len(system_prompt)} chars")
-                
-                llm_response = await self.phi3.generate_response(
-                    query=query,
-                    context="",
-                    system_prompt=system_prompt,
-                    confidence=retrieval_context.best_confidence
-                )
-                
-                response_text = llm_response["response"]
-                best_confidence = retrieval_context.best_confidence
-                offer_callback = best_confidence < 0.5
-                
-                if question_analysis and question_analysis.needs_dual_sources and not retrieval_context.has_dual_sources:
-                    logger.warning("Comparison question with partial information - Phi-3 will explain what's known/unknown")
-                    offer_callback = True  # Always offer callback for incomplete comparisons
             
             sources = [
                 {
@@ -257,20 +226,26 @@ class RAGPipeline:
         question_analysis,
         facts_context: str,
         external_context: str,
-        communication_strategy: str
+        communication_strategy: str,
+        callback_requested: bool = False
     ) -> str:
         """
         Build multi-section system prompt with clear separation:
         1. Facts Context (content sources)
         2. External Supplements (Bible, web)
         3. Communication Strategy (MarketGuru style guidance)
+        
+        RETRIEVAL-FIRST PHILOSOPHY:
+        - Always present what you found, even if incomplete
+        - Trust Phi-3 to explain gaps naturally
+        - No hard-coded confidence thresholds
         """
         prompt_parts = [
             "You are BrandonBot, an AI assistant speaking AS Brandon Sowers (first person).",
             "\n" + "="*80,
             "\n=== SECTION 1: FACTUAL CONTEXT ===",
             "This is the authoritative information about Brandon's positions and relevant evidence:",
-            "\n" + facts_context,
+            "\n" + facts_context if facts_context.strip() else "\n[No specific information found in Brandon's platform documents]",
         ]
         
         if external_context:
@@ -292,36 +267,15 @@ class RAGPipeline:
         prompt_parts.extend([
             "\n" + "="*80,
             "\n=== RESPONSE GUIDELINES ===",
-            "- Speak in first person ('I believe', 'my position', 'my plan')",
-            "- Base your answer ONLY on Section 1 (Factual Context)",
-            "- Use Section 2 for supporting evidence when relevant",
-            "- Use Section 3 to guide communication style, NOT content",
-            "- Be direct, conversational, and benefit-focused",
-            "- If comparison question: contrast both perspectives fairly",
-            "- PARTIAL INFORMATION HANDLING:",
-            "  * If you have Brandon's position but lack opponent info: explain what you DO know about Brandon's stance, then clearly state 'I don't have enough information about [opponent]'s position on this to make a fair comparison'",
-            "  * If you have opponent info but lack Brandon's: explain what you found about the opponent, then state 'I need to research Brandon's specific position on this'",
-            "  * Always share what you DID find before explaining what's missing",
-            "  * Offer callback for complete information: 'Would you like Brandon to call you back to discuss this in detail?'",
-            "- If completely uncertain: be honest and offer personal callback"
+            "1. PRESENT WHAT YOU FOUND - Even if limited, share Section 1 facts. For debates: present Brandon's stance. Never say 'no information' if Section 1 has content.",
+            "2. HANDLE GAPS - Missing opponent view? Present Brandon's fully, note 'need to research opponent'. Incomplete? Explain what you know + what's missing.",
+            "3. OFFER CALLBACKS - After debates, incomplete comparisons, complex topics. Natural: 'Would you like Brandon to call?'",
+            "4. STYLE - First person, direct, conversational (use Section 3). For Scripture: cite Section 2.",
         ])
+        
+        if callback_requested:
+            prompt_parts.append("\nNOTE: User has explicitly requested a callback. Acknowledge this and confirm Brandon will reach out.")
         
         return "\n".join(prompt_parts)
     
-    def _generate_low_confidence_response(self, query: str, question_analysis) -> str:
-        """Generate response for low-confidence scenarios"""
-        if question_analysis and question_analysis.needs_dual_sources and question_analysis.comparison_targets:
-            targets = ", ".join(question_analysis.comparison_targets)
-            return (
-                f"I want to give you a thorough comparison regarding {targets}, but I don't have " +
-                "enough reliable information from both perspectives to answer confidently. " +
-                "This deserves a complete answer directly from Brandon. " +
-                "Would you like him to call you back to discuss this personally?"
-            )
-        
-        return (
-            "I don't have enough reliable information to answer that question confidently. "
-            "This is an important topic that deserves an accurate answer directly from Brandon. "
-            "Would you like him to call you back to discuss this personally?"
-        )
 
