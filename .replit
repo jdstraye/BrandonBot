@@ -93,3 +93,10 @@ externalPort = 4200
 [[ports]]
 localPort = 60202
 externalPort = 3002
+
+[userenv]
+
+[userenv.shared]
+OMP_NUM_THREADS = "4"
+ORT_INTRA_OP_NUM_THREADS = "4"
+ORT_INTER_OP_NUM_THREADS = "1"
