@@ -23,12 +23,21 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd backend && python3.11 -m uvicorn main:app --host 0.0.0.0 --port 5000"
+args = "cd backend && python3.11 -m uvicorn main:app --host 0.0.0.0 --port 5000 --timeout-keep-alive 120"
 waitForPort = 5000
 
 [nix]
 channel = "stable-25_05"
-packages = ["libxcrypt", "oneDNN", "openssh", "python312Packages.uvicorn", "re2", "xcodebuild", "zlib"]
+packages = [
+  "libxcrypt",
+  "oneDNN",
+  "openssh",
+  "python312Packages.uvicorn",
+  "re2",
+  "xcodebuild",
+  "zlib",
+  "sqlite-interactive",
+]
 
 [[ports]]
 localPort = 5000
