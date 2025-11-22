@@ -109,16 +109,128 @@ ls: cannot access '/home/runner/.ssh': No such file or directory
 ```
 
 **2) Generate new SSH Keypairs**
-
+First, we will go through how to manage the keys the normal way. However, replit resets the ~ frequently (e.g., navigating away from replit, going to sleep).
 Generate separate keypairs for Replit and GitHub:
 ```bash
-ssh-keygen -t ed25519 -f ~/.ssh/replit -q -N ""
-ssh-keygen -t ed25519 -f ~/.ssh/github -q -N ""
+ssh-keygen -t ed25519 -f ~/.ssh/replit -q -N "" -C jdstrayer.js@gmail.com
+ssh-keygen -t ed25519 -f ~/.ssh/github -q -N "" -C jdstrayer.js@gmail.com
 ```
-
 The `ed25519` algorithm is a modern and secure elliptic-curve cryptography standard that offers better security than older RSA with shorter key lengths.
 
-**3) Add the Public Keys to Your Accounts**
+**3) Configure SSH**
+
+Create or edit your SSH config file:
+```bash
+mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/config && chmod 600 ~/.ssh/config
+```
+
+Add the configuration:
+```bash
+cat >> ~/.ssh/config << 'EOF'
+Host *.replit.dev
+    Port 22
+    IdentityFile ~/.ssh/replit
+    StrictHostKeyChecking accept-new
+
+Host github.com
+    IdentityFile ~/.ssh/github
+    StrictHostKeyChecking accept-new
+EOF
+```
+
+### Dealing with replit resets
+To counteract replit resets, we store the keys to a directory within the app, .ssh_keys. We create a script to create the .ssh directory and populate it, and we set that script to be called by .bash_profile so that the .ssh directory is correct after every reset.
+```shell-script
+cp ~/.ssh/* .ssh-keys
+```
+
+Example location of .ssh-keys -
+```shell
+~/workspace$ ls -ltrha
+total 208K
+drwxr-xr-x 1 runner runner   20 Nov 18 23:39 .local
+-rwxr-xr-x 1 runner runner 2.3K Nov 19 19:15 download_phi3_model.py
+-rw-r--r-- 1 runner runner 7.7K Nov 20 20:29 README.md
+-rw-r--r-- 1 runner runner  36K Nov 21 06:23 uv.lock
+-rw-r--r-- 1 runner runner  142 Nov 21 06:49 pyproject.toml
+-rw-r--r-- 1 runner runner  252 Nov 21 06:53 requirements.txt
+drwxr-xr-x 1 runner runner   22 Nov 21 06:54 .pythonlibs
+drwxr-xr-x 1 runner runner  108 Nov 21 08:04 documents
+drwxr-xr-x 1 runner runner   20 Nov 21 08:46 .upm
+-rwxr-xr-x 1 runner runner  12K Nov 22 04:38 smoke_test.sh
+drwxr-xr-x 1 runner runner 3.4K Nov 22 15:29 attached_assets
+drwxr-xr-x 1 runner runner   80 Nov 22 15:57 .cache
+drwxr-xr-x 1 runner runner   50 Nov 22 18:50 __pycache__
+drwxr-xr-x 1 runner runner  682 Nov 22 19:04 backend
+-rw-r--r-- 1 runner runner 1.9K Nov 22 19:12 evaluation_prompt.txt
+-rw-r--r-- 1 runner runner 4.1K Nov 22 19:20 brandonbot_conversations.csv
+-rw-r--r-- 1 runner runner 1.6K Nov 22 19:21 .replit
+-rw-r--r-- 1 runner runner  24K Nov 22 20:02 full_test.py
+drwxrwxrwx 1 runner runner   78 Nov 22 22:06 ..
+-rw-r--r-- 1 runner runner 5.3K Nov 22 22:14 replit.md
+-rw-r--r-- 1 runner runner 9.7K Nov 22 22:15 COMMERCIALAI_MIGRATION.md
+-rw-r--r-- 1 runner runner  13K Nov 22 22:15 SELF_HOSTING.md
+-rw-r--r-- 1 runner runner  422 Nov 22 22:48 .gitignore
+-rw-r--r-- 1 runner runner  706 Nov 22 22:49 .replit-ssh-setup.sh
+drwx------ 1 runner runner   98 Nov 22 22:55 .ssh-keys
+-rw-r--r-- 1 runner runner  52K Nov 22 22:58 developer_guide.md
+drwxr-xr-x 1 runner runner  656 Nov 22 22:58 .
+drwxr-xr-x 1 runner runner  128 Nov 22 22:58 .git
+```
+
+.replit-ssh-setup.sh:
+```shell-script
+#!/bin/bash
+
+# Ensure ~/.ssh directory exists
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+
+# Symlink keys from persistent storage
+if [ -f .ssh-keys/replit ]; then
+  ln -sf $(pwd)/.ssh-keys/replit ~/.ssh/replit
+  ln -sf $(pwd)/.ssh-keys/replit.pub ~/.ssh/replit.pub
+fi
+
+if [ -f .ssh-keys/github ]; then
+  ln -sf $(pwd)/.ssh-keys/github ~/.ssh/github
+  ln -sf $(pwd)/.ssh-keys/github.pub ~/.ssh/github.pub
+fi
+
+# Setup SSH config
+cat > ~/.ssh/config << 'EOF'
+Host *.replit.dev
+    Port 22
+    IdentityFile ~/.ssh/replit
+    StrictHostKeyChecking accept-new
+
+Host github.com
+    IdentityFile ~/.ssh/github
+    StrictHostKeyChecking accept-new
+EOF
+
+chmod 600 ~/.ssh/config
+
+echo "SSH keys restored from persistent storage"
+```
+
+Setting up:
+```shell
+chmod +x .replit-ssh-setup.sh && ./.replit-ssh-setup.sh
+```
+
+Add .ssh-keys to .gitignore
+```shell
+echo '# SSH keys (persistent storage)' >> .gitignore
+echo '.ssh-keys/' >> .gitignore
+```
+
+Call .replit-ssh-setup.sh from .bashrc via .bash_profile:
+```shell
+echo "source $(pwd)/.replit-ssh-setup.sh" >> ~/.bash_profile
+```
+
+**4) Add the Public Keys to Your Accounts**
 
 Display your public keys:
 ```bash
@@ -142,27 +254,6 @@ done
 4. Give it a title (e.g., "Replit SSH Key")
 5. Paste the public key
 6. Click "Add SSH key"
-
-**4) Configure SSH**
-
-Create or edit your SSH config file:
-```bash
-mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/config && chmod 600 ~/.ssh/config
-```
-
-Add the configuration:
-```bash
-cat >> ~/.ssh/config << 'EOF'
-Host *.replit.dev
-    Port 22
-    IdentityFile ~/.ssh/replit
-    StrictHostKeyChecking accept-new
-
-Host github.com
-    IdentityFile ~/.ssh/github
-    StrictHostKeyChecking accept-new
-EOF
-```
 
 **5) Test the SSH Connection**
 
