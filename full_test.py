@@ -94,7 +94,7 @@ class ConversationLogger:
 
         try:
             response = requests.post(
-                "http://localhost:5000/api/query",
+                "http://127.0.0.1:5000/api/query",
                 json={"query": question},
                 timeout=120
             )
@@ -112,6 +112,28 @@ class ConversationLogger:
         except Exception as e:
             print(f"✗ Error: {e} during {question = }")
             return None
+
+
+def wait_for_server(base_url="http://127.0.0.1:5000", max_wait=60):
+    """Wait for server to be ready before running tests"""
+    import time
+    print(f"Waiting for server at {base_url}...")
+    start = time.time()
+    while time.time() - start < max_wait:
+        try:
+            response = requests.get(f"{base_url}/")
+            if response.status_code == 200:
+                print(f"✓ Server is ready! ({int(time.time() - start)}s)")
+                return True
+        except requests.exceptions.ConnectionError:
+            elapsed = int(time.time() - start)
+            print(f"  Waiting... ({elapsed}s)", end='\r')
+            time.sleep(2)
+        except Exception as e:
+            print(f"  Unexpected error: {e}")
+            time.sleep(2)
+    print(f"\n✗ Server didn't respond after {max_wait}s")
+    return False
 
 
 def run_test_suite():
