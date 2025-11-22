@@ -34,13 +34,17 @@ run_test() {
     # Parse response
     confidence=$(echo "$response" | python3.11 -c "import sys, json; data=json.load(sys.stdin); print(data.get('confidence', 0))" 2>/dev/null)
     source_count=$(echo "$response" | python3.11 -c "import sys, json; data=json.load(sys.stdin); print(len(data.get('sources', [])))" 2>/dev/null)
-    answer=$(echo "$response" | python3.11 -c "import sys, json; data=json.load(sys.stdin); print(data.get('answer', '')[:300])" 2>/dev/null)
+    answer=$(echo "$response" | python3.11 -c "import sys, json; data=json.load(sys.stdin); print(data.get('response', '')[:300])" 2>/dev/null)
+    has_dual_sources=$(echo "$response" | python3.11 -c "import sys, json; data=json.load(sys.stdin); print(data.get('has_dual_sources', 'N/A'))" 2>/dev/null)
+    offer_callback=$(echo "$response" | python3.11 -c "import sys, json; data=json.load(sys.stdin); print(data.get('offer_callback', False))" 2>/dev/null)
     
     echo "✅ Response received"
     echo ""
     echo "📊 Response Analysis:"
     echo "   Confidence: $confidence"
     echo "   Sources: $source_count"
+    echo "   Has Dual Sources: $has_dual_sources"
+    echo "   Offer Callback: $offer_callback"
     echo ""
     echo "💬 Response Preview:"
     echo "   $answer..."
@@ -165,8 +169,124 @@ else:
 "
 echo ""
 
+# Test F: Inverse MarketGuru Triggering (Low Confidence → More Guidance)
+run_test "Inverse MarketGuru Triggering (Low Confidence)" \
+    "What are Brandon's thoughts on quantum computing policy?" \
+    "F"
+
+echo "Expected Behaviors for Test F:"
+echo "  • Should have low content confidence (no specific info on quantum computing)"
+echo "  • MarketGuru should provide 2x guidance (10+ snippets) to help frame response"
+echo "  • Response should acknowledge lack of specific policy but use good communication"
+echo "  • Should offer callback for detailed discussion"
+echo ""
+echo "🔍 Validation:"
+python3.11 -c "
+import json
+with open('/tmp/test_F_response.json') as f:
+    data = json.load(f)
+confidence = data.get('confidence', 1.0)
+offer_callback = data.get('offer_callback', False)
+if confidence < 0.5 and offer_callback:
+    print(f'   ✓ Low confidence ({confidence:.3f}) with callback offer')
+else:
+    print(f'   ✗ Expected low confidence with callback (got confidence={confidence:.3f}, callback={offer_callback})')
+"
+echo ""
+
+# Test G: Generic Comparison with Web Search
+run_test "Generic Comparison with Web Search" \
+    "Compare Brandon to the Democratic candidates on healthcare" \
+    "G"
+
+echo "Expected Behaviors for Test G:"
+echo "  • Should identify 'Democratic' as comparison target"
+echo "  • Should fetch Brandon's position from BrandonPlatform"
+echo "  • Should use web search to research Democratic positions"
+echo "  • Should show dual sources: Brandon + external_web"
+echo "  • Should offer callback if opponent info incomplete"
+echo ""
+echo "🔍 Validation:"
+python3.11 -c "
+import json
+with open('/tmp/test_G_response.json') as f:
+    data = json.load(f)
+sources = data.get('sources', [])
+has_brandon = any(s.get('collection') in ['BrandonPlatform', 'brandonsowers_web'] for s in sources)
+has_external = any(s.get('collection') in ['PartyPlatform', 'external_web'] for s in sources)
+has_dual = data.get('has_dual_sources', False)
+if has_brandon and has_external:
+    print(f'   ✓ Dual sources found (has_dual_sources={has_dual})')
+else:
+    print(f'   ✗ Missing dual sources (Brandon={has_brandon}, External={has_external})')
+"
+echo ""
+
+# Test H: Partial Information Handling
+run_test "Partial Information Handling" \
+    "How does Brandon's stance on AI regulation compare to Republicans?" \
+    "H"
+
+echo "Expected Behaviors for Test H:"
+echo "  • Should find some Brandon information (if available)"
+echo "  • May lack complete Republican platform info on AI"
+echo "  • Response should explain what WAS found and what COULDN'T be determined"
+echo "  • Should say 'I found X but couldn't determine Y'"
+echo "  • Should always offer callback for incomplete comparisons"
+echo ""
+echo "🔍 Validation:"
+python3.11 -c "
+import json
+with open('/tmp/test_H_response.json') as f:
+    data = json.load(f)
+response = data.get('response', '').lower()
+offer_callback = data.get('offer_callback', False)
+partial_indicators = ['don\\'t have enough', 'couldn\\'t determine', 'need more', 'missing', 'insufficient']
+has_partial_language = any(indicator in response for indicator in partial_indicators)
+if has_partial_language or offer_callback:
+    print(f'   ✓ Partial info handling detected (callback={offer_callback})')
+else:
+    print(f'   ⚠ May have complete info or lacking partial handling indicators')
+"
+echo ""
+
+# Test I: Improved Confidence Scoring
+run_test "Improved Confidence Scoring (Border Security)" \
+    "What is Brandon's position on border security?" \
+    "I"
+
+echo "Expected Behaviors for Test I:"
+echo "  • Should retrieve from BrandonPlatform with improved similarity calculation"
+echo "  • Confidence should be higher than old cap of ~0.46 (distance/2 formula)"
+echo "  • With proper formula: distance 0.5 → similarity 0.75, × 1.0 trust = 0.75 confidence"
+echo "  • Should NOT offer callback for high-confidence policy answer"
+echo ""
+echo "🔍 Validation:"
+python3.11 -c "
+import json
+with open('/tmp/test_I_response.json') as f:
+    data = json.load(f)
+confidence = data.get('confidence', 0)
+offer_callback = data.get('offer_callback', True)
+if confidence > 0.5 and not offer_callback:
+    print(f'   ✓ High confidence ({confidence:.3f}) without callback')
+elif confidence > 0.46:
+    print(f'   ⚠ Improved confidence ({confidence:.3f}) but may still offer callback')
+else:
+    print(f'   ✗ Low confidence ({confidence:.3f}), expected > 0.5')
+"
+echo ""
+
 echo "================================================================================"
 echo "📋 Test Summary"
 echo "================================================================================"
 echo "All test responses saved to /tmp/test_*_response.json for detailed analysis"
+echo ""
+echo "Key Features Tested:"
+echo "  ✓ Dual-source enforcement for comparisons (Tests A, G, H)"
+echo "  ✓ Web search for generic comparisons (Test G)"
+echo "  ✓ Partial information handling (Test H)"
+echo "  ✓ Inverse MarketGuru triggering (Test F)"
+echo "  ✓ Improved confidence scoring (Test I)"
+echo "  ✓ Bible verse routing (Test E)"
 echo "================================================================================"

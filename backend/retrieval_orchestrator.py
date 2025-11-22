@@ -367,11 +367,12 @@ class RetrievalOrchestrator:
         
         for query in analysis.search_queries[:2]:  # Top 2 queries
             try:
-                search_results = self.web_search.search(query, limit=limit)
+                search_response = await self.web_search.search(query, max_results=limit)
+                search_results = search_response.results if search_response else []
                 
                 for sr in search_results:
                     # Determine trust multiplier based on domain
-                    if "brandonsowers.com" in sr.url:
+                    if "brandonsowers.com" in sr.url.lower():
                         trust = self.TRUST_MULTIPLIERS["brandonsowers_web"]
                         collection = "brandonsowers_web"
                     else:
@@ -381,13 +382,13 @@ class RetrievalOrchestrator:
                     result = RetrievalResult(
                         text=sr.snippet,
                         collection=collection,
-                        similarity=sr.relevance_score,
+                        similarity=0.6,  # Assumed relevance (search results don't have scores in stub)
                         trust_multiplier=trust,
-                        confidence=sr.relevance_score * trust,
+                        confidence=0.6 * trust,
                         metadata={
                             "url": sr.url,
-                            "title": sr.title,
-                            "source": sr.source
+                            "title": sr.source_name,
+                            "source": sr.source_name
                         }
                     )
                     all_results.append(result)
@@ -424,6 +425,7 @@ class RetrievalOrchestrator:
     ) -> List[RetrievalResult]:
         """
         For comparison questions: ensure at least one Brandon and one opponent source
+        Uses web search for generic comparisons when opponent sources unavailable
         
         Args:
             results: Current results
@@ -435,9 +437,9 @@ class RetrievalOrchestrator:
         if not analysis.needs_dual_sources:
             return results
         
-        # Separate Brandon sources vs opponent sources
+        # Separate Brandon sources vs opponent sources (including web search external sources)
         brandon_sources = [r for r in results if r.collection in ["BrandonPlatform", "PreviousQA", "brandonsowers_web"]]
-        opponent_sources = [r for r in results if r.collection == "PartyPlatform"]
+        opponent_sources = [r for r in results if r.collection in ["PartyPlatform", "external_web"]]
         
         # Check if we have at least one from each side
         has_brandon = len(brandon_sources) > 0
@@ -448,29 +450,81 @@ class RetrievalOrchestrator:
             logger.info(f"Dual sources satisfied: {len(brandon_sources)} Brandon + {len(opponent_sources)} opponent")
             return results
         
-        # Missing one side: try to fetch more (use await!)
+        # Missing Brandon: try BrandonPlatform + brandonsowers.com web search
         if not has_brandon:
-            logger.warning("Missing Brandon sources for comparison - fetching more")
+            logger.warning("Missing Brandon sources for comparison - fetching BrandonPlatform and brandonsowers.com")
+            # Try BrandonPlatform with lower threshold
             additional_brandon = await self._query_collection(
                 "BrandonPlatform",
-                " ".join(analysis.comparison_targets),
+                " ".join(analysis.comparison_targets) if analysis.comparison_targets else analysis.question,
                 limit=3,
-                confidence_threshold=0.25  # Lower threshold
+                confidence_threshold=0.25
             )
             results.extend(additional_brandon)
+            
+            # Also try brandonsowers.com web search
+            if not additional_brandon:
+                logger.info("No BrandonPlatform results - trying brandonsowers.com web search")
+                try:
+                    brandonsowers_query = f"Brandon Sowers position on {' '.join(analysis.comparison_targets)}" if analysis.comparison_targets else analysis.question
+                    web_results = await self.web_search.search(brandonsowers_query, max_results=3)
+                    for web_result in web_results:
+                        if "brandonsowers.com" in web_result.url.lower():
+                            results.append(RetrievalResult(
+                                text=f"{web_result.title}\n{web_result.snippet}",
+                                collection="brandonsowers_web",
+                                similarity=0.7,  # Assumed relevance
+                                trust_multiplier=self.TRUST_MULTIPLIERS["brandonsowers_web"],
+                                confidence=0.7 * self.TRUST_MULTIPLIERS["brandonsowers_web"],
+                                metadata={"url": web_result.url, "title": web_result.title}
+                            ))
+                except Exception as e:
+                    logger.error(f"Web search for Brandon failed: {e}")
         
+        # Missing opponent: try PartyPlatform first, then web search for generic comparisons
         if not has_opponent:
-            logger.warning("Missing opponent sources for comparison - fetching more")
+            logger.warning("Missing opponent sources for comparison - trying PartyPlatform and web search")
+            # Try PartyPlatform with lower threshold
             additional_opponent = await self._query_collection(
                 "PartyPlatform",
-                " ".join(analysis.comparison_targets),
+                " ".join(analysis.comparison_targets) if analysis.comparison_targets else analysis.question,
                 limit=3,
-                confidence_threshold=0.20  # Lower threshold
+                confidence_threshold=0.20
             )
             results.extend(additional_opponent)
+            
+            # If still no opponent sources and we have comparison targets, use web search
+            if not additional_opponent and analysis.comparison_targets:
+                logger.info(f"No PartyPlatform results - using web search for opponent positions: {analysis.comparison_targets}")
+                try:
+                    # Build queries for each comparison target (e.g., "Democrat position on immigration")
+                    for target in analysis.comparison_targets[:2]:  # Limit to 2 targets to avoid excessive searches
+                        opponent_query = f"{target} position on {' '.join([t for t in analysis.comparison_targets if t != target])}"
+                        web_results = await self.web_search.search(opponent_query, max_results=2)
+                        for web_result in web_results:
+                            # External web sources get lower trust (0.3)
+                            results.append(RetrievalResult(
+                                text=f"{web_result.title}\n{web_result.snippet}",
+                                collection="external_web",
+                                similarity=0.6,  # Assumed relevance
+                                trust_multiplier=self.TRUST_MULTIPLIERS["external_web"],
+                                confidence=0.6 * self.TRUST_MULTIPLIERS["external_web"],
+                                metadata={"url": web_result.url, "title": web_result.title, "comparison_target": target}
+                            ))
+                        
+                        # Break after first successful search if we got results
+                        if web_results:
+                            logger.info(f"Found {len(web_results)} web results for {target}")
+                            break
+                except Exception as e:
+                    logger.error(f"Web search for opponent failed: {e}")
         
         # Re-sort by confidence
         results.sort(key=lambda r: r.confidence, reverse=True)
+        
+        final_brandon = sum(1 for r in results if r.collection in ["BrandonPlatform", "PreviousQA", "brandonsowers_web"])
+        final_opponent = sum(1 for r in results if r.collection in ["PartyPlatform", "external_web"])
+        logger.info(f"After enforcement: {final_brandon} Brandon sources, {final_opponent} opponent sources")
         
         return results
     
@@ -483,7 +537,7 @@ class RetrievalOrchestrator:
         if not analysis.needs_dual_sources:
             return True  # Not a comparison, no requirement
         
-        has_brandon = any(r.collection in ["BrandonPlatform", "PreviousQA"] for r in content_results)
-        has_opponent = any(r.collection == "PartyPlatform" for r in content_results)
+        has_brandon = any(r.collection in ["BrandonPlatform", "PreviousQA", "brandonsowers_web"] for r in content_results)
+        has_opponent = any(r.collection in ["PartyPlatform", "external_web"] for r in content_results)
         
         return has_brandon and has_opponent

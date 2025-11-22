@@ -48,7 +48,9 @@ class RAGPipeline:
                        f"Best confidence: {retrieval_context.best_confidence:.2f}, " +
                        f"Dual sources: {retrieval_context.has_dual_sources}")
             
-            if not retrieval_context.content_results or retrieval_context.best_confidence < 0.3:
+            if not retrieval_context.content_results or retrieval_context.best_confidence < 0.2:
+                # Completely no information - use fallback
+                logger.info(f"Very low/no confidence ({retrieval_context.best_confidence}), using fallback response")
                 response_text = self._generate_low_confidence_response(query, question_analysis)
                 offer_callback = True
                 best_confidence = retrieval_context.best_confidence
@@ -84,8 +86,8 @@ class RAGPipeline:
                 offer_callback = best_confidence < 0.5
                 
                 if question_analysis and question_analysis.needs_dual_sources and not retrieval_context.has_dual_sources:
-                    logger.warning("Comparison question lacking dual sources - offering callback")
-                    offer_callback = True
+                    logger.warning("Comparison question with partial information - Phi-3 will explain what's known/unknown")
+                    offer_callback = True  # Always offer callback for incomplete comparisons
             
             sources = [
                 {
@@ -234,7 +236,12 @@ class RAGPipeline:
             "- Use Section 3 to guide communication style, NOT content",
             "- Be direct, conversational, and benefit-focused",
             "- If comparison question: contrast both perspectives fairly",
-            "- If uncertain: be honest and offer personal callback"
+            "- PARTIAL INFORMATION HANDLING:",
+            "  * If you have Brandon's position but lack opponent info: explain what you DO know about Brandon's stance, then clearly state 'I don't have enough information about [opponent]'s position on this to make a fair comparison'",
+            "  * If you have opponent info but lack Brandon's: explain what you found about the opponent, then state 'I need to research Brandon's specific position on this'",
+            "  * Always share what you DID find before explaining what's missing",
+            "  * Offer callback for complete information: 'Would you like Brandon to call you back to discuss this in detail?'",
+            "- If completely uncertain: be honest and offer personal callback"
         ])
         
         return "\n".join(prompt_parts)
