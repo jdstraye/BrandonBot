@@ -11,6 +11,7 @@ from weaviate_manager import WeaviateManager
 from phi3_client import Phi3Client
 from database import DatabaseManager
 from rag_pipeline import RAGPipeline
+from web_search_service import WebSearchService
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -32,7 +33,8 @@ database_path = os.getenv("DATABASE_PATH", "data/brandonbot.db")
 weaviate_manager = WeaviateManager(weaviate_data_dir)
 phi3_client = Phi3Client(phi3_model_path)
 db_manager = DatabaseManager(database_path)
-rag_pipeline = RAGPipeline(weaviate_manager, phi3_client, db_manager)
+web_search_service = WebSearchService()
+rag_pipeline = RAGPipeline(weaviate_manager, phi3_client, db_manager, web_search_service)
 
 class QueryRequest(BaseModel):
     query: str
