@@ -1,3 +1,4 @@
+# Python and main work
 __pycache__/
 *.py[cod]
 *$py.class
@@ -26,4 +27,7 @@ weaviate_data/
 weaviate_binary/
 app_data/
 backend/data
-phi3-mini-4k-instruct-cpu-int4-rtn-block-32-acc-level-4.onnx.data
+phi3-mini-4k-instruct-cpu-int4-rtn-block-32-acc-level-4.onnx.data# SSH keys (persistent storage)
+
+# SSH keys (persistent storage)
+.ssh-keys/
