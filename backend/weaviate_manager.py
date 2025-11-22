@@ -124,14 +124,17 @@ class WeaviateManager:
             results = []
             for obj in response.objects:
                 distance = obj.metadata.distance if hasattr(obj.metadata, 'distance') else 1.0
-                confidence = 1 - distance
+                # Weaviate cosine distance ranges from 0 (identical) to 2 (opposite)
+                # Convert to similarity: similarity = 1 - (distance / 2) to get [0, 1] range
+                # This gives us: distance 0 → similarity 1.0, distance 1 → similarity 0.5, distance 2 → similarity 0.0
+                similarity = max(0.0, min(1.0, 1.0 - (distance / 2.0)))
                 
                 results.append({
                     "content": obj.properties.get("content", ""),
                     "source": obj.properties.get("source", ""),
                     "date": obj.properties.get("date", ""),
                     "category": obj.properties.get("category", ""),
-                    "confidence": confidence,
+                    "confidence": similarity,  # This is raw similarity before trust multiplier
                     "confidence_tier": obj.properties.get("confidence_tier", 3),
                     "metadata": obj.properties.get("metadata", "")
                 })
