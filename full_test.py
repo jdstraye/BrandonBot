@@ -186,6 +186,7 @@ def run_test_suite():
         ("How do you differ from the Republican party on immigration?", "Comparison - GOP", "Internal positioning, dual sources"),
         ("How does your healthcare plan compare to the Democrats?", "Comparison - Democrats", "Policy contrast, dual sources"),
         ("How do you compare to other candidates in this race?", "Comparison - Opponents", "Web search trigger, competitive positioning"),
+        
 
         # Communication Style Tests (MarketGuru Impact)
         ("Hi Brandon, I'm Jayson.", "Communication - Personalization" "Name recognition, personal touch", "Name recognition"),
@@ -197,6 +198,7 @@ def run_test_suite():
         # Context and Depth Tests
         ("Can you explain your tax plan in more detail?", "Context - Follow-up", "Maintain context, deeper explanation"),
         ("You mentioned border security - what about legal immigration?", "Context - Nuance", "Nuanced position, clarity"),
+        ("Let's go, Brandon!", "Context - Underlying meaning","Nuanced position, current events")
 
         # Hyper-Local Concerns
         ("What will you do for Scottsdale specifically?", "Local - Scottsdale", "Hyper-local concern, community ties"),
