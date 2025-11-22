@@ -32,13 +32,20 @@ BrandonBot is a 100% open-source RAG-based AI chatbot for a political candidate.
 3. **Mac** - Compatible (Linux/macOS only for Weaviate embedded)
 4. **Windows** - Not supported (Weaviate embedded is Linux/macOS only)
 
-## Current State (November 21, 2025 - Alpha r0v1)
+## Current State (November 22, 2025 - Alpha r0v2)
 - ✅ 100% open-source architecture (no Docker, no API costs)
 - ✅ Weaviate embedded mode integrated and fully functional
 - ✅ Phi-3 Mini ONNX Runtime client with graceful degradation
 - ✅ Sentence-transformers embeddings (CPU-only, 384-dim vectors)
 - ✅ FastAPI backend with all endpoints operational
 - ✅ Weaviate manager with 3-tier RAG + 1 guidance collection (all collections created)
+- ✅ **Retrieval-First Architecture (November 22, 2025)**:
+  - **FIXED BRITTLENESS BUG**: Eliminated confidence-based branching (0.2, 0.5 thresholds) that caused false "I don't have information" responses
+  - **Single Code Path**: All questions now follow: retrieve → build context → Phi-3 generation (no more separate low/medium/high confidence paths)
+  - **Simpler Prompts**: Compressed response guidelines from ~800 chars to ~350 chars, saving ~200 tokens per query
+  - **Essential Patterns Preserved**: Callback detection, dual-source enforcement, truth-seeking, comparison detection still functional
+  - **Validated Fix**: Abortion debate question now presents Brandon's position (confidence 0.61) instead of incorrectly claiming "no information"
+  - **60% Code Reduction**: Removed _generate_low_confidence_response and all branching logic
 - ✅ **RAG Pipeline Refactored (Content vs Style Separation)** - MarketGuru no longer pollutes content search:
   - Content search: Only queries BrandonPlatform, PreviousQA, PartyPlatform for WHAT to answer
   - Style guidance: Queries MarketGurus separately based on question analysis for HOW to answer
@@ -46,8 +53,8 @@ BrandonBot is a 100% open-source RAG-based AI chatbot for a political candidate.
   - Template directives: Marketing strategy converted to HOW-to-answer rules (no raw MarketGuru text)
   - **VALIDATED**: Policy questions now cite BrandonPlatform (conf 0.52), comparisons cite PartyPlatform (conf 0.61)
 - ✅ **Prompt Formatting Fixed**: Using Phi-3 chat template (`<|system|>...<|end|><|user|>...<|end|><|assistant|>`) prevents instruction leakage
-- ✅ **Token Limit Increased**: max_length raised from 512 to 2048 tokens to accommodate longer contexts
-- ✅ **Confidence Thresholds Lowered**: BrandonPlatform 0.8→0.3, PartyPlatform 0.6→0.25 (more results pass through)
+- ✅ **Token Limit Increased**: max_length raised to 4096 tokens to accommodate longer contexts
+- ✅ **Confidence Thresholds Lowered**: BrandonPlatform 0.8→0.45, PartyPlatform 0.6→0.35 (more results pass through)
 - ✅ **Results Sorted by Confidence**: Top sources shown first regardless of collection order
 - ✅ **Bible Verse Logic Fixed**: Truth-seeking questions now properly cite Scripture (only when explicitly asking about faith/morality)
 - ✅ **Truth-Seeking Pattern Refinement**: Narrowed patterns to only match explicit faith/biblical/moral questions, not general policy questions
@@ -60,7 +67,7 @@ BrandonBot is a 100% open-source RAG-based AI chatbot for a political candidate.
 - ✅ **BrandonSowers.com RAG Trust Multiplier**: External search results from brandonsowers.com get 0.8 confidence boost (safer than 1.0 in case of compromise)
 - ✅ **Multi-dimensional analysis pipeline** - analyzes question type, awareness level, emotional tone
 - ✅ **Callback Button**: Persistent callback button in UI for users to request personal contact
-- ✅ **Callback Request Detection**: Auto-detects callback requests in chat messages (11 patterns: "call me back", "contact me", etc.)
+- ✅ **Callback Request Detection**: Auto-detects callback requests in chat messages (14 patterns: "call me back", "contact me", etc.)
 - ✅ Vector search fully operational with trust-based weighting
 - ✅ SQLite logging with opt-in consent
 - ✅ Document ingestion scripts (PDF/DOCX/TXT) with configurable chunk sizes and smart boundary detection
