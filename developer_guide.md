@@ -124,7 +124,7 @@ Display your public keys:
 ```bash
 for account in replit github; do
     echo "=== ${account} public key ==="
-    cat ~/.ssh/${account}.pub
+    echo "${account} public key = ".$(cat ~/.ssh/${account}.pub)
     echo ""
 done
 ```
