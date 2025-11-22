@@ -39,7 +39,9 @@ class QuestionAnalyzer:
         r'what.+difference between',
         r'versus|vs\.?',
         r'compared to',
-        r'how are you different'
+        r'how are you different',
+        r'^compare (?:your|my|brandon)',
+        r'\bcompare\b.+\b(?:to|with|versus|vs)\b'
     ]
     
     STATISTICS_PATTERNS = [
@@ -61,7 +63,12 @@ class QuestionAnalyzer:
         r'(?:integrity|character|honesty|truthfulness) (?:in|as a)',
         r'(?:god|jesus|bible|scripture|faith|prayer) (?:and|in|on)',
         r'what (?:are|is) your (?:core )?(?:values|beliefs|principles|convictions)',
-        r'(?:christian|faith-based|biblical) (?:perspective|view|approach)'
+        r'(?:christian|faith-based|biblical) (?:perspective|view|approach)',
+        r'^what is (?:a |an )?(?:woman|man|marriage|life|person|human|gender|sex|family)',
+        r'^define (?:a |an )?(?:woman|man|marriage|life|person|human|gender|sex|family)',
+        r'what (?:defines|makes) (?:a |an )?(?:woman|man|marriage|life|person|human)',
+        r'(?:nature|definition|meaning) of (?:a |an )?(?:woman|man|marriage|life|gender|sex|family|humanity)',
+        r'what (?:is|are) (?:the )?(?:true |real )?(?:nature|definition|meaning|essence) of'
     ]
     
     RECENT_EVENT_PATTERNS = [
@@ -454,7 +461,31 @@ class QuestionAnalyzer:
             "christian values": "Christian values",
             "secular": "secular humanism",
             "traditional values": "traditional values",
-            "progressive values": "progressive values"
+            "progressive values": "progressive values",
+            
+            # Religious organizations
+            "catholic church": "Catholic Church",
+            "catholic": "Catholic Church",
+            "vatican": "Catholic Church",
+            "protestant": "Protestant Christianity",
+            "evangelical": "Evangelical Christianity",
+            "baptist": "Baptist Church",
+            "methodist": "Methodist Church",
+            "mormon": "Mormon Church",
+            "lds": "Mormon Church",
+            "islam": "Islam",
+            "muslim": "Islam",
+            "judaism": "Judaism",
+            "jewish": "Judaism",
+            
+            # Other organizations/entities
+            "media": "mainstream media",
+            "mainstream media": "mainstream media",
+            "academia": "academia",
+            "universities": "universities",
+            "big tech": "big tech companies",
+            "corporations": "corporations",
+            "wall street": "Wall Street"
         }
         
         # Pattern 3: Try Phi-3 FIRST for richer extraction (when available)

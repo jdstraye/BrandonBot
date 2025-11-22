@@ -79,10 +79,12 @@ Provide a clear, conversational answer as BrandonBot. Keep it concise (2-4 sente
             params = og.GeneratorParams(self.model)
             params.input_ids = tokens
             params.set_search_options(
-                max_length=2048,
+                max_length=4096,
                 temperature=0.7,
                 top_p=0.9
             )
+            
+            logger.info(f"Input tokens: {len(tokens)}, max_length: 4096, available for generation: {4096 - len(tokens)}")
             
             generator = og.Generator(self.model, params)
             

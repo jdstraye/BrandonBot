@@ -204,6 +204,24 @@ body {
     transform: scale(1);
 }
 
+.btn-callback {
+    padding: 12px 20px;
+    background: #28a745;
+    color: white;
+    border: none;
+    border-radius: 24px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    transition: transform 0.2s, background 0.2s;
+    white-space: nowrap;
+}
+
+.btn-callback:hover {
+    background: #218838;
+    transform: scale(1.05);
+}
+
 .btn-primary {
     background: #667eea;
     color: white;
