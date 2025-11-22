@@ -6,6 +6,10 @@ Analyzes user questions to determine response strategy
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 import re
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -14,8 +18,10 @@ class QuestionAnalysis:
     question_type: str  # comparison, recent_event, statistics, truth_seeking, policy, low_confidence
     needs_external_search: bool
     needs_bible_verse: bool
+    needs_dual_sources: bool  # For comparisons: require both Brandon AND opponent sources
     search_queries: List[str]
     bible_topics: List[str]
+    comparison_targets: List[str]  # e.g., ["Democrat", "Kamala Harris", "Communist ideology", "Judeo-Christian values"]
     awareness_level: str  # unaware, problem_aware, solution_aware, product_aware, most_aware
     emotional_tone: str  # concerned, curious, skeptical, supportive, neutral
     marketing_strategy: str  # Direct description of how to communicate
@@ -117,12 +123,20 @@ class QuestionAnalyzer:
             question_type, awareness_level, emotional_tone
         )
         
+        # Step 10: Extract comparison targets if it's a comparison question
+        comparison_targets = self._extract_comparison_targets(question, question_type)
+        
+        # Step 11: Determine if dual sources are needed
+        needs_dual_sources = question_type == "comparison" and len(comparison_targets) > 0
+        
         return QuestionAnalysis(
             question_type=question_type,
             needs_external_search=needs_external_search,
             needs_bible_verse=needs_bible_verse,
+            needs_dual_sources=needs_dual_sources,
             search_queries=search_queries,
             bible_topics=bible_topics,
+            comparison_targets=comparison_targets,
             awareness_level=awareness_level,
             emotional_tone=emotional_tone,
             marketing_strategy=marketing_strategy,
@@ -367,3 +381,146 @@ class QuestionAnalyzer:
         
         # Remove duplicates, return unique keywords
         return list(set(keywords))
+    
+    def _extract_comparison_targets(self, question: str, question_type: str) -> List[str]:
+        """
+        Extract comparison targets from question using hybrid pattern/LLM approach
+        
+        Targets can include:
+        - Candidates: "Kamala Harris", "Joe Biden", "Donald Trump"
+        - Parties: "Democrat", "Democratic Party", "Republican"
+        - Ideologies: "Communist", "Socialist", "Progressive", "Conservative"
+        - Value systems: "Judeo-Christian", "secular humanism", "traditional values"
+        
+        Args:
+            question: The user's question
+            question_type: Detected question type
+            
+        Returns:
+            List of comparison target entities/ideologies
+        """
+        if question_type != "comparison":
+            return []
+        
+        targets = []
+        question_lower = question.lower()
+        
+        # Pattern 1: Direct "compared to X" or "vs X" patterns
+        comparison_patterns = [
+            r'(?:differ from|compare(?:d)? (?:to|with)|vs\.?|versus) ([^?.]+?)(?:\?|$|on|in)',
+            r'between (?:you and |your and )?([^?.]+?)(?:\?|$|on)',
+            r'(?:unlike|different from) ([^?.]+?)(?:\?|$|on)'
+        ]
+        
+        for pattern in comparison_patterns:
+            match = re.search(pattern, question, re.IGNORECASE)
+            if match:
+                raw_target = match.group(1).strip()
+                targets.append(self._normalize_comparison_target(raw_target))
+        
+        # Pattern 2: Known entities (candidates, parties, ideologies)
+        known_entities = {
+            # Candidates
+            "kamala harris": "Kamala Harris",
+            "kamala": "Kamala Harris",
+            "joe biden": "Joe Biden",
+            "biden": "Joe Biden",
+            "donald trump": "Donald Trump",
+            "trump": "Donald Trump",
+            "desantis": "Ron DeSantis",
+            "obama": "Barack Obama",
+            
+            # Parties
+            "democrat": "Democrat",
+            "democratic party": "Democratic Party",
+            "democrats": "Democrats",
+            "republican": "Republican Party",
+            "republicans": "Republican Party",
+            "gop": "Republican Party",
+            "rnc": "Republican Party",
+            
+            # Ideologies
+            "communist": "Communist ideology",
+            "communism": "Communist ideology",
+            "socialist": "Socialist ideology",
+            "socialism": "Socialist ideology",
+            "progressive": "Progressive ideology",
+            "liberal": "Liberal ideology",
+            "conservative": "Conservative ideology",
+            "libertarian": "Libertarian ideology",
+            
+            # Value systems
+            "judeo-christian": "Judeo-Christian values",
+            "christian values": "Christian values",
+            "secular": "secular humanism",
+            "traditional values": "traditional values",
+            "progressive values": "progressive values"
+        }
+        
+        # Pattern 3: Try Phi-3 FIRST for richer extraction (when available)
+        phi3_targets = []
+        if self.phi3_client:
+            try:
+                # Simple extraction prompt for Phi-3
+                extraction_prompt = f"""Extract comparison targets from this question. Return ONLY the target names, separated by commas.
+
+Question: {question}
+
+Examples:
+Q: "How do you differ from Kamala Harris on immigration?"
+A: Kamala Harris
+
+Q: "What's the difference between your values and secular humanism?"
+A: secular humanism
+
+Q: "How does your position compare to the Democratic Party?"
+A: Democratic Party
+
+Now extract from the question above (names only, comma-separated):"""
+                
+                response = self.phi3_client.generate(
+                    extraction_prompt,
+                    max_length=50,
+                    temperature=0.3
+                )
+                
+                # Parse response (comma-separated list)
+                if response and response.strip():
+                    phi3_targets = [t.strip() for t in response.split(',') if t.strip()]
+                    targets.extend(phi3_targets)
+            except Exception as e:
+                # Fallback to pattern matching if Phi-3 fails
+                logger.warning(f"Phi-3 extraction failed, falling back to patterns: {e}")
+        
+        # Supplement with pattern-based known entities
+        for entity_key, entity_name in known_entities.items():
+            if entity_key in question_lower and entity_name not in targets:
+                targets.append(entity_name)
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_targets = []
+        for target in targets:
+            if target.lower() not in seen:
+                seen.add(target.lower())
+                unique_targets.append(target)
+        
+        return unique_targets
+    
+    def _normalize_comparison_target(self, raw_target: str) -> str:
+        """Normalize a raw comparison target into a clean name"""
+        # Remove common filler words
+        fillers = ["the", "a", "an", "other", "typical", "most", "other candidates"]
+        words = raw_target.split()
+        clean_words = [w for w in words if w.lower() not in fillers]
+        
+        # Capitalize properly
+        normalized = " ".join(clean_words).title()
+        
+        # Handle special cases
+        if "democrat" in normalized.lower():
+            return "Democratic Party"
+        if "republican" in normalized.lower():
+            return "Republican Party"
+        
+        return normalized
