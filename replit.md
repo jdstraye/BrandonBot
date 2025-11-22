@@ -31,3 +31,40 @@ The system employs a FastAPI backend, an embedded Weaviate vector database, and 
 -   **SQLite**: Database for logging user interactions.
 -   **DuckDuckGo Web Search**: Integrated for external search capabilities.
 -   **OpenAI API (Planned)**: Future integration for enhanced performance and quality.
+
+## Recent Changes & Known Issues (Nov 22, 2025)
+
+### Production Issue: Phi-3 Performance Degradation
+**Status**: Active issue in Replit shared development environment
+
+**Symptoms**:
+- Phi-3 generates only 1 token per 60-90 seconds (vs expected 10-30 tokens/sec)
+- All queries timeout and show fallback message despite high retrieval confidence (70-80%)
+- Users see: "I'm having trouble generating a complete response. Would you like Brandon to call you back?"
+
+**Root Cause**: 
+- CPU starvation due to resource contention in Replit's shared infrastructure
+- Load average: 20.3 on 6 cores (extreme CPU contention)
+- Python process competing with other Repls for CPU time
+
+**Temporary Workarounds Applied**:
+1. **ONNX Thread Limits** (Environment Variables):
+   - `OMP_NUM_THREADS=4` - Limits OpenMP threads
+   - `ORT_INTRA_OP_NUM_THREADS=4` - ONNX Runtime internal parallelism
+   - `ORT_INTER_OP_NUM_THREADS=1` - Prevents operator-level parallelism
+   - **Effect**: Reduced CPU usage from 220% → 109%, but speed issue persists
+   - **Note**: These should be removed when self-hosting on dedicated hardware
+
+2. **60-Second Timeout Safeguard** (`backend/phi3_client.py`):
+   - Prevents infinite generation loops using `time.monotonic()` wall-clock timer
+   - Aborts generation after 60 seconds and returns graceful fallback message
+   - Returns structured error flags: `truncated`, `error` for debugging
+   - Logs timing information for performance monitoring
+
+**Solutions**:
+- **Short-term**: Migrate to commercial LLM API (OpenAI/Gemini) - see `COMMERCIALAI_MIGRATION.md`
+- **Long-term**: Self-host on dedicated hardware - see `SELF_HOSTING.md`
+
+### Documentation Files
+- **COMMERCIALAI_MIGRATION.md**: Complete guide for migrating from Phi-3 to OpenAI or Google Gemini API
+- **SELF_HOSTING.md**: Instructions for running BrandonBot on Debian 13 or other dedicated hardware
