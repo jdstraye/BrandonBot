@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Dict, List, Optional
 from weaviate_manager import WeaviateManager
 from phi3_client import Phi3Client
@@ -10,6 +11,25 @@ from web_search_service import WebSearchService
 logger = logging.getLogger(__name__)
 
 class RAGPipeline:
+    
+    CALLBACK_REQUEST_PATTERNS = [
+        r'\bcall me\b',
+        r'\bcontact me\b',
+        r'\breach out\b',
+        r'\bget in touch\b',
+        r'\btouch base\b',
+        r'\bcallback\b',
+        r'\bcall back\b',
+        r'\btalk to brandon\b',
+        r'\bspeak (?:with|to) brandon\b',
+        r'\bhave brandon call\b',
+        r'\bschedule a call\b',
+        r'\bphone me\b',
+        r'\bgive me a call\b',
+        r'\bi (?:want|need) (?:a |to )(?:talk|speak|callback)',
+        r'\bcan (?:you|brandon) call me\b'
+    ]
+    
     def __init__(self, weaviate_manager: WeaviateManager, 
                  phi3_client: Phi3Client, db_manager: DatabaseManager,
                  web_search_service: Optional[WebSearchService] = None):
@@ -23,14 +43,26 @@ class RAGPipeline:
             web_search_service=web_search_service
         )
     
+    def _detect_callback_request(self, query: str) -> bool:
+        """Detect if the user is requesting a callback in their message"""
+        query_lower = query.lower()
+        for pattern in self.CALLBACK_REQUEST_PATTERNS:
+            if re.search(pattern, query_lower):
+                logger.info(f"Callback request detected in query (pattern: {pattern})")
+                return True
+        return False
+    
     async def process_query(self, query: str, user_id: Optional[str] = None, 
                            consent_given: bool = False) -> Dict:
         try:
+            callback_requested = self._detect_callback_request(query)
+            
             try:
                 question_analysis = self.question_analyzer.analyze_question(query)
                 logger.info(f"Question type: {question_analysis.question_type}, " +
                            f"Needs dual sources: {question_analysis.needs_dual_sources}, " +
-                           f"Comparison targets: {question_analysis.comparison_targets}")
+                           f"Comparison targets: {question_analysis.comparison_targets}, " +
+                           f"Callback requested: {callback_requested}")
             except Exception as e:
                 logger.warning(f"Question analysis failed, using defaults: {e}")
                 question_analysis = None
@@ -54,6 +86,36 @@ class RAGPipeline:
                 response_text = self._generate_low_confidence_response(query, question_analysis)
                 offer_callback = True
                 best_confidence = retrieval_context.best_confidence
+            elif callback_requested:
+                # User explicitly requested callback - acknowledge it
+                logger.info("User explicitly requested callback - building acknowledgment response")
+                facts_context = self._build_facts_context(retrieval_context.content_results[:5])
+                external_context = self._build_external_context(
+                    retrieval_context.bible_results,
+                    retrieval_context.web_results
+                )
+                communication_strategy = self._build_communication_strategy(
+                    question_analysis,
+                    retrieval_context.marketguru_results
+                )
+                
+                system_prompt = self._build_multi_section_prompt(
+                    question_analysis,
+                    facts_context,
+                    external_context,
+                    communication_strategy
+                ) + "\n\nIMPORTANT: The user has requested a callback. Acknowledge this in your response and let them know they can use the callback form to provide their contact information."
+                
+                llm_response = await self.phi3.generate_response(
+                    query=query,
+                    context="",
+                    system_prompt=system_prompt,
+                    confidence=retrieval_context.best_confidence
+                )
+                
+                response_text = llm_response["response"]
+                best_confidence = retrieval_context.best_confidence
+                offer_callback = True
             else:
                 facts_context = self._build_facts_context(retrieval_context.content_results[:5])
                 external_context = self._build_external_context(
