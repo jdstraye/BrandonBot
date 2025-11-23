@@ -404,6 +404,10 @@ documents/
 │   ├── About - AZGOP_1763508995053.pdf
 │   └── TheIndependentParty-TIPUSAP20180526_1763508995053.pdf
 └── previous_qa
+```
+
+The rest of the setup:
+```
 ~/workspace$ tree backend/weaviate_data/
 backend/weaviate_data/
 ├── brandonplatform
@@ -864,7 +868,6 @@ python backend/ingest_documents.py documents/ --chunk-size 128 --overlap 51
 
 ##### Step 5b: Launch
 
-
 The "right" way is to launch the workflow by clicking the green "Run" button at the top of the Repl. Alternatively, in a Shell tab:
 ```bash
 cd backend
@@ -949,6 +952,7 @@ When ready for production:
 - **RAM**: At least 4GB available (Phi-3 model uses ~2GB)
 - **Disk Space**: At least 5GB free (for model + dependencies)
 
+The remainder of this section is left in tact, but it is functionally replace by SELF_HOSTING.md
 ### Step 1: Clone Repository
 ```bash
 cd ~/Projects  # Or wherever you keep your code
