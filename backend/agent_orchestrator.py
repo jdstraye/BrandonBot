@@ -144,6 +144,15 @@ class SessionManager:
 class ToolExecutor:
     """Executes validated tool calls"""
     
+    TRUST_LEVELS = {
+        "BrandonPlatform": 1.0,
+        "PreviousQA": 1.0,
+        "PartyPlatform": 0.6,
+        "MarketGurus": 0.8,
+        "brandonsowers.com": 0.9,
+        "web": 0.3
+    }
+    
     def __init__(self, weaviate_manager, web_search_service=None):
         self.weaviate = weaviate_manager
         self.web_search = web_search_service
@@ -160,8 +169,12 @@ class ToolExecutor:
             )
         
         try:
-            if tool_call.name == ToolName.SEARCH_POLICY_COLLECTIONS.value:
-                return await self._execute_search_policy_collections(tool_call.arguments)
+            if tool_call.name == ToolName.SEARCH_BRANDON_POSITIONS.value:
+                return await self._execute_search_brandon_positions(tool_call.arguments)
+            elif tool_call.name == ToolName.AUGMENT_BRANDON_WITH_PARTY.value:
+                return await self._execute_augment_with_party(tool_call.arguments)
+            elif tool_call.name == ToolName.GET_PARTY_COMPARISON.value:
+                return await self._execute_party_comparison(tool_call.arguments)
             elif tool_call.name == ToolName.PERFORM_WEB_SEARCH.value:
                 return await self._execute_web_search(tool_call.arguments)
             elif tool_call.name == ToolName.RETRIEVE_ANSWER_STYLE.value:
@@ -170,6 +183,8 @@ class ToolExecutor:
                 return await self._execute_register_volunteer(tool_call.arguments)
             elif tool_call.name == ToolName.MAKE_DONATION.value:
                 return await self._execute_make_donation(tool_call.arguments)
+            elif tool_call.name == ToolName.CHECK_FEC_RULES.value:
+                return await self._execute_check_fec_rules(tool_call.arguments)
             else:
                 return ToolResult(
                     tool_name=tool_call.name,
@@ -186,36 +201,27 @@ class ToolExecutor:
                 error_message=str(e)
             )
     
-    async def _execute_search_policy_collections(self, args: Dict) -> ToolResult:
-        """Search Brandon's policy knowledge base"""
+    async def _execute_search_brandon_positions(self, args: Dict) -> ToolResult:
+        """Search Brandon's AUTHORITATIVE positions (BrandonPlatform + PreviousQA only)"""
         query = args.get("query", "")
-        collections = args.get("collections", ["BrandonPlatform", "PreviousQA", "PartyPlatform"])
-        
-        if isinstance(collections, str):
-            try:
-                collections = json.loads(collections.replace("'", '"'))
-            except:
-                collections = ["BrandonPlatform", "PreviousQA", "PartyPlatform"]
-        
         limit_val = args.get("limit", 5)
         if isinstance(limit_val, float):
             limit_val = int(limit_val)
         limit = min(limit_val, 10)
         
+        collections = ["BrandonPlatform", "PreviousQA"]
         all_results = []
         sources = []
         
-        logger.info(f"Searching collections: {collections} for query: '{query}' limit: {limit}")
+        logger.info(f"Searching AUTHORITATIVE collections: {collections} for query: '{query}' limit: {limit}")
         
         for collection in collections:
-            if collection == "MarketGurus":
-                continue
-            
             try:
                 results = await self.weaviate.search(collection, query, limit=limit)
                 logger.info(f"Collection {collection} returned {len(results)} results")
                 for r in results:
                     r["collection"] = collection
+                    r["trust_level"] = self.TRUST_LEVELS.get(collection, 1.0)
                     all_results.append(r)
                     if r.get("source"):
                         sources.append(r["source"])
@@ -228,11 +234,178 @@ class ToolExecutor:
         avg_confidence = sum(r.get("confidence", 0) for r in top_results) / len(top_results) if top_results else 0
         
         return ToolResult(
-            tool_name=ToolName.SEARCH_POLICY_COLLECTIONS.value,
+            tool_name=ToolName.SEARCH_BRANDON_POSITIONS.value,
             success=True,
             data=top_results,
             confidence=avg_confidence,
+            trust_level=1.0,
             sources=list(set(sources))
+        )
+    
+    async def _execute_augment_with_party(self, args: Dict) -> ToolResult:
+        """Augment Brandon's position with party platform context (clearly labeled)"""
+        query = args.get("query", "")
+        brandon_topic = args.get("brandon_topic", "")
+        limit_val = args.get("limit", 3)
+        if isinstance(limit_val, float):
+            limit_val = int(limit_val)
+        limit = min(limit_val, 5)
+        
+        all_results = []
+        sources = []
+        
+        logger.info(f"Augmenting with PartyPlatform for query: '{query}'")
+        
+        try:
+            results = await self.weaviate.search("PartyPlatform", query, limit=limit)
+            logger.info(f"PartyPlatform returned {len(results)} results")
+            for r in results:
+                r["collection"] = "PartyPlatform"
+                r["trust_level"] = self.TRUST_LEVELS.get("PartyPlatform", 0.6)
+                r["is_party_position"] = True
+                r["not_brandon_position"] = True
+                all_results.append(r)
+                if r.get("source"):
+                    sources.append(r["source"])
+        except Exception as e:
+            logger.warning(f"PartyPlatform search failed: {e}")
+        
+        avg_confidence = sum(r.get("confidence", 0) for r in all_results) / len(all_results) if all_results else 0
+        
+        return ToolResult(
+            tool_name=ToolName.AUGMENT_BRANDON_WITH_PARTY.value,
+            success=True,
+            data={
+                "brandon_context": brandon_topic,
+                "party_augmentation": all_results,
+                "note": "These are PARTY PLATFORM positions, NOT Brandon's personal views. Present as 'Party platforms suggest...' or 'Republican/Independent positions include...'"
+            },
+            confidence=avg_confidence * 0.6,
+            trust_level=0.6,
+            sources=list(set(sources))
+        )
+    
+    async def _execute_party_comparison(self, args: Dict) -> ToolResult:
+        """Get Republican and Independent positions for explicit comparison questions"""
+        topic = args.get("topic", "")
+        include_republican = args.get("include_republican", True)
+        include_independent = args.get("include_independent", True)
+        
+        republican_results = []
+        independent_results = []
+        sources = []
+        
+        query = f"{topic} policy position platform"
+        
+        logger.info(f"Getting party comparison for topic: '{topic}'")
+        
+        try:
+            results = await self.weaviate.search("PartyPlatform", query, limit=6)
+            for r in results:
+                source = r.get("source", "").lower()
+                if "republican" in source or "rnc" in source or "gop" in source:
+                    if include_republican:
+                        r["party"] = "Republican"
+                        republican_results.append(r)
+                elif "independent" in source:
+                    if include_independent:
+                        r["party"] = "Independent"
+                        independent_results.append(r)
+                else:
+                    if include_republican:
+                        r["party"] = "Republican"
+                        republican_results.append(r)
+                
+                if r.get("source"):
+                    sources.append(r["source"])
+        except Exception as e:
+            logger.warning(f"Party comparison search failed: {e}")
+        
+        contradictions = []
+        if republican_results and independent_results:
+            contradictions.append("Note: Republican and Independent platforms may have different positions on this topic. Present both clearly labeled.")
+        
+        return ToolResult(
+            tool_name=ToolName.GET_PARTY_COMPARISON.value,
+            success=True,
+            data={
+                "topic": topic,
+                "republican_positions": republican_results[:3],
+                "independent_positions": independent_results[:3],
+                "contradictions": contradictions,
+                "note": "These are PARTY positions for comparison purposes. NOT Brandon's personal views."
+            },
+            trust_level=0.6,
+            sources=list(set(sources))
+        )
+    
+    async def _execute_check_fec_rules(self, args: Dict) -> ToolResult:
+        """Check FEC campaign finance rules"""
+        query_type = args.get("query_type", "general_rules")
+        amount = args.get("amount")
+        donor_type = args.get("donor_type", "individual")
+        
+        fec_rules = {
+            "individual_limit": {
+                "limit_per_candidate_per_election": 3300,
+                "limit_per_pac_per_year": 5000,
+                "limit_per_party_per_year": 41300,
+                "aggregate_limit": "No federal aggregate limit (McCutcheon v. FEC)",
+                "note": "Limits are per election (primary and general are separate)"
+            },
+            "pac_limit": {
+                "multicandidate_pac_to_candidate": 5000,
+                "nonconnected_pac_to_candidate": 2900,
+                "note": "PAC must receive contributions from more than 50 persons to qualify as multicandidate"
+            },
+            "corporate_rules": {
+                "direct_contributions": "PROHIBITED - Corporations cannot contribute directly to federal candidates",
+                "pac_contributions": "Corporations may establish a PAC using treasury funds for admin costs",
+                "super_pac": "Corporations may make unlimited independent expenditures through super PACs"
+            },
+            "disclosure_requirements": {
+                "threshold": 200,
+                "required_info": ["Full name", "Mailing address", "Occupation", "Employer"],
+                "note": "Required for aggregate contributions over $200 in a calendar year"
+            },
+            "foreign_national_rules": {
+                "status": "ABSOLUTELY PROHIBITED",
+                "applies_to": ["Federal elections", "State elections", "Local elections"],
+                "note": "Foreign nationals may not make any contribution or donation, directly or indirectly"
+            },
+            "general_rules": {
+                "cash_limit": 100,
+                "anonymous_limit": 50,
+                "earmarking": "Contributions earmarked for a candidate count against limits",
+                "joint_fundraising": "Joint fundraising committees may collect larger amounts for distribution"
+            }
+        }
+        
+        result = fec_rules.get(query_type, fec_rules["general_rules"])
+        
+        validation_result = None
+        if amount is not None:
+            if donor_type == "individual":
+                limit = 3300
+                if amount > limit:
+                    validation_result = f"EXCEEDS LIMIT: ${amount} exceeds individual limit of ${limit} per election"
+                elif amount > 200:
+                    validation_result = f"DISCLOSURE REQUIRED: Donations over $200 require donor occupation and employer"
+                else:
+                    validation_result = f"VALID: ${amount} is within legal limits"
+            elif donor_type == "corporation":
+                validation_result = "PROHIBITED: Corporations cannot make direct contributions to federal candidates"
+        
+        return ToolResult(
+            tool_name=ToolName.CHECK_FEC_RULES.value,
+            success=True,
+            data={
+                "query_type": query_type,
+                "rules": result,
+                "amount_validation": validation_result,
+                "disclaimer": "This is informational only. Consult FEC.gov or campaign counsel for official guidance."
+            },
+            trust_level=1.0
         )
     
     async def _execute_web_search(self, args: Dict) -> ToolResult:
@@ -481,35 +654,53 @@ class AgentOrchestrator:
     
     def get_system_prompt(self) -> str:
         """Get the system prompt for the LLM"""
-        return """You are BrandonBot, an AI assistant for Brandon's political campaign.
+        return """You are BrandonBot, an AI assistant for Brandon Sowers' political campaign.
 
 YOUR ROLE:
 - Answer questions about Brandon's policies, positions, and campaign
 - Help users volunteer or donate
-- Compare Brandon's positions to other candidates when asked
+- Compare Brandon's positions to party platforms when asked
 - Maintain a helpful, informative, and persuasive tone
 
-AVAILABLE TOOLS:
-1. search_policy_collections: Search Brandon's official positions and statements
-2. perform_web_search: Search the internet for current information or competitor positions  
-3. retrieve_answer_style: Get copywriting guidance on how to frame your response
-4. register_volunteer: Sign up users who want to volunteer
-5. make_donation: Process donation requests
+AVAILABLE TOOLS (Trust-Based Separation):
+
+AUTHORITATIVE SOURCES (Trust 1.0):
+1. search_brandon_positions: Search Brandon's OWN statements and verified Q&A (BrandonPlatform + PreviousQA)
+   - Use FIRST for any question about Brandon's positions
+   - Results are authoritative and should be quoted directly
+
+SUPPLEMENTARY SOURCES (Trust 0.6):
+2. augment_brandon_with_party: Get party platform context when Brandon's position is thin
+   - Use ONLY if search_brandon_positions returns insufficient results
+   - Results must be labeled as "party position" NOT Brandon's view
+3. get_party_comparison: Compare Republican and Independent platforms
+   - Use ONLY for explicit comparison questions
+   - Clearly label each party's position
+
+OTHER TOOLS:
+4. perform_web_search: Search the internet for current events, competitor info
+5. retrieve_answer_style: Get copywriting guidance from MarketGurus
+6. register_volunteer: Sign up volunteers
+7. make_donation: Process donation requests
+8. check_fec_rules: Verify FEC compliance for donations
 
 WORKFLOW:
-1. Analyze the user's question to understand their awareness level and intent
-2. Use search_policy_collections FIRST for questions about Brandon's positions
-3. Use perform_web_search for competitor info, current events, or external facts
-4. Use retrieve_answer_style to get guidance on HOW to frame your response
-5. Synthesize all information into a helpful, persuasive response
-6. Include relevant calls-to-action (volunteer, donate, learn more)
+1. For policy questions: Use search_brandon_positions FIRST
+2. If results are thin: Use augment_brandon_with_party (clearly label as party position)
+3. For comparisons: Use get_party_comparison
+4. After gathering content: Use retrieve_answer_style for communication guidance
+5. SYNTHESIZE the information into a response - don't just search repeatedly
 
-IMPORTANT:
+CRITICAL RULES:
+- NEVER conflate party positions with Brandon's personal views
+- After receiving tool results, SYNTHESIZE into a final response
+- If confidence is low, offer a callback from someone on the team
 - Always cite sources when using information from tools
-- If confidence is low (<0.5), acknowledge uncertainty and offer to have Brandon call them back
-- For comparison questions, search both internal knowledge AND web for opponent positions
-- Match your response style to the user's awareness level (per Schwartz framework)
-- End with a clear next step or call-to-action when appropriate
+- Match response style to user's awareness level (Schwartz framework)
+
+RESPONSE SYNTHESIS:
+After receiving tool results, you MUST provide a synthesized answer. Do NOT call the same tool multiple times.
+If you have search results, use them to construct your response immediately.
 
 Remember: You're here to inform voters and build support for Brandon's campaign."""
 
@@ -581,13 +772,19 @@ Remember: You're here to inform voters and build support for Brandon's campaign.
                         metadata["sources"].extend(result.sources)
                 
                 tool_context = "\n\n".join(tr.to_context_string() for tr in tool_results)
+                logger.info(f"Tool results context (first 500 chars): {tool_context[:500]}")
+                
                 messages.append({
                     "role": "assistant",
                     "content": f"Tool calls executed: {[tc['name'] for tc in metadata['tool_calls'][-len(tool_calls):]]}"
                 })
                 messages.append({
                     "role": "tool",
-                    "content": tool_context
+                    "content": f"""Here are the tool results. Use this information to answer the user's question:
+
+{tool_context}
+
+Now synthesize the above results into a helpful response. Do NOT call the same tool again."""
                 })
             
             if final_response is None:
