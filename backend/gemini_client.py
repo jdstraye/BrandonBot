@@ -7,11 +7,16 @@ from google.generativeai.types import FunctionDeclaration, Tool
 
 logger = logging.getLogger(__name__)
 
+GEMINI_MODELS = ["gemini-2.0-flash", "gemini-2.5-flash"]
+
 class GeminiClient:
+    _request_counter = 0
+    
     def __init__(self):
         self.model = None
         self.model_with_tools = None
         self.api_key = None
+        self.current_model_name = None
         
         self.system_prompt = """You are BrandonBot, an AI assistant trained on Brandon's political positions and statements.
 
@@ -25,6 +30,12 @@ IMPORTANT GUIDELINES:
 
 DISCLAIMER: While I've been trained on Brandon's positions, I may make mistakes. For critical questions or when I'm unsure, I'll offer to have someone from the team contact you."""
     
+    def _get_next_model(self) -> str:
+        """Rotate between Gemini models to maximize free tier usage"""
+        model_name = GEMINI_MODELS[GeminiClient._request_counter % len(GEMINI_MODELS)]
+        GeminiClient._request_counter += 1
+        return model_name
+    
     async def ensure_model_ready(self):
         try:
             self.api_key = os.getenv("GOOGLE_API_KEY")
@@ -34,8 +45,9 @@ DISCLAIMER: While I've been trained on Brandon's positions, I may make mistakes.
                 return False
             
             genai.configure(api_key=self.api_key)
-            self.model = genai.GenerativeModel('gemini-2.0-flash')
-            logger.info("Gemini API configured successfully (gemini-2.0-flash)")
+            self.current_model_name = self._get_next_model()
+            self.model = genai.GenerativeModel(self.current_model_name)
+            logger.info(f"Gemini API configured successfully ({self.current_model_name})")
             return True
         except Exception as e:
             logger.error(f"Failed to configure Gemini API: {str(e)}")
@@ -93,7 +105,7 @@ Provide a clear, conversational answer as BrandonBot. Keep it concise (2-4 sente
                 logger.warning("Gemini returned empty response")
                 return {
                     "response": "I'm having trouble generating a response. Would you like someone from the team to call you back?",
-                    "model": "gemini-2.0-flash",
+                    "model": self.current_model_name or "gemini-unknown",
                     "error": "empty_response"
                 }
             
@@ -102,7 +114,7 @@ Provide a clear, conversational answer as BrandonBot. Keep it concise (2-4 sente
             
             return {
                 "response": response_text,
-                "model": "gemini-2.0-flash",
+                "model": self.current_model_name or "gemini-unknown",
                 "tokens_used": response.usage_metadata.total_token_count if hasattr(response, 'usage_metadata') else None
             }
             
@@ -110,7 +122,7 @@ Provide a clear, conversational answer as BrandonBot. Keep it concise (2-4 sente
             logger.error(f"Error generating Gemini response: {str(e)}")
             return {
                 "response": "I encountered an error while generating a response. Would you like someone from the team to call you back?",
-                "model": "gemini-2.0-flash",
+                "model": self.current_model_name or "gemini-unknown",
                 "error": str(e)
             }
     
@@ -131,13 +143,17 @@ Provide a clear, conversational answer as BrandonBot. Keep it concise (2-4 sente
             Dict with either 'text' (final response) or 'tool_calls' (tool recommendations)
         """
         try:
-            if not self.model:
-                ready = await self.ensure_model_ready()
-                if not ready:
+            if not self.api_key:
+                self.api_key = os.getenv("GOOGLE_API_KEY")
+                if not self.api_key:
                     return {
                         "text": "I'm having trouble connecting. Would you like someone from the team to call you back?",
                         "error": "API not available"
                     }
+                genai.configure(api_key=self.api_key)
+            
+            self.current_model_name = self._get_next_model()
+            logger.info(f"Using model: {self.current_model_name}")
             
             function_declarations = []
             for tool in tools:
@@ -151,7 +167,7 @@ Provide a clear, conversational answer as BrandonBot. Keep it concise (2-4 sente
             gemini_tools = [Tool(function_declarations=function_declarations)]
             
             model_with_tools = genai.GenerativeModel(
-                'gemini-2.0-flash',
+                self.current_model_name,
                 tools=gemini_tools,
                 system_instruction=system_prompt or self.system_prompt
             )
@@ -182,6 +198,7 @@ Provide a clear, conversational answer as BrandonBot. Keep it concise (2-4 sente
             )
             
             result = {
+                "model": self.current_model_name,
                 "usage": {
                     "total_tokens": response.usage_metadata.total_token_count if hasattr(response, 'usage_metadata') else 0
                 }
@@ -237,6 +254,7 @@ Provide a clear, conversational answer as BrandonBot. Keep it concise (2-4 sente
             logger.error(f"Error in generate_with_tools: {str(e)}")
             return {
                 "text": "I encountered an error. Would you like someone from the team to call you back?",
+                "model": self.current_model_name or "gemini-unknown",
                 "error": str(e)
             }
     

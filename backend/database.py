@@ -32,9 +32,15 @@ class DatabaseManager:
                     confidence REAL,
                     sources TEXT,
                     timestamp TEXT,
-                    consent_given BOOLEAN
+                    consent_given BOOLEAN,
+                    model_used TEXT
                 )
             ''')
+            
+            try:
+                await db.execute('ALTER TABLE interactions ADD COLUMN model_used TEXT')
+            except:
+                pass
             
             await db.execute('''
                 CREATE TABLE IF NOT EXISTS callback_requests (
@@ -84,13 +90,14 @@ class DatabaseManager:
                 return row[0] if row else False
     
     async def log_interaction(self, user_id: str, query: str, response: str, 
-                             confidence: float, sources: list, consent_given: bool):
+                             confidence: float, sources: list, consent_given: bool,
+                             model_used: Optional[str] = None):
         async with aiosqlite.connect(self.db_path) as db:
             now = datetime.utcnow().isoformat()
             await db.execute('''
-                INSERT INTO interactions (user_id, query, response, confidence, sources, timestamp, consent_given)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (user_id, query, response, confidence, json.dumps(sources), now, consent_given))
+                INSERT INTO interactions (user_id, query, response, confidence, sources, timestamp, consent_given, model_used)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (user_id, query, response, confidence, json.dumps(sources), now, consent_given, model_used))
             await db.commit()
             
             await self._track_new_question(query)
