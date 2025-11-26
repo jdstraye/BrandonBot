@@ -22,19 +22,15 @@ weaviate_available = False
 weaviate_manager = None
 rag_pipeline = None
 
-if deployment_mode != "replit":
-    try:
-        from weaviate_manager import WeaviateManager
-        from rag_pipeline import RAGPipeline
-        weaviate_manager = WeaviateManager(weaviate_data_dir)
-        weaviate_available = True
-        logger.info("Weaviate module loaded successfully (Debian 13 mode)")
-    except Exception as e:
-        logger.warning(f"Weaviate not available (protobuf conflict expected on Replit): {e}")
-        logger.info("Running in Gemini-only mode without vector database")
-else:
-    logger.info("Replit mode: Skipping Weaviate (protobuf conflict with Gemini)")
-    logger.info("For full RAG functionality, deploy to Debian 13")
+try:
+    from weaviate_manager import WeaviateManager
+    from rag_pipeline import RAGPipeline
+    weaviate_manager = WeaviateManager(weaviate_data_dir)
+    weaviate_available = True
+    logger.info("Weaviate module loaded successfully")
+except Exception as e:
+    logger.warning(f"Weaviate not available: {e}")
+    logger.info("Running in Gemini-only mode without vector database")
 
 llm_client = None
 if llm_provider == "gemini":

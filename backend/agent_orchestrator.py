@@ -190,10 +190,22 @@ class ToolExecutor:
         """Search Brandon's policy knowledge base"""
         query = args.get("query", "")
         collections = args.get("collections", ["BrandonPlatform", "PreviousQA", "PartyPlatform"])
-        limit = min(args.get("limit", 5), 10)
+        
+        if isinstance(collections, str):
+            try:
+                collections = json.loads(collections.replace("'", '"'))
+            except:
+                collections = ["BrandonPlatform", "PreviousQA", "PartyPlatform"]
+        
+        limit_val = args.get("limit", 5)
+        if isinstance(limit_val, float):
+            limit_val = int(limit_val)
+        limit = min(limit_val, 10)
         
         all_results = []
         sources = []
+        
+        logger.info(f"Searching collections: {collections} for query: '{query}' limit: {limit}")
         
         for collection in collections:
             if collection == "MarketGurus":
@@ -201,6 +213,7 @@ class ToolExecutor:
             
             try:
                 results = await self.weaviate.search(collection, query, limit=limit)
+                logger.info(f"Collection {collection} returned {len(results)} results")
                 for r in results:
                     r["collection"] = collection
                     all_results.append(r)
