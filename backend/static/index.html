@@ -26,7 +26,7 @@
                 <div class="message-content">
                     <p><strong>👋 Hi! I'm BrandonBot.</strong></p>
                     <p>I've been trained on Brandon's public positions and statements. I'll do my best to answer your questions accurately, but I may make mistakes.</p>
-                    <p>If I'm unsure about something or you need a detailed answer, I'll offer to have Brandon or a team member call you back personally.</p>
+                    <p>If I'm unsure about something or you need a detailed answer, I'll offer to have someone from the team call you back.</p>
                     <p>What would you like to know about Brandon's positions?</p>
                 </div>
             </div>
@@ -40,15 +40,15 @@
                 autocomplete="off"
             />
             <button id="send-btn" onclick="sendQuery()">Send</button>
-            <button id="callback-btn" onclick="openCallbackModal()" class="btn-callback" title="Request a personal callback from Brandon">
+            <button id="callback-btn" onclick="openCallbackModal()" class="btn-callback" title="Request a callback from the team">
                 📞 Request Callback
             </button>
         </div>
         
         <div id="callback-modal" class="modal">
             <div class="modal-content">
-                <h2>Request a Personal Call from Brandon</h2>
-                <p class="modal-subtitle">Brandon will personally call you back to discuss your question.</p>
+                <h2>Request a Call Back</h2>
+                <p class="modal-subtitle">Someone from the team will call you back to discuss your question.</p>
                 <form id="callback-form">
                     <input type="text" id="callback-name" placeholder="Your Name" required />
                     <input type="tel" id="callback-phone" placeholder="Phone Number" required />

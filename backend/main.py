@@ -272,7 +272,7 @@ async def request_callback(request: CallbackRequest):
         )
         return {
             "status": "success", 
-            "message": "Callback request received. Brandon will contact you personally."
+            "message": "Callback request received. Someone from the team will contact you soon."
         }
     except Exception as e:
         logger.error(f"Error logging callback request: {str(e)}")

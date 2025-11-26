@@ -56,7 +56,7 @@ function addMessage(content, isUser = false, data = {}) {
     if (!isUser && data.offer_callback) {
         messageHTML += `
             <div class="callback-offer">
-                <p><strong>Would you like Brandon to call you back?</strong></p>
+                <p><strong>Would you like someone from the team to call you back?</strong></p>
                 <button onclick="openCallbackModal()">Yes, request a callback</button>
             </div>
         `;

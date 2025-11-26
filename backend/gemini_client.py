@@ -18,12 +18,12 @@ class GeminiClient:
 IMPORTANT GUIDELINES:
 - You represent Brandon's views based on his public statements and platform
 - Always strive for accuracy, but acknowledge when you're uncertain
-- If you don't have enough information or confidence is low, offer to have Brandon call back personally
+- If you don't have enough information or confidence is low, offer to have someone from the team call back
 - Keep responses clear, concise, and conversational (like texting)
 - Avoid political jargon when possible
 - For controversial topics, present Brandon's position thoughtfully
 
-DISCLAIMER: While I've been trained on Brandon's positions, I may make mistakes. For critical questions or when I'm unsure, I'll offer to have Brandon contact you personally."""
+DISCLAIMER: While I've been trained on Brandon's positions, I may make mistakes. For critical questions or when I'm unsure, I'll offer to have someone from the team contact you."""
     
     async def ensure_model_ready(self):
         try:
@@ -48,7 +48,7 @@ DISCLAIMER: While I've been trained on Brandon's positions, I may make mistakes.
                 ready = await self.ensure_model_ready()
                 if not ready:
                     return {
-                        "response": "I'm having trouble connecting to the AI service. Would you like Brandon to call you back?",
+                        "response": "I'm having trouble connecting to the AI service. Would you like someone from the team to call you back?",
                         "model": "error-model-not-loaded",
                         "error": "Gemini API not available"
                     }
@@ -92,7 +92,7 @@ Provide a clear, conversational answer as BrandonBot. Keep it concise (2-4 sente
             if not response or not response.text:
                 logger.warning("Gemini returned empty response")
                 return {
-                    "response": "I'm having trouble generating a response. Would you like Brandon to call you back?",
+                    "response": "I'm having trouble generating a response. Would you like someone from the team to call you back?",
                     "model": "gemini-2.0-flash",
                     "error": "empty_response"
                 }
@@ -109,7 +109,7 @@ Provide a clear, conversational answer as BrandonBot. Keep it concise (2-4 sente
         except Exception as e:
             logger.error(f"Error generating Gemini response: {str(e)}")
             return {
-                "response": "I encountered an error while generating a response. Would you like Brandon to call you back?",
+                "response": "I encountered an error while generating a response. Would you like someone from the team to call you back?",
                 "model": "gemini-2.0-flash",
                 "error": str(e)
             }
@@ -135,7 +135,7 @@ Provide a clear, conversational answer as BrandonBot. Keep it concise (2-4 sente
                 ready = await self.ensure_model_ready()
                 if not ready:
                     return {
-                        "text": "I'm having trouble connecting. Would you like Brandon to call you back?",
+                        "text": "I'm having trouble connecting. Would you like someone from the team to call you back?",
                         "error": "API not available"
                     }
             
@@ -236,7 +236,7 @@ Provide a clear, conversational answer as BrandonBot. Keep it concise (2-4 sente
         except Exception as e:
             logger.error(f"Error in generate_with_tools: {str(e)}")
             return {
-                "text": "I encountered an error. Would you like Brandon to call you back?",
+                "text": "I encountered an error. Would you like someone from the team to call you back?",
                 "error": str(e)
             }
     

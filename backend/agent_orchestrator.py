@@ -694,7 +694,7 @@ WORKFLOW:
 CRITICAL RULES:
 - NEVER conflate party positions with Brandon's personal views
 - After receiving tool results, SYNTHESIZE into a final response
-- If confidence is low, offer a callback from someone on the team
+- If confidence is low, offer a callback from someone from the team
 - Always cite sources when using information from tools
 - Match response style to user's awareness level (Schwartz framework)
 
@@ -788,7 +788,7 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
                 })
             
             if final_response is None:
-                final_response = "I apologize, but I'm having trouble completing this request. Would you like Brandon to call you back to discuss this personally?"
+                final_response = "I apologize, but I'm having trouble completing this request. Would you like someone from the team to call you back to discuss this?"
             
             session.add_turn(ConversationRole.ASSISTANT, final_response)
             

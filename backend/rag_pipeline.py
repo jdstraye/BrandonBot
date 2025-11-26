@@ -154,7 +154,7 @@ class RAGPipeline:
         except Exception as e:
             logger.error(f"Error in RAG pipeline: {str(e)}", exc_info=True)
             return {
-                "response": "I'm having technical difficulties. Would you like Brandon to call you back?",
+                "response": "I'm having technical difficulties. Would you like someone from the team to call you back?",
                 "confidence": 0.0,
                 "sources": [],
                 "offer_callback": True,
@@ -271,12 +271,12 @@ class RAGPipeline:
             "\n=== RESPONSE GUIDELINES ===",
             "1. PRESENT WHAT YOU FOUND - Even if limited, share Section 1 facts. For debates: present Brandon's stance. Never say 'no information' if Section 1 has content.",
             "2. HANDLE GAPS - Missing opponent view? Present Brandon's fully, note 'need to research opponent'. Incomplete? Explain what you know + what's missing.",
-            "3. OFFER CALLBACKS - After debates, incomplete comparisons, complex topics. Natural: 'Would you like Brandon to call?'",
+            "3. OFFER CALLBACKS - After debates, incomplete comparisons, complex topics. Natural: 'Would you like someone from the team to call you?'",
             "4. STYLE - First person, direct, conversational (use Section 3). For Scripture: cite Section 2.",
         ])
         
         if callback_requested:
-            prompt_parts.append("\nNOTE: User has explicitly requested a callback. Acknowledge this and confirm Brandon will reach out.")
+            prompt_parts.append("\nNOTE: User has explicitly requested a callback. Acknowledge this and confirm someone from the team will reach out.")
         
         return "\n".join(prompt_parts)
     
