@@ -12,52 +12,30 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 weaviate_data_dir = os.getenv("WEAVIATE_DATA_DIR", "./weaviate_data")
-phi3_model_path = os.getenv("PHI3_MODEL_PATH", "./phi3_model")
 database_path = os.getenv("DATABASE_PATH", "data/brandonbot.db")
-llm_provider = os.getenv("LLM_PROVIDER", "gemini").lower()
-architecture_mode = os.getenv("ARCHITECTURE_MODE", "llm_first").lower()
-deployment_mode = os.getenv("DEPLOYMENT_MODE", "replit").lower()
 
 weaviate_available = False
 weaviate_manager = None
-rag_pipeline = None
 
 try:
     from weaviate_manager import WeaviateManager
-    from rag_pipeline import RAGPipeline
     weaviate_manager = WeaviateManager(weaviate_data_dir)
     weaviate_available = True
     logger.info("Weaviate module loaded successfully")
 except Exception as e:
     logger.warning(f"Weaviate not available: {e}")
-    logger.info("Running in Gemini-only mode without vector database")
-
-llm_client = None
-if llm_provider == "gemini":
-    from gemini_client import GeminiClient
-    logger.info("Using Gemini API for LLM inference")
-    llm_client = GeminiClient()
-elif llm_provider == "phi3":
-    from phi3_client import Phi3Client
-    logger.info("Using Phi-3 local model for LLM inference")
-    llm_client = Phi3Client(phi3_model_path)
+    logger.info("Running without vector database")
 
 from database import DatabaseManager
 from web_search_service import WebSearchService
+from security import input_sanitizer, rate_limiter
 
 db_manager = DatabaseManager(database_path)
 web_search_service = WebSearchService()
 
-if weaviate_available and weaviate_manager:
-    rag_pipeline = RAGPipeline(weaviate_manager, llm_client, db_manager, web_search_service)
-
-agent_orchestrator = None
-if architecture_mode == "llm_first" and llm_provider == "gemini":
-    from agent_orchestrator import AgentOrchestrator
-    logger.info("Initializing LLM-First AgentOrchestrator (function-calling mode)")
-    agent_orchestrator = AgentOrchestrator(llm_client, weaviate_manager, web_search_service)
-else:
-    logger.info(f"Using legacy RAG pipeline (architecture_mode={architecture_mode}, llm_provider={llm_provider})")
+from agent_orchestrator import AgentOrchestrator
+logger.info("Initializing LLM-First AgentOrchestrator (multi-provider mode)")
+agent_orchestrator = AgentOrchestrator(weaviate_manager, web_search_service, db_manager)
 
 app = FastAPI(title="BrandonBot API - LLM-First Agentic Architecture")
 
@@ -104,9 +82,7 @@ class DonationRequest(BaseModel):
 
 @app.on_event("startup")
 async def startup_event():
-    logger.info("Starting BrandonBot - LLM-First Agentic Architecture...")
-    logger.info(f"Deployment mode: {deployment_mode}")
-    logger.info(f"Architecture mode: {architecture_mode}")
+    logger.info("Starting BrandonBot - LLM-First Multi-Provider Architecture...")
     
     logger.info("Initializing database...")
     await db_manager.initialize()
@@ -115,23 +91,19 @@ async def startup_event():
         logger.info("Initializing Weaviate (embedded mode)...")
         await weaviate_manager.initialize()
     else:
-        logger.info("Weaviate disabled (Replit mode - use Debian 13 for full RAG)")
+        logger.warning("Weaviate not available - RAG features limited")
     
-    if llm_client:
-        logger.info(f"Configuring {llm_provider.upper()} API...")
-        await llm_client.ensure_model_ready()
+    provider_stats = agent_orchestrator.llm_manager.get_provider_stats()
+    available_providers = [name for name, stats in provider_stats.items() if stats["status"] == "available"]
+    logger.info(f"LLM Providers available: {available_providers}")
     
-    logger.info(f"BrandonBot ready! Using {llm_provider.upper()} for inference.")
-    if agent_orchestrator:
-        logger.info("AgentOrchestrator enabled with function-calling tools")
+    logger.info("BrandonBot ready with multi-provider LLM support")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     if weaviate_manager and hasattr(weaviate_manager, 'client') and weaviate_manager.client:
         weaviate_manager.client.close()
     await db_manager.close()
-    if llm_client and hasattr(llm_client, 'close'):
-        await llm_client.close()
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
@@ -168,28 +140,20 @@ async def health_check():
     if weaviate_manager and hasattr(weaviate_manager, 'client'):
         weaviate_status = weaviate_manager.client is not None
     
-    llm_status = False
-    llm_name = llm_provider
-    if llm_client:
-        if hasattr(llm_client, 'health_check'):
-            llm_status = await llm_client.health_check()
-        elif hasattr(llm_client, 'model') and llm_client.model is not None:
-            llm_status = True
-    
-    all_ok = llm_status
-    status = "healthy" if all_ok else "degraded"
+    provider_stats = agent_orchestrator.llm_manager.get_provider_stats()
+    available_providers = [name for name, stats in provider_stats.items() if stats["status"] == "available"]
     
     return {
-        "status": status,
-        "deployment_mode": deployment_mode,
-        "architecture": architecture_mode,
+        "status": "healthy" if available_providers else "degraded",
+        "architecture": "llm_first_multi_provider",
         "services": {
-            "weaviate_embedded": "up" if weaviate_status else ("disabled" if deployment_mode == "replit" else "down"),
-            f"llm_{llm_name}": "up" if llm_status else "initializing",
+            "weaviate_embedded": "up" if weaviate_status else "down",
+            "llm_providers": available_providers,
             "database": "up",
-            "agent_orchestrator": "up" if agent_orchestrator else "disabled"
+            "agent_orchestrator": "up"
         },
-        "note": f"LLM-first agentic architecture with {llm_name.upper()}" + (" (Replit mode - Weaviate disabled)" if deployment_mode == "replit" else "")
+        "provider_stats": provider_stats,
+        "note": f"Multi-provider LLM architecture with {len(available_providers)} providers available"
     }
 
 @app.post("/api/query")
@@ -197,57 +161,45 @@ async def query_bot(request: QueryRequest):
     try:
         session_id = request.session_id or request.user_id or str(uuid.uuid4())
         
-        if agent_orchestrator:
-            response_text, metadata = await agent_orchestrator.process_message(
-                user_message=request.query,
-                session_id=session_id
+        is_allowed, wait_seconds = rate_limiter.check_rate_limit(session_id, "query")
+        if not is_allowed:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many requests. Please wait {wait_seconds} seconds."
             )
-            
-            if request.consent_given and request.user_id:
-                await db_manager.log_interaction(
-                    user_id=request.user_id,
-                    query=request.query,
-                    response=response_text,
-                    confidence=metadata.get("confidence", 0.8),
-                    sources=metadata.get("sources", []),
-                    consent_given=request.consent_given,
-                    model_used=metadata.get("model_used")
-                )
-            
-            return {
-                "response": response_text,
-                "session_id": session_id,
-                "architecture": "llm_first",
-                "metadata": {
-                    "tool_calls": metadata.get("tool_calls", []),
-                    "iterations": metadata.get("iterations", 1),
-                    "sources": metadata.get("sources", [])
-                }
-            }
-        elif rag_pipeline:
-            response = await rag_pipeline.process_query(
-                query=request.query,
+        
+        sanitized = input_sanitizer.sanitize(request.query)
+        if sanitized.issues_found:
+            logger.warning(f"Input sanitized for {session_id}: {sanitized.issues_found}")
+        
+        response_text, metadata = await agent_orchestrator.process_message(
+            user_message=sanitized.cleaned_text,
+            session_id=session_id
+        )
+        
+        if request.consent_given and request.user_id:
+            await db_manager.log_interaction(
                 user_id=request.user_id,
-                consent_given=request.consent_given
+                query=request.query,
+                response=response_text,
+                confidence=metadata.get("confidence", 0.8),
+                sources=metadata.get("sources", []),
+                consent_given=request.consent_given,
+                model_used=metadata.get("model_used")
             )
-            response["architecture"] = "rag_first"
-            return response
-        else:
-            if llm_client:
-                simple_response = await llm_client.generate_simple(
-                    f"User question: {request.query}\n\nProvide a helpful response as BrandonBot, the political campaign assistant."
-                )
-                return {
-                    "response": simple_response,
-                    "session_id": session_id,
-                    "architecture": "direct_llm",
-                    "note": "Running in simplified mode (Weaviate disabled on Replit)"
-                }
-            else:
-                return {
-                    "response": "I'm sorry, the chatbot is not fully initialized. Please try again later.",
-                    "architecture": "error"
-                }
+        
+        return {
+            "response": response_text,
+            "session_id": session_id,
+            "architecture": "llm_first",
+            "metadata": {
+                "tool_calls": metadata.get("tool_calls", []),
+                "iterations": metadata.get("iterations", 1),
+                "sources": metadata.get("sources", []),
+                "model": metadata.get("model_used"),
+                "provider": metadata.get("provider")
+            }
+        }
     except Exception as e:
         logger.error(f"Error processing query: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -264,6 +216,13 @@ async def update_consent(request: ConsentRequest):
 @app.post("/api/callback")
 async def request_callback(request: CallbackRequest):
     try:
+        is_allowed, wait_seconds = rate_limiter.check_rate_limit(request.user_id, "callback")
+        if not is_allowed:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many callback requests. Please wait {wait_seconds} seconds."
+            )
+        
         await db_manager.log_callback_request(
             user_id=request.user_id,
             name=request.name,
@@ -286,6 +245,20 @@ async def get_stats():
         return stats
     except Exception as e:
         logger.error(f"Error getting stats: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/model-stats")
+async def get_model_stats():
+    """Get model performance statistics for evaluation"""
+    try:
+        model_stats = await db_manager.get_model_stats()
+        provider_stats = agent_orchestrator.llm_manager.get_provider_stats()
+        return {
+            "model_performance": model_stats,
+            "provider_status": provider_stats
+        }
+    except Exception as e:
+        logger.error(f"Error getting model stats: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/volunteer")

@@ -109,6 +109,26 @@ class DatabaseManager:
                 ON request_logs(session_id)
             ''')
             
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS model_performance (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    provider TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    session_id TEXT,
+                    request_id TEXT,
+                    success BOOLEAN NOT NULL,
+                    latency_ms INTEGER,
+                    tokens_used INTEGER,
+                    error TEXT,
+                    timestamp TEXT NOT NULL
+                )
+            ''')
+            
+            await db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_model_performance_provider 
+                ON model_performance(provider, model)
+            ''')
+            
             await db.commit()
             logger.info("Database initialized successfully")
     
@@ -222,6 +242,50 @@ class DatabaseManager:
                   json.dumps(tool_calls) if tool_calls else None,
                   total_tokens, duration_ms, now, error))
             await db.commit()
+    
+    async def log_model_performance(self, provider: str, model: str, 
+                                     success: bool, latency_ms: int = 0,
+                                     tokens_used: int = 0, error: Optional[str] = None,
+                                     session_id: Optional[str] = None,
+                                     request_id: Optional[str] = None):
+        """Log model performance for evaluation"""
+        async with aiosqlite.connect(self.db_path) as db:
+            now = datetime.utcnow().isoformat()
+            await db.execute('''
+                INSERT INTO model_performance
+                (provider, model, session_id, request_id, success, latency_ms, 
+                 tokens_used, error, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (provider, model, session_id, request_id, success, latency_ms,
+                  tokens_used, error, now))
+            await db.commit()
+    
+    async def get_model_stats(self) -> dict:
+        """Get aggregated model performance statistics"""
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute('''
+                SELECT provider, model, 
+                       COUNT(*) as total_calls,
+                       SUM(CASE WHEN success THEN 1 ELSE 0 END) as successful_calls,
+                       AVG(latency_ms) as avg_latency,
+                       SUM(tokens_used) as total_tokens
+                FROM model_performance
+                GROUP BY provider, model
+                ORDER BY total_calls DESC
+            ''') as cursor:
+                rows = await cursor.fetchall()
+                return [
+                    {
+                        "provider": row[0],
+                        "model": row[1],
+                        "total_calls": row[2],
+                        "successful_calls": row[3],
+                        "success_rate": row[3] / row[2] if row[2] > 0 else 0,
+                        "avg_latency_ms": round(row[4] or 0, 2),
+                        "total_tokens": row[5] or 0
+                    }
+                    for row in rows
+                ]
     
     async def get_request_logs(self, session_id: Optional[str] = None, 
                                 limit: int = 100) -> list:

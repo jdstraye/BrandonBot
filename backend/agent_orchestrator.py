@@ -26,6 +26,8 @@ from agent_tools import (
     get_gemini_tool_declarations
 )
 from query_expansion import detect_question_type, get_topic_from_query
+from llm_providers import LLMProviderManager
+from intent_detector import intent_detector, UserIntent, escalation_detector
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +161,7 @@ class ToolExecutor:
         self.weaviate = weaviate_manager
         self.web_search = web_search_service
     
-    async def execute(self, tool_call: ToolCall) -> ToolResult:
+    async def execute(self, tool_call: ToolCall, session_id: str = "default") -> ToolResult:
         """Execute a single tool call"""
         is_valid, error = tool_call.validate()
         if not is_valid:
@@ -178,7 +180,7 @@ class ToolExecutor:
             elif tool_call.name == ToolName.GET_PARTY_COMPARISON.value:
                 return await self._execute_party_comparison(tool_call.arguments)
             elif tool_call.name == ToolName.PERFORM_WEB_SEARCH.value:
-                return await self._execute_web_search(tool_call.arguments)
+                return await self._execute_web_search(tool_call.arguments, session_id)
             elif tool_call.name == ToolName.RETRIEVE_ANSWER_STYLE.value:
                 return await self._execute_retrieve_answer_style(tool_call.arguments)
             elif tool_call.name == ToolName.REGISTER_VOLUNTEER.value:
@@ -410,8 +412,19 @@ class ToolExecutor:
             trust_level=1.0
         )
     
-    async def _execute_web_search(self, args: Dict) -> ToolResult:
-        """Search the web using DuckDuckGo"""
+    async def _execute_web_search(self, args: Dict, session_id: str = "default") -> ToolResult:
+        """Search the web using DuckDuckGo (rate limited)"""
+        from security import rate_limiter
+        
+        is_allowed, wait_seconds = rate_limiter.check_rate_limit(session_id, "web_search")
+        if not is_allowed:
+            return ToolResult(
+                tool_name=ToolName.PERFORM_WEB_SEARCH.value,
+                success=False,
+                data=None,
+                error_message=f"Web search rate limit exceeded. Please wait {wait_seconds} seconds."
+            )
+        
         query = args.get("query", "")
         num_results = min(args.get("num_results", 5), 10)
         news_only = args.get("news_only", False)
@@ -638,18 +651,27 @@ class AgentOrchestrator:
     5. Delivers final response to user
     
     The LLM is the "brain" - it reasons but doesn't execute.
+    
+    Multi-Provider Support:
+    - Uses LLMProviderManager to handle multiple LLM providers
+    - One provider+model per conversation (no mid-conversation switching)
+    - Automatic failover on rate limits or errors
+    - Tracks which model handled each query for evaluation
     """
     
-    def __init__(self, llm_client, weaviate_manager, web_search_service=None):
+    def __init__(self, weaviate_manager, web_search_service=None, db_manager=None, llm_client=None):
         """
         Initialize the orchestrator.
         
         Args:
-            llm_client: GeminiClient or similar LLM client with function calling support
             weaviate_manager: WeaviateManager for vector search
             web_search_service: Optional WebSearchService for web search
+            db_manager: Optional DatabaseManager for logging model performance
+            llm_client: Legacy parameter (ignored if LLMProviderManager is used)
         """
+        self.llm_manager = LLMProviderManager()
         self.llm = llm_client
+        self.db_manager = db_manager
         self.tool_executor = ToolExecutor(weaviate_manager, web_search_service)
         self.session_manager = SessionManager()
         self.max_tool_iterations = 5
@@ -743,7 +765,16 @@ Remember: You're here to inform voters and build support for Brandon's campaign.
         question_types = detect_question_type(user_message)
         topic = get_topic_from_query(user_message)
         
-        logger.info(f"[{request_id}] New request - session: {session_id}, types: {question_types}, topic: {topic}")
+        history = [{"role": t.role.value, "content": t.content} 
+                   for t in self.session_manager.get_or_create_session(session_id).turns]
+        intent_result = intent_detector.detect(user_message, history)
+        intent_context = intent_detector.get_intent_context(intent_result)
+        
+        escalation_result = escalation_detector.detect(user_message, history)
+        
+        logger.info(f"[{request_id}] New request - session: {session_id}, types: {question_types}, "
+                   f"topic: {topic}, intent: {intent_result.primary_intent.value}, "
+                   f"escalation: {escalation_result.escalation_level}")
         
         session = self.session_manager.get_or_create_session(session_id)
         
@@ -757,8 +788,14 @@ Remember: You're here to inform voters and build support for Brandon's campaign.
             "total_tokens": 0,
             "sources": [],
             "model_used": None,
+            "provider": None,
+            "latency_ms": 0,
             "question_types": question_types,
             "topic": topic,
+            "intent": intent_result.primary_intent.value,
+            "needs_scripture": intent_result.needs_scripture,
+            "needs_callback": intent_result.needs_callback or escalation_result.needs_escalation,
+            "escalation_level": escalation_result.escalation_level,
             "duration_ms": 0
         }
         
@@ -772,22 +809,33 @@ Remember: You're here to inform voters and build support for Brandon's campaign.
                 iteration += 1
                 metadata["iterations"] = iteration
                 
-                llm_response = await self.llm.generate_with_tools(
+                full_system_prompt = self.get_system_prompt(question_types, topic)
+                if intent_context:
+                    full_system_prompt += f"\n\nINTENT ANALYSIS: {intent_context}"
+                if intent_result.needs_scripture:
+                    full_system_prompt += "\n\nNote: User may appreciate faith-based perspective. Consider including relevant scripture if appropriate."
+                if intent_result.needs_callback:
+                    full_system_prompt += "\n\nNote: User appears to need personal attention. Offer a callback from someone on the team."
+                
+                if escalation_result.needs_escalation:
+                    full_system_prompt += f"\n\nESCALATION DETECTED ({escalation_result.escalation_level}): {escalation_result.suggested_response}"
+                
+                llm_response = await self.llm_manager.generate_with_tools(
+                    session_id=session_id,
                     messages=messages,
                     tools=get_gemini_tool_declarations(),
-                    system_prompt=self.get_system_prompt(question_types, topic)
+                    system_prompt=full_system_prompt
                 )
                 
-                if "usage" in llm_response:
-                    metadata["total_tokens"] += llm_response["usage"].get("total_tokens", 0)
+                metadata["total_tokens"] += llm_response.tokens_used
+                metadata["model_used"] = f"{llm_response.provider}/{llm_response.model}"
+                metadata["provider"] = llm_response.provider
+                metadata["latency_ms"] = llm_response.latency_ms
                 
-                if "model" in llm_response:
-                    metadata["model_used"] = llm_response["model"]
-                
-                tool_calls = llm_response.get("tool_calls", [])
+                tool_calls = llm_response.tool_calls or []
                 
                 if not tool_calls:
-                    proposed_response = llm_response.get("text", "I'm sorry, I couldn't process your request.")
+                    proposed_response = llm_response.text or "I'm sorry, I couldn't process your request."
                     
                     is_factual_policy = "policy" in question_types or topic not in ["general", "callback"]
                     answered_without_search = iteration == 1 and len(metadata["tool_calls"]) == 0
@@ -823,7 +871,7 @@ Either confirm with a search or explain why no search is needed."""
                         "arguments": tool_call.arguments
                     })
                     
-                    result = await self.tool_executor.execute(tool_call)
+                    result = await self.tool_executor.execute(tool_call, session_id)
                     tool_results.append(result)
                     
                     if result.sources:
@@ -857,6 +905,20 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
                        f"{metadata['total_tokens']} tokens, {metadata['duration_ms']}ms, "
                        f"model: {metadata['model_used']}")
             
+            if self.db_manager:
+                try:
+                    await self.db_manager.log_model_performance(
+                        provider=metadata.get("provider", "unknown"),
+                        model=metadata.get("model_used", "unknown"),
+                        success=True,
+                        latency_ms=metadata.get("duration_ms", 0),
+                        tokens_used=metadata.get("total_tokens", 0),
+                        session_id=session_id,
+                        request_id=request_id
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to log model performance: {e}")
+            
             return final_response, metadata
             
         except Exception as e:
@@ -864,6 +926,21 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
             logger.error(f"[{request_id}] Error after {duration_ms}ms: {e}")
             error_response = "I encountered an unexpected issue. Please try again or ask a different question."
             session.add_turn(ConversationRole.ASSISTANT, error_response)
+            
+            if self.db_manager:
+                try:
+                    await self.db_manager.log_model_performance(
+                        provider=metadata.get("provider", "unknown"),
+                        model=metadata.get("model_used", "unknown"),
+                        success=False,
+                        latency_ms=duration_ms,
+                        error=str(e),
+                        session_id=session_id,
+                        request_id=request_id
+                    )
+                except Exception as log_err:
+                    logger.warning(f"Failed to log model performance: {log_err}")
+            
             return error_response, {"error": str(e), "request_id": request_id, "duration_ms": duration_ms}
     
     def _build_messages(self, session: Session) -> List[Dict]:
