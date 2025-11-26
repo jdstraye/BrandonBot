@@ -210,7 +210,8 @@ async def query_bot(request: QueryRequest):
                     response=response_text,
                     confidence=metadata.get("confidence", 0.8),
                     sources=metadata.get("sources", []),
-                    consent_given=request.consent_given
+                    consent_given=request.consent_given,
+                    model_used=metadata.get("model_used")
                 )
             
             return {

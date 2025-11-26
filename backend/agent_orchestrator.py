@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -24,6 +25,7 @@ from agent_tools import (
     ToolCall, ToolResult, ToolName, TOOL_SCHEMAS,
     get_gemini_tool_declarations
 )
+from query_expansion import detect_question_type, get_topic_from_query
 
 logger = logging.getLogger(__name__)
 
@@ -652,9 +654,24 @@ class AgentOrchestrator:
         self.session_manager = SessionManager()
         self.max_tool_iterations = 5
     
-    def get_system_prompt(self) -> str:
-        """Get the system prompt for the LLM"""
-        return """You are BrandonBot, an AI assistant for Brandon Sowers' political campaign.
+    def get_system_prompt(self, question_types: List[str] = None, topic: str = None) -> str:
+        """Get the system prompt for the LLM with optional question type hints"""
+        
+        question_type_hint = ""
+        if question_types:
+            question_type_hint = f"\n\nDETECTED QUESTION TYPE: {', '.join(question_types)}"
+            emotional_types = {"emotional", "emotional_appeal", "values_based", "faith"}
+            if any(qt in emotional_types for qt in question_types):
+                question_type_hint += "\nConsider using retrieve_answer_style with include_scripture=true"
+            if "comparison" in question_types:
+                question_type_hint += "\nUse get_party_comparison for explicit party position comparison"
+            if "callback" in question_types:
+                question_type_hint += "\nUser may want a callback - be ready to offer one"
+        
+        topic_hint = f"\nDETECTED TOPIC: {topic}" if topic else ""
+        
+        return f"""You are BrandonBot, an AI assistant for Brandon Sowers' political campaign.
+{question_type_hint}{topic_hint}
 
 YOUR ROLE:
 - Answer questions about Brandon's policies, positions, and campaign
@@ -662,10 +679,21 @@ YOUR ROLE:
 - Compare Brandon's positions to party platforms when asked
 - Maintain a helpful, informative, and persuasive tone
 
+QUESTION TYPE CLASSIFICATION (Schwartz Framework):
+- unaware: User doesn't know they have a problem - use storytelling, don't push solutions
+- problem_aware: User knows the problem but not Brandon - empathize, show understanding
+- solution_aware: User knows solutions exist - differentiate Brandon's approach
+- product_aware: User knows Brandon - provide specifics, address concerns
+- most_aware: Strong supporter - call to action (donate, volunteer)
+- oppositional: Disagrees with Brandon - acknowledge concerns, find common ground
+- skeptical: Doubts claims - provide proof, cite sources
+- emotional_appeal: Values/faith-based concern - include scripture when appropriate
+- comparison: Explicitly comparing candidates/parties
+
 AVAILABLE TOOLS (Trust-Based Separation):
 
 AUTHORITATIVE SOURCES (Trust 1.0):
-1. search_brandon_positions: Search Brandon's OWN statements and verified Q&A (BrandonPlatform + PreviousQA)
+1. search_brandon_positions: Search Brandon's OWN statements and verified Q&A
    - Use FIRST for any question about Brandon's positions
    - Results are authoritative and should be quoted directly
 
@@ -675,32 +703,26 @@ SUPPLEMENTARY SOURCES (Trust 0.6):
    - Results must be labeled as "party position" NOT Brandon's view
 3. get_party_comparison: Compare Republican and Independent platforms
    - Use ONLY for explicit comparison questions
-   - Clearly label each party's position
 
 OTHER TOOLS:
 4. perform_web_search: Search the internet for current events, competitor info
-5. retrieve_answer_style: Get copywriting guidance from MarketGurus
+5. retrieve_answer_style: Get copywriting guidance (use after gathering facts)
 6. register_volunteer: Sign up volunteers
 7. make_donation: Process donation requests
 8. check_fec_rules: Verify FEC compliance for donations
 
-WORKFLOW:
-1. For policy questions: Use search_brandon_positions FIRST
-2. If results are thin: Use augment_brandon_with_party (clearly label as party position)
-3. For comparisons: Use get_party_comparison
-4. After gathering content: Use retrieve_answer_style for communication guidance
-5. SYNTHESIZE the information into a response - don't just search repeatedly
+SENSITIVE TOPICS (offer callback):
+- Abortion, gun rights, immigration enforcement
+- Personal attacks on opponents
+- Unverified claims or rumors
+- Legal/financial advice beyond campaign info
 
 CRITICAL RULES:
 - NEVER conflate party positions with Brandon's personal views
 - After receiving tool results, SYNTHESIZE into a final response
 - If confidence is low, offer a callback from someone from the team
 - Always cite sources when using information from tools
-- Match response style to user's awareness level (Schwartz framework)
-
-RESPONSE SYNTHESIS:
-After receiving tool results, you MUST provide a synthesized answer. Do NOT call the same tool multiple times.
-If you have search results, use them to construct your response immediately.
+- For emotional/values questions, consider scripture inclusion
 
 Remember: You're here to inform voters and build support for Brandon's campaign."""
 
@@ -715,16 +737,29 @@ Remember: You're here to inform voters and build support for Brandon's campaign.
         Returns:
             Tuple of (response_text, metadata_dict)
         """
+        request_id = str(uuid.uuid4())[:8]
+        start_time = time.time()
+        
+        question_types = detect_question_type(user_message)
+        topic = get_topic_from_query(user_message)
+        
+        logger.info(f"[{request_id}] New request - session: {session_id}, types: {question_types}, topic: {topic}")
+        
         session = self.session_manager.get_or_create_session(session_id)
         
         session.add_turn(ConversationRole.USER, user_message)
         
         metadata = {
+            "request_id": request_id,
             "session_id": session_id,
             "tool_calls": [],
             "iterations": 0,
             "total_tokens": 0,
-            "sources": []
+            "sources": [],
+            "model_used": None,
+            "question_types": question_types,
+            "topic": topic,
+            "duration_ms": 0
         }
         
         try:
@@ -740,16 +775,39 @@ Remember: You're here to inform voters and build support for Brandon's campaign.
                 llm_response = await self.llm.generate_with_tools(
                     messages=messages,
                     tools=get_gemini_tool_declarations(),
-                    system_prompt=self.get_system_prompt()
+                    system_prompt=self.get_system_prompt(question_types, topic)
                 )
                 
                 if "usage" in llm_response:
                     metadata["total_tokens"] += llm_response["usage"].get("total_tokens", 0)
                 
+                if "model" in llm_response:
+                    metadata["model_used"] = llm_response["model"]
+                
                 tool_calls = llm_response.get("tool_calls", [])
                 
                 if not tool_calls:
-                    final_response = llm_response.get("text", "I'm sorry, I couldn't process your request.")
+                    proposed_response = llm_response.get("text", "I'm sorry, I couldn't process your request.")
+                    
+                    is_factual_policy = "policy" in question_types or topic not in ["general", "callback"]
+                    answered_without_search = iteration == 1 and len(metadata["tool_calls"]) == 0
+                    safeguard_already_triggered = any("SYSTEM CHECK" in m.get("content", "") for m in messages)
+                    
+                    if is_factual_policy and answered_without_search and not safeguard_already_triggered:
+                        logger.warning(f"[{request_id}] Factual safeguard triggered - LLM answered policy question without tools")
+                        messages.append({
+                            "role": "user",
+                            "content": f"""SYSTEM CHECK: You answered a factual policy question without searching Brandon's knowledge base.
+
+Please verify your answer by using search_brandon_positions to confirm Brandon's official position on this topic.
+
+Your proposed answer was: {proposed_response[:200]}...
+
+Either confirm with a search or explain why no search is needed."""
+                        })
+                        continue
+                    
+                    final_response = proposed_response
                     break
                 
                 tool_results = []
@@ -793,14 +851,20 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
             session.add_turn(ConversationRole.ASSISTANT, final_response)
             
             metadata["sources"] = list(set(metadata["sources"]))
+            metadata["duration_ms"] = int((time.time() - start_time) * 1000)
+            
+            logger.info(f"[{request_id}] Complete - {metadata['iterations']} iterations, "
+                       f"{metadata['total_tokens']} tokens, {metadata['duration_ms']}ms, "
+                       f"model: {metadata['model_used']}")
             
             return final_response, metadata
             
         except Exception as e:
-            logger.error(f"Orchestrator error: {e}")
+            duration_ms = int((time.time() - start_time) * 1000)
+            logger.error(f"[{request_id}] Error after {duration_ms}ms: {e}")
             error_response = "I encountered an unexpected issue. Please try again or ask a different question."
             session.add_turn(ConversationRole.ASSISTANT, error_response)
-            return error_response, {"error": str(e)}
+            return error_response, {"error": str(e), "request_id": request_id, "duration_ms": duration_ms}
     
     def _build_messages(self, session: Session) -> List[Dict]:
         """Build the message list for the LLM including conversation history"""

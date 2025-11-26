@@ -148,6 +148,7 @@ Provide a clear, conversational answer as BrandonBot. Keep it concise (2-4 sente
                 if not self.api_key:
                     return {
                         "text": "I'm having trouble connecting. Would you like someone from the team to call you back?",
+                        "model": "api-unavailable",
                         "error": "API not available"
                     }
                 genai.configure(api_key=self.api_key)

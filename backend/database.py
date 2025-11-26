@@ -38,8 +38,11 @@ class DatabaseManager:
             ''')
             
             try:
-                await db.execute('ALTER TABLE interactions ADD COLUMN model_used TEXT')
-            except:
+                async with db.execute("PRAGMA table_info(interactions)") as cursor:
+                    columns = [row[1] for row in await cursor.fetchall()]
+                if 'model_used' not in columns:
+                    await db.execute('ALTER TABLE interactions ADD COLUMN model_used TEXT')
+            except Exception:
                 pass
             
             await db.execute('''
@@ -63,6 +66,47 @@ class DatabaseManager:
                     first_asked TEXT,
                     last_asked TEXT
                 )
+            ''')
+            
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS conversation_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    user_id TEXT,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    tool_calls TEXT,
+                    model_used TEXT,
+                    timestamp TEXT NOT NULL,
+                    consent_given BOOLEAN DEFAULT FALSE
+                )
+            ''')
+            
+            await db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_conversation_session 
+                ON conversation_history(session_id)
+            ''')
+            
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS request_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    request_id TEXT UNIQUE NOT NULL,
+                    session_id TEXT,
+                    user_id TEXT,
+                    query TEXT,
+                    response TEXT,
+                    model_used TEXT,
+                    tool_calls TEXT,
+                    total_tokens INTEGER,
+                    duration_ms INTEGER,
+                    timestamp TEXT NOT NULL,
+                    error TEXT
+                )
+            ''')
+            
+            await db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_request_logs_session 
+                ON request_logs(session_id)
             ''')
             
             await db.commit()
@@ -124,6 +168,100 @@ class DatabaseManager:
             ''', (user_id, name, phone, email, question, now))
             await db.commit()
     
+    async def log_conversation_turn(self, session_id: str, role: str, content: str,
+                                     user_id: Optional[str] = None, tool_calls: Optional[list] = None,
+                                     model_used: Optional[str] = None, consent_given: bool = False):
+        """Log a single conversation turn with consent flag"""
+        async with aiosqlite.connect(self.db_path) as db:
+            now = datetime.utcnow().isoformat()
+            await db.execute('''
+                INSERT INTO conversation_history 
+                (session_id, user_id, role, content, tool_calls, model_used, timestamp, consent_given)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (session_id, user_id, role, content, 
+                  json.dumps(tool_calls) if tool_calls else None,
+                  model_used, now, consent_given))
+            await db.commit()
+    
+    async def get_conversation_history(self, session_id: str, limit: int = 20) -> list:
+        """Retrieve conversation history for a session"""
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute('''
+                SELECT role, content, tool_calls, model_used, timestamp
+                FROM conversation_history
+                WHERE session_id = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+            ''', (session_id, limit)) as cursor:
+                rows = await cursor.fetchall()
+                return [
+                    {
+                        "role": row[0],
+                        "content": row[1],
+                        "tool_calls": json.loads(row[2]) if row[2] else None,
+                        "model_used": row[3],
+                        "timestamp": row[4]
+                    }
+                    for row in reversed(rows)
+                ]
+    
+    async def log_request(self, request_id: str, session_id: str, query: str,
+                          response: str, model_used: Optional[str] = None,
+                          tool_calls: Optional[list] = None, total_tokens: int = 0,
+                          duration_ms: int = 0, user_id: Optional[str] = None,
+                          error: Optional[str] = None):
+        """Log a complete request with timing and tool traces"""
+        async with aiosqlite.connect(self.db_path) as db:
+            now = datetime.utcnow().isoformat()
+            await db.execute('''
+                INSERT INTO request_logs
+                (request_id, session_id, user_id, query, response, model_used, 
+                 tool_calls, total_tokens, duration_ms, timestamp, error)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (request_id, session_id, user_id, query, response, model_used,
+                  json.dumps(tool_calls) if tool_calls else None,
+                  total_tokens, duration_ms, now, error))
+            await db.commit()
+    
+    async def get_request_logs(self, session_id: Optional[str] = None, 
+                                limit: int = 100) -> list:
+        """Retrieve request logs, optionally filtered by session"""
+        async with aiosqlite.connect(self.db_path) as db:
+            if session_id:
+                query = '''
+                    SELECT request_id, session_id, query, response, model_used, 
+                           tool_calls, total_tokens, duration_ms, timestamp, error
+                    FROM request_logs WHERE session_id = ?
+                    ORDER BY timestamp DESC LIMIT ?
+                '''
+                params = (session_id, limit)
+            else:
+                query = '''
+                    SELECT request_id, session_id, query, response, model_used, 
+                           tool_calls, total_tokens, duration_ms, timestamp, error
+                    FROM request_logs
+                    ORDER BY timestamp DESC LIMIT ?
+                '''
+                params = (limit,)
+            
+            async with db.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                return [
+                    {
+                        "request_id": row[0],
+                        "session_id": row[1],
+                        "query": row[2],
+                        "response": row[3],
+                        "model_used": row[4],
+                        "tool_calls": json.loads(row[5]) if row[5] else None,
+                        "total_tokens": row[6],
+                        "duration_ms": row[7],
+                        "timestamp": row[8],
+                        "error": row[9]
+                    }
+                    for row in rows
+                ]
+    
     async def get_stats(self):
         async with aiosqlite.connect(self.db_path) as db:
             async with db.execute('SELECT COUNT(*) FROM interactions') as cursor:
@@ -137,10 +275,18 @@ class DatabaseManager:
             ) as cursor:
                 top_questions = await cursor.fetchall()
             
+            async with db.execute('SELECT COUNT(*) FROM request_logs') as cursor:
+                total_requests = (await cursor.fetchone())[0]
+            
+            async with db.execute('SELECT AVG(duration_ms) FROM request_logs WHERE duration_ms > 0') as cursor:
+                avg_duration = (await cursor.fetchone())[0] or 0
+            
             return {
                 "total_interactions": total_interactions,
                 "pending_callbacks": pending_callbacks,
-                "top_questions": [{"question": q[0], "count": q[1]} for q in top_questions]
+                "top_questions": [{"question": q[0], "count": q[1]} for q in top_questions],
+                "total_requests": total_requests,
+                "avg_response_time_ms": round(avg_duration, 2)
             }
     
     async def close(self):
