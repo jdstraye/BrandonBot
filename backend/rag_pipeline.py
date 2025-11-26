@@ -1,8 +1,10 @@
 import logging
+import os
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 from weaviate_manager import WeaviateManager
 from phi3_client import Phi3Client
+from gemini_client import GeminiClient
 from database import DatabaseManager
 from analysis_pipeline import QuestionAnalyzer
 from retrieval_orchestrator import RetrievalOrchestrator
@@ -31,12 +33,12 @@ class RAGPipeline:
     ]
     
     def __init__(self, weaviate_manager: WeaviateManager, 
-                 phi3_client: Phi3Client, db_manager: DatabaseManager,
+                 llm_client: Union[Phi3Client, GeminiClient], db_manager: DatabaseManager,
                  web_search_service: Optional[WebSearchService] = None):
         self.weaviate = weaviate_manager
-        self.phi3 = phi3_client
+        self.llm = llm_client
         self.db = db_manager
-        self.question_analyzer = QuestionAnalyzer(phi3_client)
+        self.question_analyzer = QuestionAnalyzer(llm_client)
         
         self.orchestrator = RetrievalOrchestrator(
             weaviate_manager=weaviate_manager,
@@ -102,7 +104,7 @@ class RAGPipeline:
             
             logger.info(f"System prompt length: {len(system_prompt)} chars")
             
-            llm_response = await self.phi3.generate_response(
+            llm_response = await self.llm.generate_response(
                 query=query,
                 context="",
                 system_prompt=system_prompt,

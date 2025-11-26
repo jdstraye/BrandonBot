@@ -25,7 +25,9 @@ def download_model():
     logger.info(f"Target: {MODEL_PATH}")
     logger.info("")
     
-    if os.path.exists(os.path.join(MODEL_PATH, "genai_config.json")):
+    if ( os.path.exists(os.path.join(MODEL_PATH, "genai_config.json")) and 
+        os.path.exists(os.path.join(MODEL_PATH, "phi3-mini-4k-instruct-cpu-int4-rtn-block-32-acc-level-4.onnx")) and
+        os.path.exists(os.path.join(MODEL_PATH, "phi3-mini-4k-instruct-cpu-int4-rtn-block-32-acc-level-4.onnx.data"))):
         logger.info("✓ Model already downloaded!")
         return True
     

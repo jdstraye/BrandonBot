@@ -2,7 +2,7 @@ fastapi==0.104.1
 uvicorn[standard]==0.24.0
 weaviate-client==4.4.0
 sentence-transformers==2.3.1
-onnxruntime-genai==0.4.0
+onnxruntime-genai==0.11.2
 pypdf==4.0.1
 python-docx==1.1.0
 pydantic==2.5.0
