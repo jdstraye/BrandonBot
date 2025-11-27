@@ -807,29 +807,37 @@ class NvidiaProvider(BaseLLMProvider):
             
         except Exception as e:
             error_str = str(e).lower()
-            if "rate" in error_str or "429" in error_str:
-                self.mark_rate_limited()
-            else:
-                self.mark_error(str(e))
+            if self.current_slot:
+                if "rate" in error_str or "429" in error_str:
+                    self.current_slot.mark_rate_limited()
+                else:
+                    self.current_slot.mark_error(str(e))
             return LLMResponse(error=str(e), provider=self.config.name,
                              latency_ms=int((time.time() - start_time) * 1000))
 
 
 class LLMProviderManager:
     """
-    Manages multiple LLM providers with failover logic.
+    Manages multiple LLM providers with slot-based round-robin selection.
     
     Design:
-    - Pick one provider+model at conversation start
-    - Stick with it for the entire conversation
-    - Switch only on rate limit/failure
-    - Track which model was used for evaluation
+    - 11 API key slots across 7 providers, managing 20 unique models
+    - Round-robin slot selection (random start, sequential advance)
+    - Within each slot, rotate through models on subsequent calls
+    - Session-sticky: same slot+model for entire conversation
+    - Automatic failover to next slot on rate limit/error
     """
     
     def __init__(self):
         self.providers: Dict[str, BaseLLMProvider] = {}
         self._init_providers()
-        self.session_providers: Dict[str, Tuple[str, str]] = {}
+        
+        self.all_slots: List[Tuple[str, APIKeySlot]] = []
+        self._build_slot_pool()
+        
+        self.next_slot_idx = random.randint(0, max(1, len(self.all_slots)) - 1)
+        
+        self.session_assignments: Dict[str, Tuple[str, str, str]] = {}
     
     def _init_providers(self):
         """Initialize all available providers"""
@@ -847,120 +855,191 @@ class LLMProviderManager:
             try:
                 provider = cls()
                 self.providers[provider.config.name] = provider
-                status = "available" if provider.is_available() else "unavailable"
-                logger.info(f"Provider {provider.config.name}: {status} (models: {len(provider.config.models)})")
+                
+                available_slots = sum(1 for s in provider.config.slots if s.is_available())
+                total_models = sum(len(s.models) for s in provider.config.slots if s.is_available())
+                logger.info(f"Provider {provider.config.name}: {available_slots} slots, {total_models} models")
             except Exception as e:
                 logger.error(f"Failed to initialize provider {cls.__name__}: {e}")
     
-    def get_available_providers(self) -> List[BaseLLMProvider]:
-        """Get list of available providers sorted by priority"""
-        available = [p for p in self.providers.values() if p.is_available()]
-        return sorted(available, key=lambda p: p.config.priority, reverse=True)
-    
-    def select_provider_for_session(self, session_id: str, 
-                                     force_new: bool = False) -> Optional[Tuple[str, str]]:
-        """
-        Select a provider and model for a session.
-        Returns (provider_name, model_name) or None if no providers available.
-        """
-        if not force_new and session_id in self.session_providers:
-            provider_name, model_name = self.session_providers[session_id]
-            provider = self.providers.get(provider_name)
-            if provider and provider.is_available():
-                return (provider_name, model_name)
+    def _build_slot_pool(self):
+        """Build global pool of all available slots across providers"""
+        self.all_slots = []
+        for provider_name, provider in self.providers.items():
+            for slot in provider.config.slots:
+                if slot.is_available():
+                    self.all_slots.append((provider_name, slot))
         
-        available = self.get_available_providers()
+        random.shuffle(self.all_slots)
+        logger.info(f"Global slot pool: {len(self.all_slots)} slots with {self._count_total_models()} unique models")
+    
+    def _count_total_models(self) -> int:
+        """Count unique models across all slots"""
+        models = set()
+        for _, slot in self.all_slots:
+            models.update(slot.models)
+        return len(models)
+    
+    def get_available_slots(self) -> List[Tuple[str, APIKeySlot]]:
+        """Get list of currently available slots"""
+        return [(name, slot) for name, slot in self.all_slots if slot.is_available()]
+    
+    def _select_next_slot(self) -> Optional[Tuple[str, APIKeySlot, str]]:
+        """
+        Select next available slot using round-robin, then pick next model within slot.
+        Returns (provider_name, slot, model_name) or None.
+        """
+        available = self.get_available_slots()
         if not available:
-            logger.error("No available LLM providers!")
             return None
         
-        weights = [p.config.priority for p in available]
-        total = sum(weights)
-        r = random.uniform(0, total)
-        cumulative = 0
-        selected_provider = available[0]
+        start_idx = self.next_slot_idx % len(available)
         
-        for provider, weight in zip(available, weights):
-            cumulative += weight
-            if r <= cumulative:
-                selected_provider = provider
-                break
+        for i in range(len(available)):
+            idx = (start_idx + i) % len(available)
+            provider_name, slot = available[idx]
+            model = slot.get_next_model()
+            
+            if model:
+                self.next_slot_idx = (idx + 1) % len(available)
+                return (provider_name, slot, model)
         
-        model_name = selected_provider.select_model()
-        self.session_providers[session_id] = (selected_provider.config.name, model_name)
+        return None
+    
+    def select_for_session(self, session_id: str, 
+                           force_new: bool = False) -> Optional[Tuple[str, str, str]]:
+        """
+        Select a slot and model for a session.
+        Returns (provider_name, slot_id, model_name) or None.
+        """
+        if not force_new and session_id in self.session_assignments:
+            provider_name, slot_id, model_name = self.session_assignments[session_id]
+            
+            for pname, slot in self.all_slots:
+                if pname == provider_name and slot.slot_id == slot_id and slot.is_available():
+                    return (provider_name, slot_id, model_name)
         
-        logger.info(f"Session {session_id[:8]}... assigned to {selected_provider.config.name}/{model_name}")
-        return (selected_provider.config.name, model_name)
+        selection = self._select_next_slot()
+        if not selection:
+            logger.error("No available slots!")
+            return None
+        
+        provider_name, slot, model_name = selection
+        self.session_assignments[session_id] = (provider_name, slot.slot_id, model_name)
+        
+        logger.info(f"Session {session_id[:8]}... -> {provider_name}/{slot.slot_id}/{model_name}")
+        return (provider_name, slot.slot_id, model_name)
     
     def get_session_provider(self, session_id: str) -> Optional[BaseLLMProvider]:
         """Get the provider assigned to a session"""
-        if session_id in self.session_providers:
-            provider_name, _ = self.session_providers[session_id]
+        if session_id in self.session_assignments:
+            provider_name, _, _ = self.session_assignments[session_id]
             return self.providers.get(provider_name)
         return None
     
     async def generate_with_tools(self, session_id: str, messages: List[Dict], 
                                    tools: List[Dict], system_prompt: str) -> LLMResponse:
-        """
-        Generate response with tools, handling failover.
-        """
-        selection = self.select_provider_for_session(session_id)
+        """Generate response with tools, handling failover."""
+        selection = self.select_for_session(session_id)
         if not selection:
             return LLMResponse(
                 text="I'm having trouble connecting to our AI services. Would you like someone from the team to call you back?",
-                error="No providers available"
+                error="No slots available"
             )
         
-        provider_name, model_name = selection
+        provider_name, slot_id, model_name = selection
         provider = self.providers[provider_name]
+        
+        for slot in provider.config.slots:
+            if slot.slot_id == slot_id:
+                provider.current_slot = slot
+                break
         provider.current_model = model_name
         
         result = await provider.generate_with_tools(messages, tools, system_prompt)
         
         if result.error:
-            logger.warning(f"Provider {provider_name} failed: {result.error}")
+            logger.warning(f"Slot {slot_id} failed: {result.error}")
             
-            del self.session_providers[session_id]
+            del self.session_assignments[session_id]
             
-            for fallback_provider in self.get_available_providers():
-                if fallback_provider.config.name != provider_name:
-                    logger.info(f"Failing over to {fallback_provider.config.name}")
-                    fallback_provider.select_model()
-                    self.session_providers[session_id] = (
-                        fallback_provider.config.name, 
-                        fallback_provider.current_model
-                    )
+            tried_slots = {slot_id}
+            for _ in range(min(5, len(self.all_slots))):
+                fallback = self._select_next_slot()
+                if not fallback:
+                    break
                     
-                    result = await fallback_provider.generate_with_tools(messages, tools, system_prompt)
-                    if not result.error:
-                        return result
+                fb_provider_name, fb_slot, fb_model = fallback
+                if fb_slot.slot_id in tried_slots:
+                    continue
+                tried_slots.add(fb_slot.slot_id)
+                
+                logger.info(f"Failover to {fb_provider_name}/{fb_slot.slot_id}/{fb_model}")
+                
+                fb_provider = self.providers[fb_provider_name]
+                fb_provider.current_slot = fb_slot
+                fb_provider.current_model = fb_model
+                
+                result = await fb_provider.generate_with_tools(messages, tools, system_prompt)
+                if not result.error:
+                    self.session_assignments[session_id] = (fb_provider_name, fb_slot.slot_id, fb_model)
+                    return result
             
             return LLMResponse(
                 text="I'm having trouble connecting to our AI services. Would you like someone from the team to call you back?",
-                error="All providers failed"
+                error="All slots failed"
             )
         
         return result
     
     def get_session_model_info(self, session_id: str) -> Dict[str, str]:
-        """Get provider and model info for a session"""
-        if session_id in self.session_providers:
-            provider_name, model_name = self.session_providers[session_id]
-            return {"provider": provider_name, "model": model_name}
-        return {"provider": "unknown", "model": "unknown"}
+        """Get provider, slot, and model info for a session"""
+        if session_id in self.session_assignments:
+            provider_name, slot_id, model_name = self.session_assignments[session_id]
+            return {"provider": provider_name, "slot": slot_id, "model": model_name}
+        return {"provider": "unknown", "slot": "unknown", "model": "unknown"}
     
     def get_provider_stats(self) -> Dict[str, Any]:
-        """Get statistics about providers"""
-        stats = {}
+        """Get statistics about providers and slots"""
+        stats = {
+            "total_slots": len(self.all_slots),
+            "available_slots": len(self.get_available_slots()),
+            "total_models": self._count_total_models(),
+            "next_slot_idx": self.next_slot_idx,
+            "providers": {}
+        }
+        
         for name, provider in self.providers.items():
-            stats[name] = {
-                "status": provider.status.value,
-                "models": provider.config.models,
+            slot_info = []
+            for slot in provider.config.slots:
+                slot_info.append({
+                    "slot_id": slot.slot_id,
+                    "models": slot.models,
+                    "status": slot.status.value,
+                    "has_key": slot.get_api_key() is not None,
+                    "last_model_idx": slot.last_model_idx,
+                    "error_count": slot.error_count
+                })
+            
+            stats["providers"][name] = {
                 "priority": provider.config.priority,
-                "error_count": provider.error_count,
+                "slots": slot_info,
                 "supports_function_calling": provider.config.supports_function_calling
             }
+        
         return stats
+    
+    def get_slot_rotation_summary(self) -> str:
+        """Get human-readable summary of slot rotation status"""
+        available = self.get_available_slots()
+        lines = [f"Slot Pool: {len(available)}/{len(self.all_slots)} available, next_idx={self.next_slot_idx}"]
+        
+        for i, (provider_name, slot) in enumerate(available):
+            marker = " -> " if i == (self.next_slot_idx % len(available)) else "    "
+            model_idx = slot.last_model_idx % len(slot.models)
+            lines.append(f"{marker}[{i}] {provider_name}/{slot.slot_id}: {slot.models[model_idx]} (idx {model_idx}/{len(slot.models)})")
+        
+        return "\n".join(lines)
 
 
 llm_manager = LLMProviderManager()

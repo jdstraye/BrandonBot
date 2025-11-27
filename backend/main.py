@@ -94,8 +94,10 @@ async def startup_event():
         logger.warning("Weaviate not available - RAG features limited")
     
     provider_stats = agent_orchestrator.llm_manager.get_provider_stats()
-    available_providers = [name for name, stats in provider_stats.items() if stats["status"] == "available"]
-    logger.info(f"LLM Providers available: {available_providers}")
+    total_slots = provider_stats.get("total_slots", 0)
+    available_slots = provider_stats.get("available_slots", 0)
+    total_models = provider_stats.get("total_models", 0)
+    logger.info(f"LLM Slots: {available_slots}/{total_slots} available, {total_models} unique models")
     
     logger.info("BrandonBot ready with multi-provider LLM support")
 
@@ -141,19 +143,28 @@ async def health_check():
         weaviate_status = weaviate_manager.client is not None
     
     provider_stats = agent_orchestrator.llm_manager.get_provider_stats()
-    available_providers = [name for name, stats in provider_stats.items() if stats["status"] == "available"]
+    available_slots = provider_stats.get("available_slots", 0)
+    total_slots = provider_stats.get("total_slots", 0)
+    total_models = provider_stats.get("total_models", 0)
+    
+    providers_info = provider_stats.get("providers", {})
+    available_providers = [name for name, info in providers_info.items() 
+                          if any(slot.get("status") == "available" for slot in info.get("slots", []))]
     
     return {
-        "status": "healthy" if available_providers else "degraded",
-        "architecture": "llm_first_multi_provider",
+        "status": "healthy" if available_slots > 0 else "degraded",
+        "architecture": "llm_first_slot_based",
         "services": {
             "weaviate_embedded": "up" if weaviate_status else "down",
+            "llm_slots": f"{available_slots}/{total_slots}",
+            "llm_models": total_models,
             "llm_providers": available_providers,
             "database": "up",
             "agent_orchestrator": "up"
         },
+        "slot_summary": agent_orchestrator.llm_manager.get_slot_rotation_summary(),
         "provider_stats": provider_stats,
-        "note": f"Multi-provider LLM architecture with {len(available_providers)} providers available"
+        "note": f"Slot-based rotation with {available_slots} slots managing {total_models} models"
     }
 
 @app.post("/api/query")
