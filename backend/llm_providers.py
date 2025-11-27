@@ -1,8 +1,11 @@
 """
 Unified LLM Provider Manager
 
-Handles multiple LLM providers with failover, model rotation, and tracking.
-Design: One model per conversation, switch only on rate limit/failure.
+Handles multiple LLM providers with slot-based rotation and failover.
+Design:
+- API key slots rotate across conversations (primary rotation)
+- Models within each slot rotate when that slot is used (secondary rotation)
+- One model per conversation, switch only on rate limit/failure
 """
 
 import logging
@@ -18,11 +21,65 @@ from enum import Enum
 
 logger = logging.getLogger(__name__)
 
-class ProviderStatus(Enum):
+class SlotStatus(Enum):
     AVAILABLE = "available"
     RATE_LIMITED = "rate_limited"
     ERROR = "error"
     NO_API_KEY = "no_api_key"
+
+@dataclass
+class APIKeySlot:
+    """
+    Represents a single API key slot with its associated models.
+    For most providers: 1 slot with multiple models.
+    For Nvidia: 5 slots, each with 1 model (unique key per model).
+    """
+    slot_id: str
+    api_key_env: str
+    models: List[str]
+    last_model_idx: int = 0
+    status: SlotStatus = SlotStatus.AVAILABLE
+    error_count: int = 0
+    last_error_time: Optional[float] = None
+    
+    def __post_init__(self):
+        api_key = os.getenv(self.api_key_env)
+        if not api_key:
+            self.status = SlotStatus.NO_API_KEY
+    
+    def get_api_key(self) -> Optional[str]:
+        return os.getenv(self.api_key_env)
+    
+    def get_next_model(self) -> str:
+        """Get the next model in rotation and advance the index."""
+        model = self.models[self.last_model_idx]
+        self.last_model_idx = (self.last_model_idx + 1) % len(self.models)
+        return model
+    
+    def peek_next_model(self) -> str:
+        """Peek at the next model without advancing."""
+        return self.models[self.last_model_idx]
+    
+    def mark_rate_limited(self):
+        self.status = SlotStatus.RATE_LIMITED
+        self.last_error_time = time.time()
+        self.error_count += 1
+        logger.warning(f"Slot {self.slot_id} marked as rate limited")
+    
+    def mark_error(self, error: str):
+        self.status = SlotStatus.ERROR
+        self.last_error_time = time.time()
+        self.error_count += 1
+        logger.error(f"Slot {self.slot_id} error: {error}")
+    
+    def reset_if_recovered(self, cooldown_seconds: int = 60):
+        if self.last_error_time and time.time() - self.last_error_time > cooldown_seconds:
+            self.status = SlotStatus.AVAILABLE
+            logger.info(f"Slot {self.slot_id} recovered after cooldown")
+    
+    def is_available(self) -> bool:
+        self.reset_if_recovered()
+        return self.status == SlotStatus.AVAILABLE
 
 @dataclass
 class LLMResponse:
@@ -37,53 +94,84 @@ class LLMResponse:
 
 @dataclass
 class ProviderConfig:
-    """Configuration for a provider"""
+    """Configuration for a provider with slot-based rotation."""
     name: str
-    models: List[str]
-    api_key_env: str
+    slots: List[APIKeySlot] = field(default_factory=list)
     priority: int = 50
     supports_function_calling: bool = True
+    next_slot_idx: int = 0
+    
+    def __post_init__(self):
+        if self.slots:
+            self.next_slot_idx = random.randint(0, len(self.slots) - 1)
+    
+    def get_available_slots(self) -> List[APIKeySlot]:
+        return [s for s in self.slots if s.is_available()]
+    
+    def get_next_slot(self) -> Optional[APIKeySlot]:
+        """Get the next available slot in rotation."""
+        if not self.slots:
+            return None
+        
+        available = self.get_available_slots()
+        if not available:
+            return None
+        
+        for _ in range(len(self.slots)):
+            slot = self.slots[self.next_slot_idx]
+            self.next_slot_idx = (self.next_slot_idx + 1) % len(self.slots)
+            if slot.is_available():
+                return slot
+        
+        return available[0] if available else None
+    
+    def get_all_models(self) -> List[str]:
+        """Get all models across all slots."""
+        models = []
+        for slot in self.slots:
+            models.extend(slot.models)
+        return models
+    
+    def is_available(self) -> bool:
+        return len(self.get_available_slots()) > 0
 
 class BaseLLMProvider(ABC):
-    """Abstract base class for all LLM providers"""
+    """Abstract base class for all LLM providers with slot-based rotation."""
     
     def __init__(self, config: ProviderConfig):
         self.config = config
-        self.api_key = os.getenv(config.api_key_env)
-        self.status = ProviderStatus.AVAILABLE if self.api_key else ProviderStatus.NO_API_KEY
-        self.last_error_time: Optional[float] = None
-        self.error_count = 0
+        self.current_slot: Optional[APIKeySlot] = None
         self.current_model: Optional[str] = None
     
-    def select_model(self) -> str:
-        """Randomly select a model from available models"""
-        self.current_model = random.choice(self.config.models)
-        return self.current_model
+    def select_slot_and_model(self) -> Tuple[Optional[APIKeySlot], Optional[str]]:
+        """
+        Select the next available slot and get the next model from it.
+        Advances both slot index and model index.
+        """
+        slot = self.config.get_next_slot()
+        if not slot:
+            return None, None
+        
+        model = slot.get_next_model()
+        self.current_slot = slot
+        self.current_model = model
+        return slot, model
     
-    def mark_rate_limited(self):
-        """Mark provider as rate limited"""
-        self.status = ProviderStatus.RATE_LIMITED
-        self.last_error_time = time.time()
-        self.error_count += 1
-        logger.warning(f"Provider {self.config.name} marked as rate limited")
+    def set_slot_and_model(self, slot: APIKeySlot, model: str):
+        """Set a specific slot and model (used for session persistence)."""
+        self.current_slot = slot
+        self.current_model = model
     
-    def mark_error(self, error: str):
-        """Mark provider as having an error"""
-        self.status = ProviderStatus.ERROR
-        self.last_error_time = time.time()
-        self.error_count += 1
-        logger.error(f"Provider {self.config.name} error: {error}")
-    
-    def reset_if_recovered(self, cooldown_seconds: int = 60):
-        """Reset status if cooldown has passed"""
-        if self.last_error_time and time.time() - self.last_error_time > cooldown_seconds:
-            self.status = ProviderStatus.AVAILABLE
-            logger.info(f"Provider {self.config.name} recovered after cooldown")
+    def get_slot_by_id(self, slot_id: str) -> Optional[APIKeySlot]:
+        """Find a slot by its ID."""
+        for slot in self.config.slots:
+            if slot.slot_id == slot_id:
+                return slot
+        return None
     
     def is_available(self) -> bool:
-        """Check if provider is available"""
-        self.reset_if_recovered()
-        return self.status == ProviderStatus.AVAILABLE
+        """Check if provider has any available slots."""
+        return self.config.is_available()
     
     @abstractmethod
     async def generate_with_tools(self, messages: List[Dict], tools: List[Dict],
@@ -93,13 +181,19 @@ class BaseLLMProvider(ABC):
 
 
 class GeminiProvider(BaseLLMProvider):
-    """Google Gemini provider"""
+    """Google Gemini provider - 1 slot with 2 models"""
     
     def __init__(self):
+        slots = [
+            APIKeySlot(
+                slot_id="gemini_main",
+                api_key_env="GOOGLE_API_KEY",
+                models=["gemini-2.0-flash", "gemini-2.5-flash"]
+            )
+        ]
         config = ProviderConfig(
             name="gemini",
-            models=["gemini-2.0-flash", "gemini-2.5-flash"],
-            api_key_env="GOOGLE_API_KEY",
+            slots=slots,
             priority=80,
             supports_function_calling=True
         )
@@ -110,7 +204,11 @@ class GeminiProvider(BaseLLMProvider):
                                    system_prompt: str) -> LLMResponse:
         start_time = time.time()
         
-        if not self.api_key:
+        if not self.current_slot:
+            return LLMResponse(error="No slot selected", provider=self.config.name)
+        
+        api_key = self.current_slot.get_api_key()
+        if not api_key:
             return LLMResponse(error="No API key", provider=self.config.name)
         
         try:
@@ -118,10 +216,12 @@ class GeminiProvider(BaseLLMProvider):
             from google.generativeai.types import FunctionDeclaration, Tool
             
             if not self._configured:
-                genai.configure(api_key=self.api_key)
+                genai.configure(api_key=api_key)
                 self._configured = True
             
-            model_name = self.current_model or self.select_model()
+            model_name = self.current_model
+            if not model_name:
+                return LLMResponse(error="No model selected", provider=self.config.name)
             logger.info(f"Gemini using model: {model_name}")
             
             function_declarations = []
@@ -215,30 +315,32 @@ class GeminiProvider(BaseLLMProvider):
             
         except Exception as e:
             error_str = str(e).lower()
-            if "rate" in error_str or "quota" in error_str or "429" in error_str:
-                self.mark_rate_limited()
-            else:
-                self.mark_error(str(e))
+            if self.current_slot:
+                if "rate" in error_str or "quota" in error_str or "429" in error_str:
+                    self.current_slot.mark_rate_limited()
+                else:
+                    self.current_slot.mark_error(str(e))
             return LLMResponse(error=str(e), provider=self.config.name, 
                              latency_ms=int((time.time() - start_time) * 1000))
 
 
 class OpenAICompatibleProvider(BaseLLMProvider):
-    """Base class for OpenAI-compatible API providers"""
+    """Base class for OpenAI-compatible API providers with slot support"""
     
     def __init__(self, config: ProviderConfig, base_url: str):
         super().__init__(config)
         self.base_url = base_url
-        self.client = None
+        self._clients: Dict[str, Any] = {}
     
-    def _get_client(self):
-        if not self.client:
+    def _get_client(self, api_key: str):
+        """Get or create client for a specific API key."""
+        if api_key not in self._clients:
             from openai import AsyncOpenAI
-            self.client = AsyncOpenAI(
-                api_key=self.api_key,
+            self._clients[api_key] = AsyncOpenAI(
+                api_key=api_key,
                 base_url=self.base_url
             )
-        return self.client
+        return self._clients[api_key]
     
     def _convert_tools_to_openai_format(self, tools: List[Dict]) -> List[Dict]:
         """Convert our tool format to OpenAI format"""
@@ -258,12 +360,19 @@ class OpenAICompatibleProvider(BaseLLMProvider):
                                    system_prompt: str) -> LLMResponse:
         start_time = time.time()
         
-        if not self.api_key:
+        if not self.current_slot:
+            return LLMResponse(error="No slot selected", provider=self.config.name)
+        
+        api_key = self.current_slot.get_api_key()
+        if not api_key:
             return LLMResponse(error="No API key", provider=self.config.name)
         
+        model_name = self.current_model
+        if not model_name:
+            return LLMResponse(error="No model selected", provider=self.config.name)
+        
         try:
-            client = self._get_client()
-            model_name = self.current_model or self.select_model()
+            client = self._get_client(api_key)
             logger.info(f"{self.config.name} using model: {model_name}")
             
             openai_messages = [{"role": "system", "content": system_prompt}]
@@ -311,22 +420,29 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             
         except Exception as e:
             error_str = str(e).lower()
-            if "rate" in error_str or "quota" in error_str or "429" in error_str:
-                self.mark_rate_limited()
-            else:
-                self.mark_error(str(e))
+            if self.current_slot:
+                if "rate" in error_str or "quota" in error_str or "429" in error_str:
+                    self.current_slot.mark_rate_limited()
+                else:
+                    self.current_slot.mark_error(str(e))
             return LLMResponse(error=str(e), provider=self.config.name,
                              latency_ms=int((time.time() - start_time) * 1000))
 
 
 class MistralProvider(OpenAICompatibleProvider):
-    """Mistral AI provider"""
+    """Mistral AI provider - 1 slot with 4 models"""
     
     def __init__(self):
+        slots = [
+            APIKeySlot(
+                slot_id="mistral_main",
+                api_key_env="MISTRAL_API_KEY",
+                models=["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest", "pixtral-12b-2409"]
+            )
+        ]
         config = ProviderConfig(
             name="mistral",
-            models=["mistral-small-latest", "mistral-large-latest", "pixtral-12b-latest"],
-            api_key_env="MISTRAL_API_KEY",
+            slots=slots,
             priority=60,
             supports_function_calling=True
         )
@@ -334,35 +450,48 @@ class MistralProvider(OpenAICompatibleProvider):
 
 
 class CohereProvider(BaseLLMProvider):
-    """Cohere provider with native API"""
+    """Cohere provider - 1 slot with 3 models"""
     
     def __init__(self):
+        slots = [
+            APIKeySlot(
+                slot_id="cohere_main",
+                api_key_env="COHERE_API_KEY",
+                models=["command-r-plus", "command-r", "command-r7b-12-2024"]
+            )
+        ]
         config = ProviderConfig(
             name="cohere",
-            models=["command-r-plus", "command-r", "command-a-03-2025"],
-            api_key_env="COHERE_API_KEY",
+            slots=slots,
             priority=55,
             supports_function_calling=True
         )
         super().__init__(config)
-        self.client = None
+        self._clients: Dict[str, Any] = {}
     
-    def _get_client(self):
-        if not self.client:
+    def _get_client(self, api_key: str):
+        if api_key not in self._clients:
             import cohere
-            self.client = cohere.ClientV2(self.api_key)
-        return self.client
+            self._clients[api_key] = cohere.ClientV2(api_key)
+        return self._clients[api_key]
     
     async def generate_with_tools(self, messages: List[Dict], tools: List[Dict],
                                    system_prompt: str) -> LLMResponse:
         start_time = time.time()
         
-        if not self.api_key:
+        if not self.current_slot:
+            return LLMResponse(error="No slot selected", provider=self.config.name)
+        
+        api_key = self.current_slot.get_api_key()
+        if not api_key:
             return LLMResponse(error="No API key", provider=self.config.name)
         
+        model_name = self.current_model
+        if not model_name:
+            return LLMResponse(error="No model selected", provider=self.config.name)
+        
         try:
-            client = self._get_client()
-            model_name = self.current_model or self.select_model()
+            client = self._get_client(api_key)
             logger.info(f"Cohere using model: {model_name}")
             
             cohere_messages = [{"role": "system", "content": system_prompt}]
@@ -421,22 +550,29 @@ class CohereProvider(BaseLLMProvider):
             
         except Exception as e:
             error_str = str(e).lower()
-            if "rate" in error_str or "quota" in error_str or "429" in error_str:
-                self.mark_rate_limited()
-            else:
-                self.mark_error(str(e))
+            if self.current_slot:
+                if "rate" in error_str or "quota" in error_str or "429" in error_str:
+                    self.current_slot.mark_rate_limited()
+                else:
+                    self.current_slot.mark_error(str(e))
             return LLMResponse(error=str(e), provider=self.config.name,
                              latency_ms=int((time.time() - start_time) * 1000))
 
 
 class HuggingFaceProvider(OpenAICompatibleProvider):
-    """HuggingFace Inference provider"""
+    """HuggingFace Inference provider - 1 slot with Qwen3 and DeepSeek-V3"""
     
     def __init__(self):
+        slots = [
+            APIKeySlot(
+                slot_id="huggingface_main",
+                api_key_env="HUGGINGFACE_API_KEY",
+                models=["Qwen/Qwen3-8B-Instruct", "deepseek-ai/DeepSeek-V3-0324"]
+            )
+        ]
         config = ProviderConfig(
             name="huggingface",
-            models=["meta-llama/Llama-3.3-70B-Instruct", "deepseek-ai/DeepSeek-V3-0324"],
-            api_key_env="HUGGINGFACE_API_KEY",
+            slots=slots,
             priority=50,
             supports_function_calling=True
         )
@@ -444,13 +580,19 @@ class HuggingFaceProvider(OpenAICompatibleProvider):
 
 
 class ReplicateProvider(BaseLLMProvider):
-    """Replicate provider for KimiK2"""
+    """Replicate provider - 1 slot with Kimi-K2"""
     
     def __init__(self):
+        slots = [
+            APIKeySlot(
+                slot_id="replicate_main",
+                api_key_env="REPLICATE_API_TOKEN",
+                models=["moonshotai/kimi-k2-instruct"]
+            )
+        ]
         config = ProviderConfig(
             name="replicate",
-            models=["moonshotai/kimi-k2-instruct"],
-            api_key_env="REPLICATE_API_TOKEN",
+            slots=slots,
             priority=40,
             supports_function_calling=False
         )
@@ -460,13 +602,21 @@ class ReplicateProvider(BaseLLMProvider):
                                    system_prompt: str) -> LLMResponse:
         start_time = time.time()
         
-        if not self.api_key:
+        if not self.current_slot:
+            return LLMResponse(error="No slot selected", provider=self.config.name)
+        
+        api_key = self.current_slot.get_api_key()
+        if not api_key:
             return LLMResponse(error="No API key", provider=self.config.name)
+        
+        model_name = self.current_model
+        if not model_name:
+            return LLMResponse(error="No model selected", provider=self.config.name)
         
         try:
             import replicate
+            os.environ["REPLICATE_API_TOKEN"] = api_key
             
-            model_name = self.current_model or self.select_model()
             logger.info(f"Replicate using model: {model_name}")
             
             prompt_parts = [f"System: {system_prompt}"]
@@ -499,22 +649,29 @@ class ReplicateProvider(BaseLLMProvider):
             
         except Exception as e:
             error_str = str(e).lower()
-            if "rate" in error_str or "limit" in error_str:
-                self.mark_rate_limited()
-            else:
-                self.mark_error(str(e))
+            if self.current_slot:
+                if "rate" in error_str or "limit" in error_str:
+                    self.current_slot.mark_rate_limited()
+                else:
+                    self.current_slot.mark_error(str(e))
             return LLMResponse(error=str(e), provider=self.config.name,
                              latency_ms=int((time.time() - start_time) * 1000))
 
 
 class ZaiProvider(OpenAICompatibleProvider):
-    """Z.ai (Zhipu) provider"""
+    """Z.ai (Zhipu) provider - 1 slot with 3 GLM models"""
     
     def __init__(self):
+        slots = [
+            APIKeySlot(
+                slot_id="zai_main",
+                api_key_env="Z_API_KEY",
+                models=["glm-4.6", "glm-4.5", "glm-4.5-air"]
+            )
+        ]
         config = ProviderConfig(
             name="zai",
-            models=["glm-4.5", "glm-4.5-air", "glm-4.6"],
-            api_key_env="Z_API_KEY",
+            slots=slots,
             priority=85,
             supports_function_calling=True
         )
@@ -522,51 +679,65 @@ class ZaiProvider(OpenAICompatibleProvider):
 
 
 class NvidiaProvider(BaseLLMProvider):
-    """Nvidia NIM provider - handles multiple API keys for different models"""
+    """
+    Nvidia NIM provider - 5 separate slots, each with 1 model and its own API key.
+    Unlike other providers, Nvidia requires a unique API key per model.
+    """
     
     def __init__(self):
+        slots = [
+            APIKeySlot(
+                slot_id="nvidia_llama4_maverick",
+                api_key_env="NVIDIA_LLAMA4_128e",
+                models=["meta/llama-4-maverick-17b-128e-instruct"]
+            ),
+            APIKeySlot(
+                slot_id="nvidia_llama4_scout",
+                api_key_env="NVIDIA_LLAMA4_16e",
+                models=["meta/llama-4-scout-17b-16e-instruct"]
+            ),
+            APIKeySlot(
+                slot_id="nvidia_deepseek_r1",
+                api_key_env="NVIDIA_DEEPSEEK_r1_API_KEY",
+                models=["deepseek-ai/deepseek-r1"]
+            ),
+            APIKeySlot(
+                slot_id="nvidia_llama33",
+                api_key_env="NVIDIA_LLAMA33_API_KEY",
+                models=["meta/llama-3.3-70b-instruct"]
+            ),
+            APIKeySlot(
+                slot_id="nvidia_qwen25",
+                api_key_env="NVIDIA_QWEN25_API_KEY",
+                models=["qwen/qwen2.5-coder-32b-instruct"]
+            ),
+        ]
+        
         config = ProviderConfig(
             name="nvidia",
-            models=[
-                "meta/llama-4-maverick-17b-128e-instruct",
-                "meta/llama-4-scout-17b-16e-instruct",
-                "deepseek-ai/deepseek-r1",
-                "meta/llama-3.3-70b-instruct",
-                "qwen/qwen2.5-coder-32b-instruct"
-            ],
-            api_key_env="NVIDIA_LLAMA4_128e",
+            slots=slots,
             priority=90,
             supports_function_calling=True
         )
         super().__init__(config)
-        
-        self.model_to_api_key = {
-            "meta/llama-4-maverick-17b-128e-instruct": os.getenv("NVIDIA_LLAMA4_128e"),
-            "meta/llama-4-scout-17b-16e-instruct": os.getenv("NVIDIA_LLAMA4_16e"),
-            "deepseek-ai/deepseek-r1": os.getenv("NVIDIA_DEEPSEEK_r1_API_KEY"),
-            "meta/llama-3.3-70b-instruct": os.getenv("NVIDIA_LLAMA33_API_KEY"),
-            "qwen/qwen2.5-coder-32b-instruct": os.getenv("NVIDIA_QWEN25_API_KEY")
-        }
-        
-        available_models = [m for m, k in self.model_to_api_key.items() if k]
-        if available_models:
-            self.config.models = available_models
-            self.status = ProviderStatus.AVAILABLE
-        else:
-            self.status = ProviderStatus.NO_API_KEY
     
     async def generate_with_tools(self, messages: List[Dict], tools: List[Dict],
                                    system_prompt: str) -> LLMResponse:
         start_time = time.time()
         
-        model_name = self.current_model or self.select_model()
-        api_key = self.model_to_api_key.get(model_name)
+        if not self.current_slot:
+            return LLMResponse(error="No slot selected", provider=self.config.name)
         
+        api_key = self.current_slot.get_api_key()
         if not api_key:
-            return LLMResponse(error=f"No API key for model {model_name}", provider=self.config.name)
+            return LLMResponse(error="No API key", provider=self.config.name)
+        
+        model_name = self.current_model
+        if not model_name:
+            return LLMResponse(error="No model selected", provider=self.config.name)
         
         try:
-            logger.info(f"Nvidia using model: {model_name}")
+            logger.info(f"Nvidia using model: {model_name} (slot: {self.current_slot.slot_id})")
             
             openai_messages = [{"role": "system", "content": system_prompt}]
             for msg in messages:
