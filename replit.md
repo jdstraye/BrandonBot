@@ -123,11 +123,12 @@ frontend/
 ```
 
 ## Recent Changes (Nov 27, 2025)
-- Completed slot-based round-robin architecture: 10 API key slots across 6 providers, managing 18 unique models
+- Completed slot-based round-robin architecture: 9 API key slots across 5 providers, managing 17 unique models
 - Removed Z.ai provider (no free tier available)
+- Removed Replicate provider (no free tier available)
 - Fixed Nvidia Maverick with correct API key (NVIDIA_LLAMA4_128e)
-- Added Kimi K2 to HuggingFace slot as backup (moonshotai/Kimi-K2-Instruct)
-- 9/10 slots operational (90% success rate) - only Replicate fails due to account credits
+- Added Kimi K2 to HuggingFace slot (moonshotai/Kimi-K2-Instruct)
+- All 9/9 slots operational (100% success rate)
 - Session-sticky model selection with automatic failover on rate limits/errors
 
 ## Historical Changes (Nov 26, 2025)

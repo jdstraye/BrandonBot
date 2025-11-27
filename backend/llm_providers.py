@@ -580,85 +580,6 @@ class HuggingFaceProvider(OpenAICompatibleProvider):
         super().__init__(config, "https://router.huggingface.co/v1")
 
 
-class ReplicateProvider(BaseLLMProvider):
-    """Replicate provider - 1 slot with Kimi-K2"""
-    
-    def __init__(self):
-        slots = [
-            APIKeySlot(
-                slot_id="replicate_main",
-                api_key_env="REPLICATE_API_TOKEN",
-                models=["moonshotai/kimi-k2-instruct"]
-            )
-        ]
-        config = ProviderConfig(
-            name="replicate",
-            slots=slots,
-            priority=40,
-            supports_function_calling=False
-        )
-        super().__init__(config)
-    
-    async def generate_with_tools(self, messages: List[Dict], tools: List[Dict],
-                                   system_prompt: str) -> LLMResponse:
-        start_time = time.time()
-        
-        if not self.current_slot:
-            return LLMResponse(error="No slot selected", provider=self.config.name)
-        
-        api_key = self.current_slot.get_api_key()
-        if not api_key:
-            return LLMResponse(error="No API key", provider=self.config.name)
-        
-        model_name = self.current_model
-        if not model_name:
-            return LLMResponse(error="No model selected", provider=self.config.name)
-        
-        try:
-            import replicate
-            os.environ["REPLICATE_API_TOKEN"] = api_key
-            
-            logger.info(f"Replicate using model: {model_name}")
-            
-            prompt_parts = [f"System: {system_prompt}"]
-            for msg in messages:
-                role = msg.get("role", "user")
-                content = msg.get("content", "")
-                prompt_parts.append(f"{role.capitalize()}: {content}")
-            
-            full_prompt = "\n\n".join(prompt_parts) + "\n\nAssistant:"
-            
-            output = replicate.run(
-                model_name,
-                input={
-                    "prompt": full_prompt,
-                    "max_tokens": 2048,
-                    "temperature": 0.7
-                }
-            )
-            
-            response_text = "".join(output) if hasattr(output, '__iter__') else str(output)
-            
-            latency_ms = int((time.time() - start_time) * 1000)
-            
-            return LLMResponse(
-                text=response_text.strip(),
-                model=model_name,
-                provider=self.config.name,
-                latency_ms=latency_ms
-            )
-            
-        except Exception as e:
-            error_str = str(e).lower()
-            if self.current_slot:
-                if "rate" in error_str or "limit" in error_str:
-                    self.current_slot.mark_rate_limited()
-                else:
-                    self.current_slot.mark_error(str(e))
-            return LLMResponse(error=str(e), provider=self.config.name,
-                             latency_ms=int((time.time() - start_time) * 1000))
-
-
 class NvidiaProvider(BaseLLMProvider):
     """
     Nvidia NIM provider - 5 separate slots, each with 1 model and its own API key.
@@ -802,7 +723,7 @@ class LLMProviderManager:
     Manages multiple LLM providers with slot-based round-robin selection.
     
     Design:
-    - 10 API key slots across 6 providers, managing 17+ unique models
+    - 9 API key slots across 5 providers, managing 17 unique models
     - Round-robin slot selection (random start, sequential advance)
     - Within each slot, rotate through models on subsequent calls
     - Session-sticky: same slot+model for entire conversation
@@ -828,7 +749,6 @@ class LLMProviderManager:
             MistralProvider,
             CohereProvider,
             HuggingFaceProvider,
-            ReplicateProvider,
         ]
         
         for cls in provider_classes:

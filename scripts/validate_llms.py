@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 LLM Validation Script for BrandonBot
-Tests all models across 10 API key slots (6 providers) to verify they work correctly.
+Tests all models across 9 API key slots (5 providers) to verify they work correctly.
 
 Usage:
     python scripts/validate_llms.py [--quick] [--slot SLOT_ID] [--model MODEL_NAME]
 
 Options:
-    --quick     Only test the first model from each slot (10 tests instead of all models)
+    --quick     Only test the first model from each slot (9 tests instead of all models)
     --slot      Test only a specific slot by ID
     --model     Test only a specific model by name
 """
@@ -31,7 +31,6 @@ from llm_providers import (
     MistralProvider, 
     CohereProvider,
     HuggingFaceProvider,
-    ReplicateProvider,
     NvidiaProvider
 )
 
@@ -173,7 +172,6 @@ def create_provider_instances() -> Dict[str, Any]:
         "mistral": MistralProvider(),
         "cohere": CohereProvider(),
         "huggingface": HuggingFaceProvider(),
-        "replicate": ReplicateProvider(),
     }
 
 
