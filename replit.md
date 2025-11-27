@@ -8,17 +8,15 @@ I prefer iterative development with clear, concise communication. When making ch
 
 ## System Architecture
 
-### LLM-First Multi-Provider Architecture (Nov 26, 2025)
-The system now uses an LLM-first agentic architecture with 7 commercial LLM providers:
+### LLM-First Multi-Provider Architecture (Nov 27, 2025)
+The system uses an LLM-first agentic architecture with 5 commercial LLM providers (free tiers):
 
 **Provider Priority (highest to lowest):**
-1. Nvidia NIM (90) - 5 models (Llama-4, DeepSeek-R1, Qwen)
-2. Z.ai (85) - 3 models (GLM-4.5 variants)
-3. Google Gemini (80) - 2 models (2.0-flash, 2.5-flash)
-4. Mistral AI (60) - 3 models (small, large, pixtral)
-5. Cohere (55) - 3 models (command-r variants)
-6. HuggingFace (50) - 2 models (Llama-3.3, DeepSeek-V3)
-7. Replicate (40) - 1 model (Kimi-K2)
+1. Nvidia NIM (90) - 5 models (Llama-4-Maverick, Llama-4-Scout, DeepSeek-R1, Llama-3.3, Qwen2.5)
+2. Google Gemini (80) - 2 models (2.0-flash, 2.5-flash)
+3. Mistral AI (60) - 4 models (large, medium, small, pixtral)
+4. Cohere (55) - 3 models (command-a-03-2025, command-r-plus, command-r)
+5. HuggingFace (50) - 3 models (Qwen2.5-72B, DeepSeek-V3, Kimi-K2)
 
 **Key Features:**
 - **Session-Sticky Model Selection**: One model per conversation, switches only on failure
