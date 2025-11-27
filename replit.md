@@ -123,10 +123,11 @@ frontend/
 ```
 
 ## Recent Changes (Nov 27, 2025)
-- Completed slot-based round-robin architecture: 11 API key slots managing 20 unique models
-- Fixed model configurations: Cohere (command-a-03-2025), HuggingFace (Qwen2.5-72B), Gemini tools handling
-- 8/11 slots operational (72% success rate) - 3 failures are API key/credit issues, not code bugs
-- Added validation script: scripts/validate_llms.py for testing all model configurations
+- Completed slot-based round-robin architecture: 10 API key slots across 6 providers, managing 18 unique models
+- Removed Z.ai provider (no free tier available)
+- Fixed Nvidia Maverick with correct API key (NVIDIA_LLAMA4_128e)
+- Added Kimi K2 to HuggingFace slot as backup (moonshotai/Kimi-K2-Instruct)
+- 9/10 slots operational (90% success rate) - only Replicate fails due to account credits
 - Session-sticky model selection with automatic failover on rate limits/errors
 
 ## Historical Changes (Nov 26, 2025)
