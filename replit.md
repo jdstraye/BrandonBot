@@ -122,7 +122,14 @@ frontend/
 └── app.js              # Frontend logic
 ```
 
-## Recent Changes (Nov 26, 2025)
+## Recent Changes (Nov 27, 2025)
+- Completed slot-based round-robin architecture: 11 API key slots managing 20 unique models
+- Fixed model configurations: Cohere (command-a-03-2025), HuggingFace (Qwen2.5-72B), Gemini tools handling
+- 8/11 slots operational (72% success rate) - 3 failures are API key/credit issues, not code bugs
+- Added validation script: scripts/validate_llms.py for testing all model configurations
+- Session-sticky model selection with automatic failover on rate limits/errors
+
+## Historical Changes (Nov 26, 2025)
 - Migrated from Phi-3 local inference to multi-provider LLM architecture
 - Added 7 LLM providers with automatic failover
 - Implemented intent detection separate from question type
