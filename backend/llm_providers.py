@@ -561,14 +561,14 @@ class CohereProvider(BaseLLMProvider):
 
 
 class HuggingFaceProvider(OpenAICompatibleProvider):
-    """HuggingFace Inference provider - 1 slot with Qwen2.5 and DeepSeek models"""
+    """HuggingFace Inference provider - 1 slot with Qwen2.5, DeepSeek, and Kimi K2 models"""
     
     def __init__(self):
         slots = [
             APIKeySlot(
                 slot_id="huggingface_main",
                 api_key_env="HUGGINGFACE_API_KEY",
-                models=["Qwen/Qwen2.5-72B-Instruct", "deepseek-ai/DeepSeek-V3-0324"]
+                models=["Qwen/Qwen2.5-72B-Instruct", "deepseek-ai/DeepSeek-V3-0324", "moonshotai/Kimi-K2-Instruct"]
             )
         ]
         config = ProviderConfig(
@@ -657,26 +657,6 @@ class ReplicateProvider(BaseLLMProvider):
                     self.current_slot.mark_error(str(e))
             return LLMResponse(error=str(e), provider=self.config.name,
                              latency_ms=int((time.time() - start_time) * 1000))
-
-
-class ZaiProvider(OpenAICompatibleProvider):
-    """Z.ai (Zhipu) provider - 1 slot with 3 GLM models"""
-    
-    def __init__(self):
-        slots = [
-            APIKeySlot(
-                slot_id="zai_main",
-                api_key_env="Z_API_KEY",
-                models=["glm-4.6", "glm-4.5", "glm-4.5-air"]
-            )
-        ]
-        config = ProviderConfig(
-            name="zai",
-            slots=slots,
-            priority=85,
-            supports_function_calling=True
-        )
-        super().__init__(config, "https://api.z.ai/api/paas/v4")
 
 
 class NvidiaProvider(BaseLLMProvider):
@@ -822,7 +802,7 @@ class LLMProviderManager:
     Manages multiple LLM providers with slot-based round-robin selection.
     
     Design:
-    - 11 API key slots across 7 providers, managing 20 unique models
+    - 10 API key slots across 6 providers, managing 17+ unique models
     - Round-robin slot selection (random start, sequential advance)
     - Within each slot, rotate through models on subsequent calls
     - Session-sticky: same slot+model for entire conversation
@@ -844,7 +824,6 @@ class LLMProviderManager:
         """Initialize all available providers"""
         provider_classes = [
             NvidiaProvider,
-            ZaiProvider,
             GeminiProvider,
             MistralProvider,
             CohereProvider,
