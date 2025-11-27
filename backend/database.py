@@ -3,7 +3,7 @@ import logging
 import os
 from datetime import datetime
 import json
-from typing import Optional
+from typing import Optional, List
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +127,50 @@ class DatabaseManager:
             await db.execute('''
                 CREATE INDEX IF NOT EXISTS idx_model_performance_provider 
                 ON model_performance(provider, model)
+            ''')
+            
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS volunteers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    email TEXT NOT NULL,
+                    phone TEXT,
+                    zip_code TEXT,
+                    interests TEXT,
+                    availability TEXT,
+                    timestamp TEXT NOT NULL,
+                    status TEXT DEFAULT 'new',
+                    email_sent BOOLEAN DEFAULT FALSE
+                )
+            ''')
+            
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS donation_interests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    email TEXT NOT NULL,
+                    phone TEXT,
+                    message TEXT,
+                    timestamp TEXT NOT NULL,
+                    status TEXT DEFAULT 'new',
+                    email_sent BOOLEAN DEFAULT FALSE
+                )
+            ''')
+            
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS compliance_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT,
+                    event_type TEXT NOT NULL,
+                    event_data TEXT,
+                    severity TEXT DEFAULT 'info',
+                    timestamp TEXT NOT NULL
+                )
+            ''')
+            
+            await db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_compliance_event_type 
+                ON compliance_log(event_type)
             ''')
             
             await db.commit()
@@ -352,6 +396,119 @@ class DatabaseManager:
                 "total_requests": total_requests,
                 "avg_response_time_ms": round(avg_duration, 2)
             }
+    
+    async def log_volunteer(self, name: str, email: str, phone: str = "",
+                            zip_code: str = "", interests: List[str] = None,
+                            availability: str = "flexible"):
+        """Log volunteer registration"""
+        async with aiosqlite.connect(self.db_path) as db:
+            now = datetime.utcnow().isoformat()
+            await db.execute('''
+                INSERT INTO volunteers 
+                (name, email, phone, zip_code, interests, availability, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (name, email, phone, zip_code, 
+                  json.dumps(interests) if interests else "[]",
+                  availability, now))
+            await db.commit()
+            logger.info(f"Volunteer logged: {name} ({email})")
+    
+    async def log_donation_interest(self, name: str, email: str, 
+                                     phone: str = "", message: str = ""):
+        """Log donation interest (NOT actual donation - for FEC compliance)"""
+        async with aiosqlite.connect(self.db_path) as db:
+            now = datetime.utcnow().isoformat()
+            await db.execute('''
+                INSERT INTO donation_interests 
+                (name, email, phone, message, timestamp)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (name, email, phone, message, now))
+            await db.commit()
+            logger.info(f"Donation interest logged: {name} ({email})")
+    
+    async def log_compliance_event(self, event_type: str, event_data: dict = None,
+                                    session_id: str = None, severity: str = "info"):
+        """Log compliance-related events for audit trail"""
+        async with aiosqlite.connect(self.db_path) as db:
+            now = datetime.utcnow().isoformat()
+            await db.execute('''
+                INSERT INTO compliance_log 
+                (session_id, event_type, event_data, severity, timestamp)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (session_id, event_type, 
+                  json.dumps(event_data) if event_data else None,
+                  severity, now))
+            await db.commit()
+    
+    async def get_volunteers(self, status: str = None, limit: int = 100) -> list:
+        """Get volunteer registrations"""
+        async with aiosqlite.connect(self.db_path) as db:
+            if status:
+                query = '''
+                    SELECT id, name, email, phone, zip_code, interests, 
+                           availability, timestamp, status
+                    FROM volunteers WHERE status = ?
+                    ORDER BY timestamp DESC LIMIT ?
+                '''
+                params = (status, limit)
+            else:
+                query = '''
+                    SELECT id, name, email, phone, zip_code, interests, 
+                           availability, timestamp, status
+                    FROM volunteers
+                    ORDER BY timestamp DESC LIMIT ?
+                '''
+                params = (limit,)
+            
+            async with db.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                return [
+                    {
+                        "id": row[0],
+                        "name": row[1],
+                        "email": row[2],
+                        "phone": row[3],
+                        "zip_code": row[4],
+                        "interests": json.loads(row[5]) if row[5] else [],
+                        "availability": row[6],
+                        "timestamp": row[7],
+                        "status": row[8]
+                    }
+                    for row in rows
+                ]
+    
+    async def get_donation_interests(self, status: str = None, limit: int = 100) -> list:
+        """Get donation interest registrations"""
+        async with aiosqlite.connect(self.db_path) as db:
+            if status:
+                query = '''
+                    SELECT id, name, email, phone, message, timestamp, status
+                    FROM donation_interests WHERE status = ?
+                    ORDER BY timestamp DESC LIMIT ?
+                '''
+                params = (status, limit)
+            else:
+                query = '''
+                    SELECT id, name, email, phone, message, timestamp, status
+                    FROM donation_interests
+                    ORDER BY timestamp DESC LIMIT ?
+                '''
+                params = (limit,)
+            
+            async with db.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                return [
+                    {
+                        "id": row[0],
+                        "name": row[1],
+                        "email": row[2],
+                        "phone": row[3],
+                        "message": row[4],
+                        "timestamp": row[5],
+                        "status": row[6]
+                    }
+                    for row in rows
+                ]
     
     async def close(self):
         pass

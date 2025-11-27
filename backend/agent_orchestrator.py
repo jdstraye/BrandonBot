@@ -28,6 +28,8 @@ from agent_tools import (
 from query_expansion import detect_question_type, get_topic_from_query
 from llm_providers import LLMProviderManager
 from intent_detector import intent_detector, UserIntent, escalation_detector
+from prequalifier import prequalifier, PrequalifierResult, EscalationLevel as PQEscalationLevel
+from output_validator import output_validator, fec_checker, ValidationResult, ValidationStatus
 
 logger = logging.getLogger(__name__)
 
@@ -750,7 +752,10 @@ Remember: You're here to inform voters and build support for Brandon's campaign.
 
     async def process_message(self, user_message: str, session_id: str) -> Tuple[str, Dict]:
         """
-        Process a user message through the full agent pipeline.
+        Process a user message through the full 3-stage agent pipeline:
+        1. Prequalifier: Intent detection, sentiment analysis, escalation detection
+        2. LLM Agent: Main reasoning with tool calling
+        3. Output Validator: De-escalation, FEC compliance, tone checking
         
         Args:
             user_message: The user's input
@@ -762,21 +767,40 @@ Remember: You're here to inform voters and build support for Brandon's campaign.
         request_id = str(uuid.uuid4())[:8]
         start_time = time.time()
         
+        session = self.session_manager.get_or_create_session(session_id)
+        history = [{"role": t.role.value, "content": t.content} for t in session.turns]
+        pq_result = prequalifier.analyze(user_message, session_id, history)
+        
+        if pq_result.blocked:
+            logger.warning(f"[{request_id}] Message blocked by prequalifier: {pq_result.block_reason}")
+            return (
+                "I'm not able to help with that particular request. Is there something else about Brandon's campaign I can help you with?",
+                {
+                    "request_id": request_id,
+                    "blocked": True,
+                    "block_reason": pq_result.block_reason,
+                    "duration_ms": int((time.time() - start_time) * 1000)
+                }
+            )
+        
         question_types = detect_question_type(user_message)
         topic = get_topic_from_query(user_message)
         
-        history = [{"role": t.role.value, "content": t.content} 
-                   for t in self.session_manager.get_or_create_session(session_id).turns]
         intent_result = intent_detector.detect(user_message, history)
         intent_context = intent_detector.get_intent_context(intent_result)
         
         escalation_result = escalation_detector.detect(user_message, history)
         
+        effective_escalation = max(
+            escalation_result.escalation_level if isinstance(escalation_result.escalation_level, int) else 0,
+            {"none": 0, "low": 1, "medium": 2, "high": 3}.get(pq_result.escalation_level.value, 0)
+        )
+        escalation_level_str = {0: "none", 1: "low", 2: "medium", 3: "high"}.get(effective_escalation, "none")
+        
         logger.info(f"[{request_id}] New request - session: {session_id}, types: {question_types}, "
                    f"topic: {topic}, intent: {intent_result.primary_intent.value}, "
-                   f"escalation: {escalation_result.escalation_level}")
-        
-        session = self.session_manager.get_or_create_session(session_id)
+                   f"escalation: {escalation_level_str}, pq_intent: {pq_result.primary_intent.value}, "
+                   f"ogilvy: {[c.value for c in pq_result.ogilvy_categories]}")
         
         session.add_turn(ConversationRole.USER, user_message)
         
@@ -793,10 +817,17 @@ Remember: You're here to inform voters and build support for Brandon's campaign.
             "question_types": question_types,
             "topic": topic,
             "intent": intent_result.primary_intent.value,
+            "pq_intent": pq_result.primary_intent.value,
+            "ogilvy_categories": [c.value for c in pq_result.ogilvy_categories],
             "needs_scripture": intent_result.needs_scripture,
-            "needs_callback": intent_result.needs_callback or escalation_result.needs_escalation,
-            "escalation_level": escalation_result.escalation_level,
-            "duration_ms": 0
+            "needs_callback": intent_result.needs_callback or escalation_result.needs_escalation or pq_result.needs_deescalation,
+            "escalation_level": escalation_level_str,
+            "needs_deescalation": pq_result.needs_deescalation,
+            "suggested_tone": pq_result.suggested_tone,
+            "frustration_triggers": pq_result.frustration_triggers,
+            "duration_ms": 0,
+            "validation_status": None,
+            "fec_issues": []
         }
         
         try:
@@ -895,6 +926,27 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
             
             if final_response is None:
                 final_response = "I apologize, but I'm having trouble completing this request. Would you like someone from the team to call you back to discuss this?"
+            
+            validation_result = output_validator.validate(
+                response=final_response,
+                escalation_level=escalation_level_str,
+                user_frustrated=pq_result.needs_deescalation,
+                include_ai_disclosure=False
+            )
+            
+            fec_compliant, fec_issues = fec_checker.check(final_response)
+            
+            if validation_result.status != ValidationStatus.PASSED:
+                logger.info(f"[{request_id}] Output validation modified response: {validation_result.modifications}")
+                final_response = validation_result.validated_response
+            
+            if not fec_compliant:
+                logger.warning(f"[{request_id}] FEC compliance issues detected: {fec_issues}")
+            
+            metadata["validation_status"] = validation_result.status.value
+            metadata["fec_issues"] = fec_issues
+            metadata["tone_issues"] = validation_result.tone_issues
+            metadata["validation_modifications"] = validation_result.modifications
             
             session.add_turn(ConversationRole.ASSISTANT, final_response)
             

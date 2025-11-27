@@ -29,6 +29,7 @@ except Exception as e:
 from database import DatabaseManager
 from web_search_service import WebSearchService
 from security import input_sanitizer, rate_limiter
+from email_service import email_service
 
 db_manager = DatabaseManager(database_path)
 web_search_service = WebSearchService()
@@ -79,6 +80,12 @@ class DonationRequest(BaseModel):
     employer: Optional[str] = None
     occupation: Optional[str] = None
     recurring: bool = False
+
+class DonateInterestRequest(BaseModel):
+    name: str
+    email: str
+    phone: Optional[str] = None
+    message: Optional[str] = None
 
 @app.on_event("startup")
 async def startup_event():
@@ -274,89 +281,96 @@ async def get_model_stats():
 
 @app.post("/api/volunteer")
 async def register_volunteer(request: VolunteerRequest):
-    """Direct endpoint for volunteer registration (bypasses LLM)"""
+    """
+    Volunteer registration endpoint.
+    Sends email notification to Brandon and logs to database.
+    """
     try:
-        if agent_orchestrator:
-            from agent_tools import ToolCall
-            tool_call = ToolCall(
-                name="register_volunteer",
-                arguments={
-                    "name": request.name,
-                    "email": request.email,
-                    "phone": request.phone or "",
-                    "zip_code": request.zip_code or "",
-                    "interests": request.interests or [],
-                    "availability": request.availability or "flexible"
-                }
-            )
-            result = await agent_orchestrator.tool_executor.execute(tool_call)
-            
-            if result.success:
-                return {"status": "success", **result.data}
-            else:
-                raise HTTPException(status_code=400, detail=result.error_message)
-        else:
-            return {
-                "status": "success",
-                "message": f"Thank you, {request.name}! Volunteer registration recorded.",
-                "note": "Legacy mode - CRM integration pending"
-            }
-    except HTTPException:
-        raise
+        email_result = await email_service.send_volunteer_notification(
+            name=request.name,
+            email=request.email,
+            phone=request.phone or "",
+            zip_code=request.zip_code or "",
+            interests=request.interests or [],
+            availability=request.availability or "flexible"
+        )
+        
+        await db_manager.log_volunteer(
+            name=request.name,
+            email=request.email,
+            phone=request.phone or "",
+            zip_code=request.zip_code or "",
+            interests=request.interests or [],
+            availability=request.availability or "flexible"
+        )
+        
+        logger.info(f"Volunteer registered: {request.name} ({request.email}), email sent: {email_result.success}")
+        
+        return {
+            "status": "success",
+            "message": f"Thank you, {request.name}! Your volunteer registration has been received. Someone from the team will be in touch soon.",
+            "email_sent": email_result.success
+        }
     except Exception as e:
         logger.error(f"Error registering volunteer: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/donate")
-async def make_donation(request: DonationRequest):
-    """Direct endpoint for donation processing (bypasses LLM)"""
+@app.post("/api/donate-interest")
+async def register_donation_interest(request: DonateInterestRequest):
+    """
+    Donation interest endpoint.
+    
+    IMPORTANT: This does NOT process donations. BrandonBot cannot and should not
+    process donations directly to maintain FEC compliance.
+    
+    This endpoint:
+    1. Captures the interested donor's contact info
+    2. Sends email notification to Brandon
+    3. Brandon follows up with secure, FEC-compliant donation methods
+    """
     try:
-        if agent_orchestrator:
-            from agent_tools import ToolCall
-            tool_call = ToolCall(
-                name="make_donation",
-                arguments={
-                    "amount": request.amount,
-                    "donor_name": request.donor_name,
-                    "donor_email": request.donor_email,
-                    "employer": request.employer or "",
-                    "occupation": request.occupation or "",
-                    "recurring": request.recurring
-                }
-            )
-            result = await agent_orchestrator.tool_executor.execute(tool_call)
-            
-            if result.success:
-                return {"status": "success", **result.data}
-            else:
-                raise HTTPException(status_code=400, detail=result.error_message)
-        else:
-            return {
-                "status": "success",
-                "message": f"Thank you for your ${request.amount} contribution!",
-                "note": "Legacy mode - payment processing pending"
-            }
-    except HTTPException:
-        raise
+        email_result = await email_service.send_donation_interest_notification(
+            name=request.name,
+            email=request.email,
+            phone=request.phone or "",
+            message=request.message or ""
+        )
+        
+        await db_manager.log_donation_interest(
+            name=request.name,
+            email=request.email,
+            phone=request.phone or "",
+            message=request.message or ""
+        )
+        
+        logger.info(f"Donation interest logged: {request.name} ({request.email}), email sent: {email_result.success}")
+        
+        return {
+            "status": "success",
+            "message": f"Thank you for your interest in supporting the campaign, {request.name}! Someone from the team will reach out with secure donation options.",
+            "email_sent": email_result.success,
+            "note": "For your security, we do not process donations through this chatbot."
+        }
     except Exception as e:
-        logger.error(f"Error processing donation: {str(e)}")
+        logger.error(f"Error logging donation interest: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/architecture")
 async def get_architecture_info():
     """Return information about the current architecture mode"""
+    provider_stats = agent_orchestrator.llm_manager.get_provider_stats()
     return {
-        "mode": architecture_mode,
-        "llm_provider": llm_provider,
+        "mode": "llm_first_slot_based",
         "orchestrator_enabled": agent_orchestrator is not None,
+        "available_slots": provider_stats.get("available_slots", 0),
+        "total_models": provider_stats.get("total_models", 0),
         "available_tools": [
             "search_policy_collections",
             "perform_web_search", 
             "retrieve_answer_style",
-            "register_volunteer",
-            "make_donation"
+            "register_volunteer"
         ] if agent_orchestrator else [],
-        "description": "LLM-first agentic architecture where the LLM reasons and recommends tool calls, and the Orchestrator validates and executes them." if agent_orchestrator else "Legacy RAG-first pipeline"
+        "description": "LLM-first agentic architecture with slot-based multi-provider rotation"
     }
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
