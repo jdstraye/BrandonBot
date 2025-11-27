@@ -224,20 +224,21 @@ class GeminiProvider(BaseLLMProvider):
                 return LLMResponse(error="No model selected", provider=self.config.name)
             logger.info(f"Gemini using model: {model_name}")
             
-            function_declarations = []
-            for tool in tools:
-                fd = FunctionDeclaration(
-                    name=tool["name"],
-                    description=tool["description"],
-                    parameters=tool["parameters"]
-                )
-                function_declarations.append(fd)
-            
-            gemini_tools = [Tool(function_declarations=function_declarations)]
+            gemini_tools = None
+            if tools:
+                function_declarations = []
+                for tool in tools:
+                    fd = FunctionDeclaration(
+                        name=tool["name"],
+                        description=tool["description"],
+                        parameters=tool["parameters"]
+                    )
+                    function_declarations.append(fd)
+                gemini_tools = [Tool(function_declarations=function_declarations)]
             
             model = genai.GenerativeModel(
                 model_name,
-                tools=gemini_tools,
+                tools=gemini_tools if gemini_tools else None,
                 system_instruction=system_prompt
             )
             
@@ -450,14 +451,14 @@ class MistralProvider(OpenAICompatibleProvider):
 
 
 class CohereProvider(BaseLLMProvider):
-    """Cohere provider - 1 slot with 3 models"""
+    """Cohere provider - 1 slot with 3 models (updated for Sept 2025 deprecations)"""
     
     def __init__(self):
         slots = [
             APIKeySlot(
                 slot_id="cohere_main",
                 api_key_env="COHERE_API_KEY",
-                models=["command-r-plus", "command-r", "command-r7b-12-2024"]
+                models=["command-a-03-2025", "command-r-plus-08-2024", "command-r-08-2024"]
             )
         ]
         config = ProviderConfig(
@@ -560,14 +561,14 @@ class CohereProvider(BaseLLMProvider):
 
 
 class HuggingFaceProvider(OpenAICompatibleProvider):
-    """HuggingFace Inference provider - 1 slot with Qwen3 and DeepSeek-V3"""
+    """HuggingFace Inference provider - 1 slot with Qwen2.5 and DeepSeek models"""
     
     def __init__(self):
         slots = [
             APIKeySlot(
                 slot_id="huggingface_main",
                 api_key_env="HUGGINGFACE_API_KEY",
-                models=["Qwen/Qwen3-8B-Instruct", "deepseek-ai/DeepSeek-V3-0324"]
+                models=["Qwen/Qwen2.5-72B-Instruct", "deepseek-ai/DeepSeek-V3-0324"]
             )
         ]
         config = ProviderConfig(

@@ -28,7 +28,7 @@ waitForPort = 5000
 
 [nix]
 channel = "stable-25_05"
-packages = ["emacs", "libxcrypt", "oneDNN", "openssh", "python312Packages.uvicorn", "re2", "sqlite-interactive", "xcodebuild", "zlib"]
+packages = ["cargo", "emacs", "libiconv", "libxcrypt", "oneDNN", "openssh", "python312Packages.uvicorn", "re2", "rustc", "sqlite-interactive", "xcodebuild", "zlib"]
 
 [[ports]]
 localPort = 5000
