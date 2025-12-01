@@ -1,454 +1,629 @@
 """
 Prequalifier Module for BrandonBot
-SLM-based input preprocessing with:
-- Ogilvy 10-category classification (Schwartz values)
-- Sentiment/frustration detection
-- Escalation level determination
-- De-escalation triggers
+
+3-Stage Pipeline: PQ → LLM → OV
+
+The Prequalifier (PQ) performs:
+1. Rate Limiting (from security.py)
+2. Input Sanitization (from security.py)  
+3. Hybrid Frustration/Escalation Detection (Pattern flags → SLM → ESCALATE/CONTINUE)
+4. RAG-based Vagueness Detection (RAG confidence → SLM → CLEAR/VAGUE)
+5. Prompt Enrichment based on 2x2 matrix (ESCALATE/CONTINUE × CLEAR/VAGUE)
+
+The PQ outputs an enriched prompt for the main LLM, NOT classifications.
+Intent classification belongs in the Output Validator (to verify response answers query).
+Ogilvy categories are retrieved via retrieve_answer_style() tool, not PQ.
 """
 
 import re
 import logging
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple, Any, Union
 from enum import Enum
+
+from security import input_sanitizer, rate_limiter, SanitizationResult
 
 logger = logging.getLogger(__name__)
 
 
-class OgilvyCategory(Enum):
-    """
-    Ogilvy 10-category classification based on Schwartz values.
-    Used for matching user intent with response style.
-    """
-    POWER = "power"
-    ACHIEVEMENT = "achievement"  
-    HEDONISM = "hedonism"
-    STIMULATION = "stimulation"
-    SELF_DIRECTION = "self_direction"
-    UNIVERSALISM = "universalism"
-    BENEVOLENCE = "benevolence"
-    TRADITION = "tradition"
-    CONFORMITY = "conformity"
-    SECURITY = "security"
+class FrustrationDecision(Enum):
+    """SLM decision on user frustration/escalation"""
+    ESCALATE = "escalate"
+    CONTINUE = "continue"
 
 
-class EscalationLevel(Enum):
-    """User frustration/escalation level"""
-    NONE = "none"
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
+class VaguenessDecision(Enum):
+    """SLM decision on query clarity"""
+    CLEAR = "clear"
+    VAGUE = "vague"
 
 
-class UserIntent(Enum):
-    """Primary user intent categories"""
-    POLICY_QUESTION = "policy_question"
-    PERSONAL_STORY = "personal_story"
-    VOLUNTEER = "volunteer"
-    DONATE = "donate"
-    CALLBACK = "callback"
-    COMPARISON = "comparison"
-    VERIFICATION = "verification"
-    SCRIPTURE = "scripture"
-    PRACTICAL_IMPACT = "practical_impact"
-    FUNDING = "funding"
-    TIMELINE = "timeline"
-    GENERAL_INFO = "general_info"
-    GREETING = "greeting"
-    CLARIFICATION = "clarification"
-    OFF_TOPIC = "off_topic"
+@dataclass
+class PatternFlags:
+    """Boolean flags from pattern matching (Step 1 of hybrid detection)"""
+    profanity: bool = False
+    all_caps: bool = False
+    repeated_punct: bool = False
+    urgent_keywords: bool = False
+    demands_human: bool = False
+    insults: bool = False
+    frustration_phrases: bool = False
+    sqli_attempt: bool = False
+    prompt_injection: bool = False
+    
+    def to_dict(self) -> Dict[str, bool]:
+        return {
+            "profanity": self.profanity,
+            "all_caps": self.all_caps,
+            "repeated_punct": self.repeated_punct,
+            "urgent_keywords": self.urgent_keywords,
+            "demands_human": self.demands_human,
+            "insults": self.insults,
+            "frustration_phrases": self.frustration_phrases,
+            "sqli_attempt": self.sqli_attempt,
+            "prompt_injection": self.prompt_injection,
+        }
+    
+    def any_high_risk(self) -> bool:
+        """Check if any high-risk flags are set"""
+        return any([
+            self.profanity,
+            self.insults,
+            self.demands_human,
+            self.urgent_keywords,
+            self.frustration_phrases,
+            self.all_caps and len(self.to_dict()) > 1,
+        ])
+
+
+@dataclass
+class RAGResult:
+    """Single RAG retrieval result with confidence"""
+    confidence: float
+    source: str
+    collection: str
+    content: str
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "confidence": self.confidence,
+            "source": self.source,
+            "collection": self.collection,
+            "content": self.content[:500],  # Truncate for SLM context
+        }
 
 
 @dataclass
 class PrequalifierResult:
     """Result from prequalifier analysis"""
-    primary_intent: UserIntent
-    secondary_intents: List[UserIntent] = field(default_factory=list)
-    ogilvy_categories: List[OgilvyCategory] = field(default_factory=list)
-    escalation_level: EscalationLevel = EscalationLevel.NONE
-    needs_deescalation: bool = False
-    frustration_triggers: List[str] = field(default_factory=list)
-    suggested_tone: str = "neutral"
-    is_vague: bool = False
-    vagueness_reason: Optional[str] = None
+    # Security checks
+    rate_limited: bool = False
+    rate_limit_wait_seconds: Optional[int] = None
+    sanitized_message: str = ""
     sanitization_applied: bool = False
+    sanitization_issues: List[str] = field(default_factory=list)
     blocked: bool = False
     block_reason: Optional[str] = None
-    confidence: float = 0.8
+    
+    # Hybrid detection decisions
+    frustration_decision: FrustrationDecision = FrustrationDecision.CONTINUE
+    vagueness_decision: VaguenessDecision = VaguenessDecision.CLEAR
+    pattern_flags: Optional[PatternFlags] = None
+    
+    # RAG context (for vagueness and prompt enrichment)
+    rag_results: List[RAGResult] = field(default_factory=list)
+    avg_rag_confidence: float = 0.0
+    
+    # Enriched prompt for main LLM
+    enriched_prompt: Optional[str] = None
+    pq_instructions: Optional[str] = None
+    
+    # Pass-through flag (CLEAR + CONTINUE = no enrichment needed)
+    passthrough: bool = False
 
 
 class Prequalifier:
     """
-    SLM-based prequalifier for input analysis.
-    Detects intent, sentiment, and escalation before main LLM processing.
+    Prequalifier with hybrid pattern+SLM detection.
+    
+    Flow:
+    1. Rate limiting check
+    2. Input sanitization
+    3. Pattern matching → flags dict (does NOT block)
+    4. SLM frustration classifier (flags + message → ESCALATE/CONTINUE)
+    5. RAG retrieval for query
+    6. SLM vagueness classifier (query + RAG data → CLEAR/VAGUE)
+    7. Build enriched prompt based on 2x2 matrix
     """
     
-    FRUSTRATION_PATTERNS = [
-        (r"(this is|you('re| are)|you are) (useless|stupid|broken|not helping)", 3),
-        (r"(i('m| am)|still) (confused|lost|not getting)", 2),
-        (r"(already|just) (said|asked|told you)", 2),
-        (r"(doesn't|don't|didn't) (answer|help|make sense)", 2),
-        (r"(can't|cannot) understand", 2),
-        (r"(what|this) is (wrong|the problem)", 2),
-        (r"forget it|never ?mind", 2),
-        (r"(ugh|argh|OMG|FFS|WTF)", 2),
-        (r"!{2,}", 2),
-        (r"\?{2,}", 1),
-        (r"(waste|wasting) (of|my) time", 3),
-        (r"(terrible|awful|horrible|worst)", 2),
-        (r"you('re| are) (an? )?(joke|fraud|liar)", 3),
-        (r"useless", 2),
-        (r"not helping", 2),
-        (r"getting confused", 1),
-        (r"can you explain again", 1),
-        (r"still (don't|doesn't|haven't|hasn't)", 1),
-        (r"(still )?(haven't|hasn't) addressed", 3),
-        (r"you (still )?(haven't|hasn't)", 3),
-        (r"haven't addressed", 3),
-        (r"still haven't", 3),
-        (r"addressed what i asked", 2),
+    # Pattern matching for Step 1 (does NOT block, just flags)
+    PROFANITY_PATTERNS = [
+        r"\b(fuck|shit|damn|ass|bitch|bastard|crap)\b",
+        r"\bf+u+c+k+\b",
+        r"\bs+h+i+t+\b",
+    ]
+    
+    INSULT_PATTERNS = [
+        r"\b(you('re| are)|this is) (stupid|idiot|moron|dumb|useless)\b",
+        r"\b(you('re| are)|brandon is) (a )?(joke|fraud|liar|fake|scam)\b",
+        r"\b(worst|terrible|horrible|pathetic)\b",
     ]
     
     URGENCY_PATTERNS = [
-        (r"(need|want) (to talk|speak) (to|with) (a|someone|human|person|real)", 3),
-        (r"(urgent|emergency|asap|right now|immediately)", 3),
-        (r"(critical|important|serious|major) (issue|problem|matter)", 2),
-        (r"(deadline|time.?sensitive)", 2),
-        (r"(can't|cannot) wait", 2),
-        (r"(need|require) (help|assistance) (now|today)", 2),
-        (r"this is (urgent|an emergency)", 3),
+        r"\b(urgent|emergency|asap|right now|immediately|now!)\b",
+        r"\b(time.?sensitive|critical|deadline)\b",
+        r"\bcan('t|not) wait\b",
     ]
     
-    INTENT_PATTERNS = {
-        UserIntent.VOLUNTEER: [
-            r"\b(volunteer|help out|sign up|get involved|join|campaign)\b",
-            r"\b(door.?to.?door|canvas|phone bank|events?)\b",
-        ],
-        UserIntent.DONATE: [
-            r"donat",
-            r"contribut",
-            r"support.*financially",
-            r"financial.*support",
-            r"give money",
-            r"campaign fund",
-            r"want to donate",
-            r"donate to",
-            r"like to support",
-            r"help financially",
-            r"monetary",
-        ],
-        UserIntent.CALLBACK: [
-            r"\b(call (me|back)|speak (to|with) someone|talk to a (human|person|real))\b",
-            r"\b(phone call|reach out|contact me)\b",
-            r"\btalk to someone real\b",
-            r"\bneed to talk to\b",
-            r"\bspeak with a human\b",
-        ],
-        UserIntent.COMPARISON: [
-            r"\b(vs\.?|versus|compared to|difference between|better than)\b",
-            r"\b(opponent|other candidate|democrat|republican)\b",
-        ],
-        UserIntent.VERIFICATION: [
-            r"\b(really|actually|truly|is that true|source|proof|evidence)\b",
-            r"\b(how do (you|I) know|can you prove)\b",
-        ],
-        UserIntent.SCRIPTURE: [
-            r"\b(bible|scripture|god|jesus|faith|christian|pray|church)\b",
-            r"\b(moral|ethics|values|sin|righteous)\b",
-        ],
-        UserIntent.PRACTICAL_IMPACT: [
-            r"\b(affect me|impact (on |my )?|how does this|what does this mean for)\b",
-            r"\b(my (family|kids|business|job|taxes|healthcare))\b",
-        ],
-        UserIntent.FUNDING: [
-            r"\b(pay for|fund|cost|afford|budget|money for)\b",
-            r"\b(taxpayer|spending|deficit|debt)\b",
-        ],
-        UserIntent.TIMELINE: [
-            r"\b(when|timeline|how long|schedule|deadline|by when)\b",
-            r"\b(first (100|hundred) days|term|year one)\b",
-        ],
-        UserIntent.GREETING: [
-            r"^(hi|hello|hey|good (morning|afternoon|evening)|greetings)",
-            r"^(what('?s| is) up|how are you)",
-        ],
+    HUMAN_DEMAND_PATTERNS = [
+        r"\b(talk|speak) (to|with) (a |someone |)(human|person|real|actual)\b",
+        r"\bcall (me|back)\b",
+        r"\bneed (a |to talk to a )(human|person|real)\b",
+        r"\bwant (to talk to |)(a |)(human|person)\b",
+    ]
+    
+    FRUSTRATION_PATTERNS = [
+        r"(already|just) (said|asked|told you|explained)",
+        r"(doesn't|don't|didn't) (answer|help|make sense|understand)",
+        r"(still )?(haven't|hasn't|don't|doesn't) (addressed|answered|helped)",
+        r"(waste|wasting) (of |my )?time",
+        r"(not|isn't|aren't) (helping|working|useful)",
+        r"(i('m| am)|this is) (confused|frustrated|annoyed|angry)",
+        r"forget it|never ?mind",
+        r"(ugh|argh|omg|ffs|wtf)",
+    ]
+    
+    # SLM prompts for hybrid detection
+    FRUSTRATION_SLM_PROMPT = """You are a sentiment-and-escalation classifier for a political campaign chatbot.
+
+Input message: "{user_message}"
+
+Pattern flags detected: {flags}
+
+Based on the message and the flags, decide whether the user is:
+- "ESCALATE" → the user is angry, hostile, demands a human, or is beyond frustrated. They need immediate human attention or de-escalation.
+- "CONTINUE" → the message is neutral or mildly frustrated, safe to send to the main LLM.
+
+Consider:
+- Profanity or insults may indicate frustration, but context matters
+- Urgent keywords alone don't always mean escalation
+- Multiple flags together are more indicative than single flags
+- The actual message content overrides pattern flags if the tone is clearly different
+
+Respond with ONLY a single word: ESCALATE or CONTINUE"""
+
+    VAGUENESS_SLM_PROMPT = """You are a query clarity classifier for a political campaign chatbot about Brandon Sowers.
+
+Input message: "{user_message}"
+
+Data retrieved from knowledge base:
+{rag_data}
+
+Average confidence of retrieved data: {avg_confidence:.2f}
+
+Based on the message and the retrieved data, decide whether the user's query is:
+- "CLEAR" → the user's question has clear intent and can be precisely answered with the available data
+- "VAGUE" → the user's question needs refinement. The intent isn't well-formed, or we don't have a clear answer in the knowledge base.
+
+Consider:
+- Low confidence scores (< 0.5) suggest the question may not match our knowledge base well
+- Very short queries (< 5 words) are often vague
+- Questions with clear nouns and verbs are usually clear
+- "What about X?" type questions are often vague
+- If the RAG data doesn't seem to answer the question, it's vague
+
+Respond with ONLY a single word: CLEAR or VAGUE"""
+
+    # Enrichment templates for 2x2 matrix
+    ENRICHMENT_TEMPLATES: Dict[Tuple[str, str], Optional[str]] = {
+        ("clear", "escalate"): """user query: {user_query}
+
+The user is agitated but we have relevant answers. Acknowledge the frustration and show you aim to help by stating 'would it be helpful if I explain...' followed by a plan based on the RAG content.
+
+RAG retrieval:
+{rag_data}
+
+Data from BrandonPlatform and PreviousQA are authoritative based on Brandon's own words. Data from PartyPlatform is from party platforms - clearly distinguish between Brandon's positions and party positions.
+
+Important: Validate your response before delivering. Acknowledge frustration, then provide helpful information.""",
+
+        ("vague", "continue"): """user query: {user_query}
+
+The query is vague. Take a couple turns to gently guide the user to a clearer question using relevant parts of Brandon's platform. Don't assume what they're asking - ask clarifying questions.
+
+Relevant positions from knowledge base that might help:
+{rag_data}
+
+Ask which specific aspect they'd like to know more about. Be warm and helpful, not dismissive.""",
+
+        ("vague", "escalate"): """user query: {user_query}
+
+The user is frustrated and their query is unclear. They need immediate de-escalation.
+
+Explain that you want to help but aren't sure exactly what matters most to them. Apologize for any confusion. Offer to have a member of Brandon's team call them back for personal assistance.
+
+Do NOT try to answer their unclear question. Focus on de-escalation and human escalation options.""",
+
+        ("clear", "continue"): None,  # Passthrough - no enrichment needed
     }
-    
-    OGILVY_PATTERNS = {
-        OgilvyCategory.POWER: [
-            r"\b(control|influence|authority|leadership|strong|powerful)\b",
-        ],
-        OgilvyCategory.ACHIEVEMENT: [
-            r"\b(success|accomplish|achieve|win|results|performance)\b",
-        ],
-        OgilvyCategory.HEDONISM: [
-            r"\b(enjoy|pleasure|fun|happy|freedom to)\b",
-        ],
-        OgilvyCategory.STIMULATION: [
-            r"\b(exciting|new|different|change|innovation|bold)\b",
-        ],
-        OgilvyCategory.SELF_DIRECTION: [
-            r"\b(independent|my own|choice|freedom|liberty|rights|right to)\b",
-        ],
-        OgilvyCategory.UNIVERSALISM: [
-            r"\b(everyone|all people|equal|fair|justice|environment)\b",
-        ],
-        OgilvyCategory.BENEVOLENCE: [
-            r"\b(help|care|community|family|neighbor|together)\b",
-        ],
-        OgilvyCategory.TRADITION: [
-            r"\b(tradition|heritage|values|faith|respect|honor)\b",
-        ],
-        OgilvyCategory.CONFORMITY: [
-            r"\b(rules|law|order|proper|should|duty|responsible)\b",
-        ],
-        OgilvyCategory.SECURITY: [
-            r"\b(safe|secure|protect|stability|certain|reliable|security|border)\b",
-        ],
-    }
-    
-    VAGUENESS_PATTERNS = [
-        (r"^(what|how|why|tell me|explain)\s*$", "Too short - need more context"),
-        (r"^(stuff|things|it|that|this)\s*$", "Unclear reference"),
-        (r"^.{1,10}$", "Very short query - may need clarification"),
-    ]
-    
-    BLOCKED_PATTERNS = [
-        (r"(credit card|bank account|ssn|social security)", "Financial data collection not allowed"),
-        (r"(password|login|hack|exploit)", "Security-related request blocked"),
-        (r"(kill|murder|attack|bomb|weapon)", "Violence-related content blocked"),
-    ]
-    
-    def __init__(self):
-        self.conversation_history: Dict[str, List[Dict]] = {}
-    
-    def analyze(
-        self, 
-        message: str, 
-        session_id: str = None,
-        conversation_history: List[Dict] = None
-    ) -> PrequalifierResult:
+
+    def __init__(self, slm_provider=None, weaviate_manager=None):
         """
-        Analyze user message for intent, sentiment, and escalation.
+        Initialize prequalifier.
         
         Args:
-            message: User's message
-            session_id: Session identifier for history tracking
-            conversation_history: Previous messages in conversation
-        
-        Returns:
-            PrequalifierResult with analysis
+            slm_provider: Small LLM for classification (uses main LLM if None)
+            weaviate_manager: Vector DB for RAG retrieval
         """
-        message_lower = message.lower().strip()
-        
-        blocked, block_reason = self._check_blocked(message_lower)
-        if blocked:
-            return PrequalifierResult(
-                primary_intent=UserIntent.OFF_TOPIC,
-                blocked=True,
-                block_reason=block_reason,
-                escalation_level=EscalationLevel.NONE
-            )
-        
-        frustration_score, frustration_triggers = self._detect_frustration(message_lower)
-        urgency_score, urgency_triggers = self._detect_urgency(message_lower)
-        
-        if conversation_history:
-            history_boost = self._analyze_history(conversation_history, message_lower)
-            frustration_score += history_boost.get("frustration_boost", 0)
-            frustration_triggers.extend(history_boost.get("triggers", []))
-        
-        escalation_level = self._determine_escalation(frustration_score, urgency_score)
-        needs_deescalation = escalation_level in [EscalationLevel.MEDIUM, EscalationLevel.HIGH]
-        
-        primary_intent = self._detect_intent(message_lower)
-        secondary_intents = self._detect_secondary_intents(message_lower, primary_intent)
-        
-        ogilvy_categories = self._detect_ogilvy_categories(message_lower)
-        
-        is_vague, vagueness_reason = self._check_vagueness(message_lower)
-        
-        suggested_tone = self._suggest_tone(escalation_level, primary_intent, ogilvy_categories)
-        
-        return PrequalifierResult(
-            primary_intent=primary_intent,
-            secondary_intents=secondary_intents,
-            ogilvy_categories=ogilvy_categories,
-            escalation_level=escalation_level,
-            needs_deescalation=needs_deescalation,
-            frustration_triggers=frustration_triggers,
-            suggested_tone=suggested_tone,
-            is_vague=is_vague,
-            vagueness_reason=vagueness_reason,
-            confidence=0.85 if not is_vague else 0.6
-        )
+        self.slm = slm_provider
+        self.weaviate = weaviate_manager
     
-    def _check_blocked(self, message: str) -> Tuple[bool, Optional[str]]:
-        """Check if message contains blocked content"""
-        for pattern, reason in self.BLOCKED_PATTERNS:
-            if re.search(pattern, message, re.IGNORECASE):
-                return True, reason
-        return False, None
+    def set_slm_provider(self, provider):
+        """Set SLM provider after initialization"""
+        self.slm = provider
     
-    def _detect_frustration(self, message: str) -> Tuple[int, List[str]]:
-        """Detect frustration level from message patterns"""
-        score = 0
-        triggers = []
-        
-        for pattern, weight in self.FRUSTRATION_PATTERNS:
-            if re.search(pattern, message, re.IGNORECASE):
-                score += weight
-                triggers.append(f"frustration:{pattern[:25]}")
-        
-        return score, triggers
+    def set_weaviate_manager(self, manager):
+        """Set Weaviate manager after initialization"""
+        self.weaviate = manager
     
-    def _detect_urgency(self, message: str) -> Tuple[int, List[str]]:
-        """Detect urgency signals"""
-        score = 0
-        triggers = []
+    async def analyze(
+        self,
+        message: str,
+        session_id: str = "default",
+        conversation_history: List[Dict] = None,
+    ) -> PrequalifierResult:
+        """
+        Full prequalifier analysis pipeline.
         
-        for pattern, weight in self.URGENCY_PATTERNS:
-            if re.search(pattern, message, re.IGNORECASE):
-                score += weight
-                triggers.append(f"urgency:{pattern[:25]}")
+        Steps:
+        1. Rate limiting
+        2. Input sanitization
+        3. Pattern matching → flags
+        4. SLM frustration classification
+        5. RAG retrieval
+        6. SLM vagueness classification
+        7. Build enriched prompt
+        """
+        result = PrequalifierResult()
         
-        return score, triggers
-    
-    def _analyze_history(self, history: List[Dict], current: str) -> Dict:
-        """Analyze conversation history for escalation patterns"""
-        result = {"frustration_boost": 0, "triggers": []}
-        
-        if len(history) < 2:
+        # Step 1: Rate limiting
+        is_allowed, wait_seconds = rate_limiter.check_rate_limit(session_id, "query")
+        if not is_allowed:
+            result.rate_limited = True
+            result.rate_limit_wait_seconds = wait_seconds
+            result.blocked = True
+            result.block_reason = f"Rate limit exceeded. Please wait {wait_seconds} seconds."
             return result
         
-        user_messages = [m.get("content", "").lower() for m in history if m.get("role") == "user"]
+        # Step 2: Input sanitization
+        sanitization = input_sanitizer.sanitize(message)
+        result.sanitized_message = sanitization.cleaned_text
+        result.sanitization_applied = sanitization.was_modified
+        result.sanitization_issues = [f"{issue[0]}: {issue[1]}" for issue in sanitization.issues_found]
         
-        repetition_words = ["already", "said", "told", "asked", "mentioned", "explained"]
-        for word in repetition_words:
-            if f"already {word}" in current or f"just {word}" in current:
-                result["frustration_boost"] += 2
-                result["triggers"].append("repetition_complaint")
-                break
+        # Check for blocked content
+        for issue_type, _ in sanitization.issues_found:
+            if issue_type in ["script_injection", "sql_injection", "prompt_injection"]:
+                result.blocked = True
+                result.block_reason = f"Security violation detected: {issue_type}"
+                return result
         
-        if len(history) >= 6:
-            user_count = len(user_messages)
-            if user_count >= 4:
-                result["frustration_boost"] += 1
-                result["triggers"].append("long_conversation")
+        # Step 3: Pattern matching (does NOT block, just flags)
+        pattern_flags = self._detect_patterns(result.sanitized_message)
+        result.pattern_flags = pattern_flags
         
-        recent_user = user_messages[-3:] if len(user_messages) >= 3 else user_messages
-        exclaim_count = sum(1 for m in recent_user if "!" in m or "??" in m)
-        if exclaim_count >= 2:
-            result["frustration_boost"] += 1
-            result["triggers"].append("punctuation_escalation")
+        # Step 4: SLM frustration classification
+        frustration_decision = await self._classify_frustration(
+            result.sanitized_message,
+            pattern_flags,
+            conversation_history
+        )
+        result.frustration_decision = frustration_decision
+        
+        # Step 5: RAG retrieval
+        rag_results, avg_confidence = await self._retrieve_rag_context(result.sanitized_message)
+        result.rag_results = rag_results
+        result.avg_rag_confidence = avg_confidence
+        
+        # Step 6: SLM vagueness classification
+        vagueness_decision = await self._classify_vagueness(
+            result.sanitized_message,
+            rag_results,
+            avg_confidence
+        )
+        result.vagueness_decision = vagueness_decision
+        
+        # Step 7: Build enriched prompt based on 2x2 matrix
+        enriched_prompt, pq_instructions = self._build_enriched_prompt(
+            result.sanitized_message,
+            frustration_decision,
+            vagueness_decision,
+            rag_results
+        )
+        result.enriched_prompt = enriched_prompt
+        result.pq_instructions = pq_instructions
+        result.passthrough = (
+            frustration_decision == FrustrationDecision.CONTINUE and
+            vagueness_decision == VaguenessDecision.CLEAR
+        )
         
         return result
     
-    def _determine_escalation(self, frustration: int, urgency: int) -> EscalationLevel:
-        """Determine escalation level based on scores"""
-        total = frustration + urgency
+    def _detect_patterns(self, message: str) -> PatternFlags:
+        """
+        Step 1: Pattern matching to create boolean flag dict.
+        Does NOT block - just tags potential high-risk patterns.
+        """
+        flags = PatternFlags()
+        message_lower = message.lower()
         
-        if total >= 5 or urgency >= 4:
-            return EscalationLevel.HIGH
-        elif total >= 3 or urgency >= 2:
-            return EscalationLevel.MEDIUM
-        elif frustration >= 2:
-            return EscalationLevel.LOW
-        else:
-            return EscalationLevel.NONE
+        # Check profanity
+        for pattern in self.PROFANITY_PATTERNS:
+            if re.search(pattern, message_lower, re.IGNORECASE):
+                flags.profanity = True
+                break
+        
+        # Check insults
+        for pattern in self.INSULT_PATTERNS:
+            if re.search(pattern, message_lower, re.IGNORECASE):
+                flags.insults = True
+                break
+        
+        # Check urgent keywords
+        for pattern in self.URGENCY_PATTERNS:
+            if re.search(pattern, message_lower, re.IGNORECASE):
+                flags.urgent_keywords = True
+                break
+        
+        # Check human demands
+        for pattern in self.HUMAN_DEMAND_PATTERNS:
+            if re.search(pattern, message_lower, re.IGNORECASE):
+                flags.demands_human = True
+                break
+        
+        # Check frustration phrases
+        for pattern in self.FRUSTRATION_PATTERNS:
+            if re.search(pattern, message_lower, re.IGNORECASE):
+                flags.frustration_phrases = True
+                break
+        
+        # Check for ALL CAPS (more than 50% uppercase, at least 10 chars)
+        alpha_chars = [c for c in message if c.isalpha()]
+        if len(alpha_chars) >= 10:
+            upper_ratio = sum(1 for c in alpha_chars if c.isupper()) / len(alpha_chars)
+            if upper_ratio > 0.5:
+                flags.all_caps = True
+        
+        # Check repeated punctuation
+        if re.search(r"[!?]{2,}", message):
+            flags.repeated_punct = True
+        
+        return flags
     
-    def _detect_intent(self, message: str) -> UserIntent:
-        """Detect primary user intent"""
-        best_intent = UserIntent.GENERAL_INFO
-        best_score = 0
+    async def _classify_frustration(
+        self,
+        message: str,
+        flags: PatternFlags,
+        history: List[Dict] = None
+    ) -> FrustrationDecision:
+        """
+        Step 2: SLM classification for frustration/escalation.
+        Uses pattern flags + message to determine ESCALATE or CONTINUE.
+        """
+        # If no SLM available, fall back to rule-based
+        if self.slm is None:
+            return self._fallback_frustration_classification(flags, history)
         
-        for intent, patterns in self.INTENT_PATTERNS.items():
-            score = 0
-            for pattern in patterns:
-                if re.search(pattern, message, re.IGNORECASE):
-                    score += 1
-            if score > best_score:
-                best_score = score
-                best_intent = intent
-        
-        if best_score == 0:
-            if "?" in message:
-                return UserIntent.POLICY_QUESTION
-            elif len(message.split()) < 5:
-                return UserIntent.GREETING
+        try:
+            prompt = self.FRUSTRATION_SLM_PROMPT.format(
+                user_message=message,
+                flags=flags.to_dict()
+            )
+            
+            response = await self.slm.generate(
+                prompt=prompt,
+                max_tokens=10,
+                temperature=0.0,  # Deterministic
+            )
+            
+            response_text = response.strip().upper()
+            
+            if "ESCALATE" in response_text:
+                return FrustrationDecision.ESCALATE
             else:
-                return UserIntent.GENERAL_INFO
-        
-        return best_intent
+                return FrustrationDecision.CONTINUE
+                
+        except Exception as e:
+            logger.warning(f"SLM frustration classification failed: {e}, using fallback")
+            return self._fallback_frustration_classification(flags, history)
     
-    def _detect_secondary_intents(self, message: str, primary: UserIntent) -> List[UserIntent]:
-        """Detect secondary intents beyond the primary"""
-        secondary = []
+    def _fallback_frustration_classification(
+        self,
+        flags: PatternFlags,
+        history: List[Dict] = None
+    ) -> FrustrationDecision:
+        """Fallback rule-based frustration classification when SLM unavailable"""
+        score = 0
         
-        for intent, patterns in self.INTENT_PATTERNS.items():
-            if intent == primary:
-                continue
-            for pattern in patterns:
-                if re.search(pattern, message, re.IGNORECASE):
-                    secondary.append(intent)
-                    break
+        if flags.profanity:
+            score += 3
+        if flags.insults:
+            score += 3
+        if flags.demands_human:
+            score += 2
+        if flags.urgent_keywords:
+            score += 1
+        if flags.frustration_phrases:
+            score += 2
+        if flags.all_caps:
+            score += 1
+        if flags.repeated_punct:
+            score += 1
         
-        return secondary[:3]
+        # Check conversation history for escalation patterns
+        if history and len(history) >= 4:
+            user_messages = [m for m in history if m.get("role") == "user"]
+            if len(user_messages) >= 3:
+                score += 1  # Long conversation without resolution
+        
+        return FrustrationDecision.ESCALATE if score >= 4 else FrustrationDecision.CONTINUE
     
-    def _detect_ogilvy_categories(self, message: str) -> List[OgilvyCategory]:
-        """Detect Ogilvy/Schwartz value categories"""
-        categories = []
+    async def _retrieve_rag_context(
+        self,
+        query: str
+    ) -> Tuple[List[RAGResult], float]:
+        """
+        Step 3: RAG retrieval for vagueness assessment and prompt enrichment.
+        """
+        if self.weaviate is None:
+            return [], 0.0
         
-        for category, patterns in self.OGILVY_PATTERNS.items():
-            for pattern in patterns:
-                if re.search(pattern, message, re.IGNORECASE):
-                    categories.append(category)
-                    break
+        rag_results = []
+        collections = ["BrandonPlatform", "PreviousQA", "PartyPlatform"]
         
-        if not categories:
-            categories = [OgilvyCategory.BENEVOLENCE]
-        
-        return categories[:3]
+        try:
+            for collection in collections:
+                try:
+                    results = await self.weaviate.search(collection, query, limit=3)
+                    for r in results:
+                        rag_results.append(RAGResult(
+                            confidence=r.get("confidence", 0.0),
+                            source=r.get("source", "unknown"),
+                            collection=collection,
+                            content=r.get("content", r.get("text", ""))[:500],
+                        ))
+                except Exception as e:
+                    logger.warning(f"RAG retrieval failed for {collection}: {e}")
+            
+            # Sort by confidence
+            rag_results.sort(key=lambda x: x.confidence, reverse=True)
+            rag_results = rag_results[:6]  # Top 6 results
+            
+            avg_confidence = (
+                sum(r.confidence for r in rag_results) / len(rag_results)
+                if rag_results else 0.0
+            )
+            
+            return rag_results, avg_confidence
+            
+        except Exception as e:
+            logger.error(f"RAG retrieval error: {e}")
+            return [], 0.0
     
-    def _check_vagueness(self, message: str) -> Tuple[bool, Optional[str]]:
-        """Check if message is too vague"""
-        for pattern, reason in self.VAGUENESS_PATTERNS:
-            if re.search(pattern, message, re.IGNORECASE):
-                return True, reason
-        return False, None
+    async def _classify_vagueness(
+        self,
+        message: str,
+        rag_results: List[RAGResult],
+        avg_confidence: float
+    ) -> VaguenessDecision:
+        """
+        Step 4: SLM classification for query vagueness.
+        Uses query + RAG data to determine CLEAR or VAGUE.
+        """
+        # If no SLM available, fall back to rule-based
+        if self.slm is None:
+            return self._fallback_vagueness_classification(message, avg_confidence)
+        
+        try:
+            rag_data_str = "\n".join([
+                f"- [{r.collection}] (conf: {r.confidence:.2f}) {r.content[:200]}"
+                for r in rag_results[:4]
+            ]) or "No relevant data found in knowledge base."
+            
+            prompt = self.VAGUENESS_SLM_PROMPT.format(
+                user_message=message,
+                rag_data=rag_data_str,
+                avg_confidence=avg_confidence
+            )
+            
+            response = await self.slm.generate(
+                prompt=prompt,
+                max_tokens=10,
+                temperature=0.0,
+            )
+            
+            response_text = response.strip().upper()
+            
+            if "VAGUE" in response_text:
+                return VaguenessDecision.VAGUE
+            else:
+                return VaguenessDecision.CLEAR
+                
+        except Exception as e:
+            logger.warning(f"SLM vagueness classification failed: {e}, using fallback")
+            return self._fallback_vagueness_classification(message, avg_confidence)
     
-    def _suggest_tone(
-        self, 
-        escalation: EscalationLevel, 
-        intent: UserIntent,
-        categories: List[OgilvyCategory]
-    ) -> str:
-        """Suggest appropriate response tone based on analysis"""
-        if escalation == EscalationLevel.HIGH:
-            return "empathetic_urgent"
-        elif escalation == EscalationLevel.MEDIUM:
-            return "empathetic_patient"
-        elif escalation == EscalationLevel.LOW:
-            return "warm_helpful"
+    def _fallback_vagueness_classification(
+        self,
+        message: str,
+        avg_confidence: float
+    ) -> VaguenessDecision:
+        """Fallback rule-based vagueness classification"""
+        words = message.split()
         
-        if intent == UserIntent.SCRIPTURE:
-            return "reverent"
-        elif intent in [UserIntent.VOLUNTEER, UserIntent.DONATE]:
-            return "enthusiastic"
-        elif intent == UserIntent.COMPARISON:
-            return "balanced"
-        elif intent == UserIntent.VERIFICATION:
-            return "factual"
+        # Very short queries are vague
+        if len(words) < 3:
+            return VaguenessDecision.VAGUE
         
-        if OgilvyCategory.TRADITION in categories:
-            return "respectful"
-        elif OgilvyCategory.SECURITY in categories:
-            return "reassuring"
-        elif OgilvyCategory.UNIVERSALISM in categories:
-            return "inclusive"
+        # Low RAG confidence suggests vague/unmatched query
+        if avg_confidence < 0.4:
+            return VaguenessDecision.VAGUE
         
-        return "friendly"
+        # "What about X?" pattern is often vague
+        if re.match(r"^what about\s+", message.lower()):
+            return VaguenessDecision.VAGUE
+        
+        # Single-word queries
+        if len(words) == 1:
+            return VaguenessDecision.VAGUE
+        
+        return VaguenessDecision.CLEAR
+    
+    def _build_enriched_prompt(
+        self,
+        user_query: str,
+        frustration: FrustrationDecision,
+        vagueness: VaguenessDecision,
+        rag_results: List[RAGResult]
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Step 5: Build enriched prompt based on 2x2 matrix.
+        
+        CLEAR + CONTINUE → passthrough (no enrichment)
+        CLEAR + ESCALATE → de-escalate + answer
+        VAGUE + CONTINUE → clarify question
+        VAGUE + ESCALATE → immediate human escalation
+        """
+        key = (vagueness.value, frustration.value)
+        template = self.ENRICHMENT_TEMPLATES.get(key)
+        
+        if template is None:
+            # Passthrough - no enrichment needed
+            return None, None
+        
+        # Format RAG data for prompt
+        rag_data_str = "\n".join([
+            f"- [{r.collection}] (source: {r.source}) {r.content}"
+            for r in rag_results
+        ]) or "No relevant data found."
+        
+        enriched = template.format(
+            user_query=user_query,
+            rag_data=rag_data_str
+        )
+        
+        # Generate concise PQ instructions
+        if key == ("clear", "escalate"):
+            pq_instructions = "User is frustrated. Acknowledge feelings, then provide helpful answer from RAG."
+        elif key == ("vague", "continue"):
+            pq_instructions = "Query is vague. Ask clarifying questions before attempting to answer."
+        elif key == ("vague", "escalate"):
+            pq_instructions = "User is frustrated and query is unclear. De-escalate and offer human callback."
+        else:
+            pq_instructions = None
+        
+        return enriched, pq_instructions
 
 
+# Singleton instance
 prequalifier = Prequalifier()

@@ -28,8 +28,8 @@ from agent_tools import (
 from query_expansion import detect_question_type, get_topic_from_query
 from llm_providers import LLMProviderManager
 from intent_detector import intent_detector, UserIntent, escalation_detector
-from prequalifier import prequalifier, PrequalifierResult, EscalationLevel as PQEscalationLevel
-from output_validator import output_validator, fec_checker, ValidationResult, ValidationStatus
+from prequalifier import prequalifier, PrequalifierResult, FrustrationDecision, VaguenessDecision
+from output_validator import output_validator, ValidationResult, ValidationStatus, RejectionReason
 
 logger = logging.getLogger(__name__)
 
@@ -753,9 +753,26 @@ Remember: You're here to inform voters and build support for Brandon's campaign.
     async def process_message(self, user_message: str, session_id: str) -> Tuple[str, Dict]:
         """
         Process a user message through the full 3-stage agent pipeline:
-        1. Prequalifier: Intent detection, sentiment analysis, escalation detection
-        2. LLM Agent: Main reasoning with tool calling
-        3. Output Validator: De-escalation, FEC compliance, tone checking
+        
+        Stage 1 - Prequalifier (PQ):
+            - Rate limiting
+            - Input sanitization
+            - Hybrid frustration detection (pattern flags → SLM → ESCALATE/CONTINUE)
+            - RAG-based vagueness detection (RAG confidence → SLM → CLEAR/VAGUE)
+            - Prompt enrichment based on 2x2 matrix
+        
+        Stage 2 - LLM Agent:
+            - Tool calling with enriched prompt from PQ
+            - Multi-turn reasoning
+        
+        Stage 3 - Output Validator (OV):
+            - Intent fulfillment check (SLM)
+            - Ethics/morality check (SLM)
+            - FEC compliance (RAG + SLM double-check)
+            - De-escalation check (for frustrated users)
+            - PII redaction (hybrid regex + SLM)
+            - Citation verification
+            - Regeneration loop on failure
         
         Args:
             user_message: The user's input
@@ -769,8 +786,16 @@ Remember: You're here to inform voters and build support for Brandon's campaign.
         
         session = self.session_manager.get_or_create_session(session_id)
         history = [{"role": t.role.value, "content": t.content} for t in session.turns]
-        pq_result = prequalifier.analyze(user_message, session_id, history)
         
+        # ===== STAGE 1: PREQUALIFIER =====
+        # Set up PQ with dependencies
+        prequalifier.set_weaviate_manager(self.tool_executor.weaviate)
+        # Note: SLM provider would be set here if available
+        # prequalifier.set_slm_provider(self.slm_client)
+        
+        pq_result = await prequalifier.analyze(user_message, session_id, history)
+        
+        # Handle blocked messages
         if pq_result.blocked:
             logger.warning(f"[{request_id}] Message blocked by prequalifier: {pq_result.block_reason}")
             return (
@@ -779,36 +804,53 @@ Remember: You're here to inform voters and build support for Brandon's campaign.
                     "request_id": request_id,
                     "blocked": True,
                     "block_reason": pq_result.block_reason,
+                    "rate_limited": pq_result.rate_limited,
                     "duration_ms": int((time.time() - start_time) * 1000)
                 }
             )
         
-        question_types = detect_question_type(user_message)
-        topic = get_topic_from_query(user_message)
+        # Handle rate limiting
+        if pq_result.rate_limited:
+            logger.warning(f"[{request_id}] Rate limited - wait {pq_result.rate_limit_wait_seconds}s")
+            return (
+                f"I'm receiving too many requests. Please wait a moment and try again.",
+                {
+                    "request_id": request_id,
+                    "rate_limited": True,
+                    "wait_seconds": pq_result.rate_limit_wait_seconds,
+                    "duration_ms": int((time.time() - start_time) * 1000)
+                }
+            )
         
-        intent_result = intent_detector.detect(user_message, history)
+        # Use sanitized message from PQ
+        sanitized_message = pq_result.sanitized_message or user_message
+        
+        # Detect question types and topic
+        question_types = detect_question_type(sanitized_message)
+        topic = get_topic_from_query(sanitized_message)
+        
+        # Get intent context from existing intent detector
+        intent_result = intent_detector.detect(sanitized_message, history)
         intent_context = intent_detector.get_intent_context(intent_result)
         
-        escalation_result = escalation_detector.detect(user_message, history)
+        # Determine if user is frustrated based on PQ decision
+        user_frustrated = pq_result.frustration_decision == FrustrationDecision.ESCALATE
+        query_vague = pq_result.vagueness_decision == VaguenessDecision.VAGUE
         
-        effective_escalation = max(
-            escalation_result.escalation_level if isinstance(escalation_result.escalation_level, int) else 0,
-            {"none": 0, "low": 1, "medium": 2, "high": 3}.get(pq_result.escalation_level.value, 0)
-        )
-        escalation_level_str = {0: "none", 1: "low", 2: "medium", 3: "high"}.get(effective_escalation, "none")
+        logger.info(f"[{request_id}] PQ Analysis - session: {session_id}, "
+                   f"frustration: {pq_result.frustration_decision.value}, "
+                   f"vagueness: {pq_result.vagueness_decision.value}, "
+                   f"passthrough: {pq_result.passthrough}, "
+                   f"sanitized: {pq_result.sanitization_applied}")
         
-        logger.info(f"[{request_id}] New request - session: {session_id}, types: {question_types}, "
-                   f"topic: {topic}, intent: {intent_result.primary_intent.value}, "
-                   f"escalation: {escalation_level_str}, pq_intent: {pq_result.primary_intent.value}, "
-                   f"ogilvy: {[c.value for c in pq_result.ogilvy_categories]}")
-        
-        session.add_turn(ConversationRole.USER, user_message)
+        session.add_turn(ConversationRole.USER, sanitized_message)
         
         metadata = {
             "request_id": request_id,
             "session_id": session_id,
             "tool_calls": [],
             "iterations": 0,
+            "regeneration_attempts": 0,
             "total_tokens": 0,
             "sources": [],
             "model_used": None,
@@ -817,21 +859,47 @@ Remember: You're here to inform voters and build support for Brandon's campaign.
             "question_types": question_types,
             "topic": topic,
             "intent": intent_result.primary_intent.value,
-            "pq_intent": pq_result.primary_intent.value,
-            "ogilvy_categories": [c.value for c in pq_result.ogilvy_categories],
             "needs_scripture": intent_result.needs_scripture,
-            "needs_callback": intent_result.needs_callback or escalation_result.needs_escalation or pq_result.needs_deescalation,
-            "escalation_level": escalation_level_str,
-            "needs_deescalation": pq_result.needs_deescalation,
-            "suggested_tone": pq_result.suggested_tone,
-            "frustration_triggers": pq_result.frustration_triggers,
+            "needs_callback": intent_result.needs_callback or user_frustrated,
+            "pq_frustration": pq_result.frustration_decision.value,
+            "pq_vagueness": pq_result.vagueness_decision.value,
+            "pq_passthrough": pq_result.passthrough,
+            "sanitization_applied": pq_result.sanitization_applied,
+            "sanitization_issues": pq_result.sanitization_issues,
+            "user_frustrated": user_frustrated,
+            "query_vague": query_vague,
             "duration_ms": 0,
             "validation_status": None,
-            "fec_issues": []
+            "validation_rejections": [],
+            "ov_modifications": []
         }
         
         try:
             messages = self._build_messages(session)
+            
+            # ===== STAGE 2: LLM AGENT WITH TOOLS =====
+            # Build system prompt with PQ enrichment
+            full_system_prompt = self.get_system_prompt(question_types, topic)
+            
+            # Add intent context
+            if intent_context:
+                full_system_prompt += f"\n\nINTENT ANALYSIS: {intent_context}"
+            if intent_result.needs_scripture:
+                full_system_prompt += "\n\nNote: User may appreciate faith-based perspective. Consider including relevant scripture if appropriate."
+            if intent_result.needs_callback or user_frustrated:
+                full_system_prompt += "\n\nNote: User appears to need personal attention. Offer a callback from someone on the team."
+            
+            # Add PQ enrichment if not passthrough
+            if not pq_result.passthrough and pq_result.enriched_prompt:
+                full_system_prompt += f"\n\n===== PREQUALIFIER INSTRUCTIONS =====\n{pq_result.pq_instructions or ''}\n\n{pq_result.enriched_prompt}"
+            
+            # Add escalation context if frustrated
+            if user_frustrated:
+                full_system_prompt += f"\n\nESCALATION DETECTED: User is frustrated (decision: {pq_result.frustration_decision.value}). Prioritize empathy and de-escalation."
+            
+            # Add vagueness context
+            if query_vague:
+                full_system_prompt += f"\n\nVAGUE QUERY DETECTED: The user's question needs clarification. Ask clarifying questions before providing a detailed answer."
             
             iteration = 0
             final_response = None
@@ -839,17 +907,6 @@ Remember: You're here to inform voters and build support for Brandon's campaign.
             while iteration < self.max_tool_iterations:
                 iteration += 1
                 metadata["iterations"] = iteration
-                
-                full_system_prompt = self.get_system_prompt(question_types, topic)
-                if intent_context:
-                    full_system_prompt += f"\n\nINTENT ANALYSIS: {intent_context}"
-                if intent_result.needs_scripture:
-                    full_system_prompt += "\n\nNote: User may appreciate faith-based perspective. Consider including relevant scripture if appropriate."
-                if intent_result.needs_callback:
-                    full_system_prompt += "\n\nNote: User appears to need personal attention. Offer a callback from someone on the team."
-                
-                if escalation_result.needs_escalation:
-                    full_system_prompt += f"\n\nESCALATION DETECTED ({escalation_result.escalation_level}): {escalation_result.suggested_response}"
                 
                 llm_response = await self.llm_manager.generate_with_tools(
                     session_id=session_id,
@@ -868,6 +925,7 @@ Remember: You're here to inform voters and build support for Brandon's campaign.
                 if not tool_calls:
                     proposed_response = llm_response.text or "I'm sorry, I couldn't process your request."
                     
+                    # Factual safeguard check
                     is_factual_policy = "policy" in question_types or topic not in ["general", "callback"]
                     answered_without_search = iteration == 1 and len(metadata["tool_calls"]) == 0
                     safeguard_already_triggered = any("SYSTEM CHECK" in m.get("content", "") for m in messages)
@@ -889,6 +947,7 @@ Either confirm with a search or explain why no search is needed."""
                     final_response = proposed_response
                     break
                 
+                # Execute tool calls
                 tool_results = []
                 for tc_data in tool_calls:
                     tool_call = ToolCall(
@@ -927,26 +986,87 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
             if final_response is None:
                 final_response = "I apologize, but I'm having trouble completing this request. Would you like someone from the team to call you back to discuss this?"
             
-            validation_result = output_validator.validate(
-                response=final_response,
-                escalation_level=escalation_level_str,
-                user_frustrated=pq_result.needs_deescalation,
-                include_ai_disclosure=False
-            )
+            # ===== STAGE 3: OUTPUT VALIDATOR WITH REGENERATION LOOP =====
+            # Set up OV with dependencies
+            output_validator.set_weaviate_manager(self.tool_executor.weaviate)
+            # Note: SLM provider would be set here if available
+            # output_validator.set_slm_provider(self.slm_client)
             
-            fec_compliant, fec_issues = fec_checker.check(final_response)
+            regeneration_attempt = 0
+            max_regenerations = 3
             
-            if validation_result.status != ValidationStatus.PASSED:
-                logger.info(f"[{request_id}] Output validation modified response: {validation_result.modifications}")
-                final_response = validation_result.validated_response
-            
-            if not fec_compliant:
-                logger.warning(f"[{request_id}] FEC compliance issues detected: {fec_issues}")
-            
-            metadata["validation_status"] = validation_result.status.value
-            metadata["fec_issues"] = fec_issues
-            metadata["tone_issues"] = validation_result.tone_issues
-            metadata["validation_modifications"] = validation_result.modifications
+            while regeneration_attempt <= max_regenerations:
+                validation_result = await output_validator.validate(
+                    response=final_response,
+                    user_query=sanitized_message,
+                    user_frustrated=user_frustrated,
+                    regeneration_attempt=regeneration_attempt,
+                    pq_context={
+                        "frustration": pq_result.frustration_decision.value,
+                        "vagueness": pq_result.vagueness_decision.value,
+                        "rag_results": [r.to_dict() for r in pq_result.rag_results],
+                    }
+                )
+                
+                metadata["validation_status"] = validation_result.status.value
+                
+                if validation_result.status == ValidationStatus.PASSED:
+                    # All checks passed
+                    logger.info(f"[{request_id}] OV passed on attempt {regeneration_attempt}")
+                    break
+                    
+                elif validation_result.status == ValidationStatus.MODIFIED:
+                    # Minor modifications (e.g., PII redaction)
+                    final_response = validation_result.validated_response
+                    metadata["ov_modifications"].extend(validation_result.modifications)
+                    logger.info(f"[{request_id}] OV modified response: {validation_result.modifications}")
+                    break
+                    
+                elif validation_result.status == ValidationStatus.REJECTED:
+                    # Need to regenerate
+                    regeneration_attempt += 1
+                    metadata["regeneration_attempts"] = regeneration_attempt
+                    metadata["validation_rejections"].append({
+                        "attempt": regeneration_attempt,
+                        "reason": validation_result.rejection_reason.value if validation_result.rejection_reason else "unknown",
+                        "explanation": validation_result.rejection_explanation
+                    })
+                    
+                    logger.warning(f"[{request_id}] OV rejected (attempt {regeneration_attempt}): {validation_result.rejection_reason}")
+                    
+                    if regeneration_attempt <= max_regenerations:
+                        # Build regeneration prompt and re-query LLM
+                        regen_prompt = output_validator.build_regeneration_prompt(
+                            final_response, validation_result
+                        )
+                        
+                        messages.append({
+                            "role": "system",
+                            "content": regen_prompt
+                        })
+                        
+                        # Regenerate with LLM
+                        regen_response = await self.llm_manager.generate_with_tools(
+                            session_id=session_id,
+                            messages=messages,
+                            tools=[],  # No tools for regeneration
+                            system_prompt=full_system_prompt
+                        )
+                        
+                        final_response = regen_response.text or final_response
+                        metadata["total_tokens"] += regen_response.tokens_used
+                    else:
+                        # Max regenerations exceeded - use safe fallback
+                        final_response = "I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?"
+                        logger.warning(f"[{request_id}] Max regenerations exceeded, using fallback")
+                        break
+                        
+                elif validation_result.status == ValidationStatus.BLOCKED:
+                    # Critical violation - cannot regenerate
+                    final_response = "I'm not able to provide that information. Would you like someone from the team to call you back?"
+                    metadata["blocked_by_ov"] = True
+                    logger.error(f"[{request_id}] OV blocked response: {validation_result.rejection_explanation}")
+                    break
             
             session.add_turn(ConversationRole.ASSISTANT, final_response)
             
@@ -954,6 +1074,7 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
             metadata["duration_ms"] = int((time.time() - start_time) * 1000)
             
             logger.info(f"[{request_id}] Complete - {metadata['iterations']} iterations, "
+                       f"{metadata['regeneration_attempts']} regenerations, "
                        f"{metadata['total_tokens']} tokens, {metadata['duration_ms']}ms, "
                        f"model: {metadata['model_used']}")
             
