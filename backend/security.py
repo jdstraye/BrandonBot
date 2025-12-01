@@ -38,8 +38,9 @@ class InputSanitizer:
     ]
     
     PROMPT_INJECTION_PATTERNS = [
-        (r"ignore\s+(previous|all|above)\s+(instructions?|prompts?)", "ignore_instruction"),
-        (r"forget\s+(everything|all|your)\s+(you|instructions?|learned)", "forget_instruction"),
+        (r"ignore\s+(previous|all|above|your|the)\s*(previous\s*)?(instructions?|prompts?|rules?)", "ignore_instruction"),
+        (r"ignore\s+all\s+previous", "ignore_instruction"),
+        (r"forget\s+(everything|all|your)\s+(you|instructions?|learned)?", "forget_instruction"),
         (r"you\s+are\s+now\s+(?:a|an|my)", "role_override"),
         (r"pretend\s+(?:to\s+be|you\s+are)", "pretend_command"),
         (r"disregard\s+(?:all|previous|your)", "disregard_instruction"),

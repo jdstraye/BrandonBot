@@ -20,12 +20,37 @@ LLM Response → OV Checks → Pass: Deliver to User
 """
 
 import re
+import os
 import logging
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Tuple, Any
 from enum import Enum
 
+import yaml
+
 logger = logging.getLogger(__name__)
+
+
+def load_campaign_contacts():
+    """Load campaign contacts allowlist from config"""
+    config_path = os.path.join(os.path.dirname(__file__), "config", "campaign_contacts.yaml")
+    try:
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                return yaml.safe_load(f)
+    except Exception as e:
+        logger.warning(f"Failed to load campaign contacts config: {e}")
+    
+    return {
+        "emails": [],
+        "phones": [],
+        "urls": [],
+        "allowed_contexts": ["volunteer", "donate", "contact"],
+        "social_handles": []
+    }
+
+
+CAMPAIGN_CONTACTS = load_campaign_contacts()
 
 
 class ValidationStatus(Enum):
@@ -401,27 +426,14 @@ Remove or correct these citations. Only cite sources that exist in the knowledge
             return self._fallback_intent_check(response, user_query)
         
         try:
-            prompt = self.INTENT_CHECK_PROMPT.format(
-                user_query=user_query,
-                response=response
-            )
+            slm_response = await self.slm.check_intent_fulfillment(user_query, response)
             
-            slm_response = await self.slm.generate(
-                prompt=prompt,
-                max_tokens=100,
-                temperature=0.0,
-            )
-            
-            lines = slm_response.strip().split('\n')
-            decision_line = lines[0] if lines else ""
-            explanation = lines[1].replace("EXPLANATION:", "").strip() if len(lines) > 1 else ""
-            
-            fulfilled = "YES" in decision_line.upper()
+            fulfilled = slm_response.decision == "YES"
             
             return IntentCheckResult(
                 fulfilled=fulfilled,
-                explanation=explanation or ("Response fulfills intent" if fulfilled else "Response does not address query"),
-                confidence=0.9 if fulfilled else 0.7
+                explanation=slm_response.explanation or ("Response fulfills intent" if fulfilled else "Response does not address query"),
+                confidence=slm_response.confidence
             )
             
         except Exception as e:
@@ -470,27 +482,15 @@ Remove or correct these citations. Only cite sources that exist in the knowledge
             return self._fallback_ethics_check(response)
         
         try:
-            prompt = self.ETHICS_CHECK_PROMPT.format(response=response)
+            slm_response = await self.slm.check_ethics(response)
             
-            slm_response = await self.slm.generate(
-                prompt=prompt,
-                max_tokens=150,
-                temperature=0.0,
-            )
-            
-            lines = slm_response.strip().split('\n')
-            decision_line = lines[0] if lines else ""
-            passed = "PASS" in decision_line.upper()
+            passed = slm_response.decision == "PASS"
             
             issues = []
             suggestions = []
-            for line in lines[1:]:
-                if line.startswith("ISSUES:"):
-                    issues_text = line.replace("ISSUES:", "").strip()
-                    if issues_text.lower() != "none":
-                        issues = [i.strip() for i in issues_text.split(",")]
-                elif line.startswith("SUGGESTIONS:"):
-                    suggestions = [line.replace("SUGGESTIONS:", "").strip()]
+            if not passed and slm_response.explanation:
+                issues = [slm_response.explanation]
+                suggestions = ["Review for alignment with campaign values"]
             
             return EthicsCheckResult(
                 passed=passed,
@@ -525,18 +525,41 @@ Remove or correct these citations. Only cite sources that exist in the knowledge
         FEC compliance check with RAG retrieval + SLM double-negative verification.
         
         Step 1: Pattern matching for obvious violations
-        Step 2: RAG retrieval of relevant FEC regulations
-        Step 3: SLM double-check with regulations in context
+        Step 2: Double-negative context check (e.g., "can't guarantee" is OK)
+        Step 3: RAG retrieval of relevant FEC regulations
+        Step 4: SLM double-check with regulations in context
         """
         violations = []
         response_lower = response.lower()
         
         # Step 1: Pattern matching
+        pattern_matches = []
         for pattern, violation_type in self.FEC_PROHIBITED_PATTERNS:
             if re.search(pattern, response_lower, re.IGNORECASE):
-                violations.append(violation_type)
+                pattern_matches.append((pattern, violation_type))
         
-        # If pattern violations found, no need for SLM check
+        # Step 2: Double-negative context check
+        # Some pattern matches are OK when negated (e.g., "I can't guarantee")
+        negation_patterns = [
+            r"(can'?t|cannot|don'?t|do not|won'?t|will not|not able to|unable to)\s+",
+            r"(i'?m not saying|not promising|no guarantee)",
+        ]
+        
+        for pattern, violation_type in pattern_matches:
+            match = re.search(pattern, response_lower, re.IGNORECASE)
+            if match:
+                start_pos = max(0, match.start() - 30)
+                context_before = response_lower[start_pos:match.start()]
+                
+                is_negated = any(
+                    re.search(neg_pattern, context_before, re.IGNORECASE)
+                    for neg_pattern in negation_patterns
+                )
+                
+                if not is_negated:
+                    violations.append(violation_type)
+        
+        # If clear violations found, no need for SLM check
         if violations:
             return FECCheckResult(
                 compliant=False,
@@ -544,12 +567,12 @@ Remove or correct these citations. Only cite sources that exist in the knowledge
                 relevant_regulations=[]
             )
         
-        # Step 2: RAG retrieval of FEC regulations
+        # Step 3: RAG retrieval of FEC regulations
         relevant_regs = []
         if self.weaviate:
             try:
                 fec_query = f"FEC regulation compliance {response[:200]}"
-                results = await self.weaviate.search("FECCompliance", fec_query, limit=3)
+                results = await self.weaviate.search("FECProhibited", fec_query, limit=3)
                 relevant_regs = [
                     {"content": r.get("content", ""), "source": r.get("source", "")}
                     for r in results
@@ -557,25 +580,15 @@ Remove or correct these citations. Only cite sources that exist in the knowledge
             except Exception as e:
                 logger.warning(f"FEC RAG retrieval failed: {e}")
         
-        # Step 3: SLM double-check (if SLM available)
-        if self.slm and relevant_regs:
+        # Step 4: SLM double-check (if SLM available)
+        if self.slm:
             try:
-                regs_text = "\n".join([f"- {r['content'][:300]}" for r in relevant_regs])
-                prompt = self.FEC_DOUBLE_CHECK_PROMPT.format(
-                    response=response,
-                    fec_regulations=regs_text
-                )
+                regs_text = "\n".join([f"- {r['content'][:300]}" for r in relevant_regs]) if relevant_regs else "Standard FEC campaign regulations"
                 
-                slm_response = await self.slm.generate(
-                    prompt=prompt,
-                    max_tokens=100,
-                    temperature=0.0,
-                )
+                slm_response = await self.slm.check_fec_compliance(response, [regs_text])
                 
-                lines = slm_response.strip().split('\n')
-                if "VIOLATION" in lines[0].upper():
-                    violation_detail = lines[1] if len(lines) > 1 else "FEC violation detected by classifier"
-                    violations.append(violation_detail)
+                if slm_response.decision == "VIOLATION":
+                    violations.append(slm_response.explanation or "FEC violation detected by classifier")
                     
             except Exception as e:
                 logger.warning(f"SLM FEC check failed: {e}")
@@ -628,38 +641,87 @@ Remove or correct these citations. Only cite sources that exist in the knowledge
         
         return len(issues) == 0, issues
     
-    async def _redact_pii(self, text: str) -> PIICheckResult:
+    async def _redact_pii(self, text: str, context: str = None) -> PIICheckResult:
         """
-        Hybrid PII redaction: regex first, then SLM for contextual PII.
+        Hybrid PII redaction with context-aware allowlisting.
+        
+        Args:
+            text: Text to redact PII from
+            context: Optional context (e.g., "volunteer", "donate") to allow official contacts
+        
+        Steps:
+        1. Check if context allows official campaign contacts
+        2. Temporarily replace allowed contacts with placeholders
+        3. Apply regex redaction
+        4. Apply SLM detection (if available)
+        5. Restore allowed contacts
         """
         pii_found = []
         redacted = text
         
-        # Step 1: Regex redaction
+        # Check if context allows official campaign contacts
+        context_allows_official = False
+        if context:
+            context_lower = context.lower()
+            allowed_contexts = CAMPAIGN_CONTACTS.get("allowed_contexts", [])
+            context_allows_official = any(
+                ctx.lower() in context_lower for ctx in allowed_contexts
+            )
+        
+        # Step 1: Protect official campaign contacts with placeholders
+        protected_items = []
+        
+        if context_allows_official:
+            # Protect official emails
+            for email in CAMPAIGN_CONTACTS.get("emails", []):
+                placeholder = f"__PROTECTED_EMAIL_{len(protected_items)}__"
+                if email.lower() in redacted.lower():
+                    protected_items.append((placeholder, email))
+                    redacted = re.sub(
+                        re.escape(email), placeholder, redacted, flags=re.IGNORECASE
+                    )
+            
+            # Protect official phones
+            for phone in CAMPAIGN_CONTACTS.get("phones", []):
+                placeholder = f"__PROTECTED_PHONE_{len(protected_items)}__"
+                phone_pattern = re.escape(phone).replace(r"\ ", r"\s*").replace(r"\-", r"[-.\s]*")
+                if re.search(phone_pattern, redacted, re.IGNORECASE):
+                    protected_items.append((placeholder, phone))
+                    redacted = re.sub(phone_pattern, placeholder, redacted, flags=re.IGNORECASE)
+            
+            # Protect official URLs
+            for url in CAMPAIGN_CONTACTS.get("urls", []):
+                placeholder = f"__PROTECTED_URL_{len(protected_items)}__"
+                if url.lower() in redacted.lower():
+                    protected_items.append((placeholder, url))
+                    redacted = re.sub(
+                        re.escape(url), placeholder, redacted, flags=re.IGNORECASE
+                    )
+        
+        # Step 2: Regex redaction on unprotected content
         for pattern, replacement in self.PII_REGEX_PATTERNS:
             matches = re.findall(pattern, redacted, re.IGNORECASE)
             if matches:
                 for match in matches:
-                    pii_found.append({"type": replacement, "value": match[:10] + "..."})
+                    if not match.startswith("__PROTECTED_"):
+                        pii_found.append({"type": replacement, "value": match[:10] + "..."})
                 redacted = re.sub(pattern, replacement, redacted, flags=re.IGNORECASE)
         
-        # Step 2: SLM for contextual PII (if available and regex found nothing major)
+        # Step 3: SLM for contextual PII (if available and regex found nothing major)
         if self.slm and len(pii_found) < 2:
             try:
-                prompt = self.PII_SLM_PROMPT.format(text=redacted)
-                slm_response = await self.slm.generate(
-                    prompt=prompt,
-                    max_tokens=100,
-                    temperature=0.0,
-                )
+                slm_response = await self.slm.detect_pii(redacted)
                 
-                if "NO PII FOUND" not in slm_response.upper():
-                    # SLM found additional PII - log but don't auto-redact
-                    logger.warning(f"SLM detected potential PII: {slm_response[:100]}")
-                    pii_found.append({"type": "contextual_pii", "value": slm_response[:50]})
+                if slm_response.decision == "PII_FOUND":
+                    logger.warning(f"SLM detected potential PII: {slm_response.explanation[:100]}")
+                    pii_found.append({"type": "contextual_pii", "value": slm_response.explanation[:50]})
                     
             except Exception as e:
                 logger.warning(f"SLM PII check failed: {e}")
+        
+        # Step 4: Restore protected campaign contacts
+        for placeholder, original in protected_items:
+            redacted = redacted.replace(placeholder, original)
         
         return PIICheckResult(
             had_pii=len(pii_found) > 0,

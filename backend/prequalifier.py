@@ -137,11 +137,20 @@ class Prequalifier:
     """
     
     # Pattern matching for Step 1 (does NOT block, just flags)
-    PROFANITY_PATTERNS = [
-        r"\b(fuck|shit|damn|ass|bitch|bastard|crap)\b",
+    # Severe profanity gets higher weight in frustration scoring
+    SEVERE_PROFANITY_PATTERNS = [
+        r"\b(fuck(ing|ed|er|s)?|shit(ty|s)?|ass(hole)?|bitch(es)?|bastard)\b",
         r"\bf+u+c+k+\b",
         r"\bs+h+i+t+\b",
     ]
+    
+    # Mild profanity - less weight in frustration scoring
+    MILD_PROFANITY_PATTERNS = [
+        r"\b(damn(ed)?|crap(py)?|hell|heck)\b",
+        r"\bwhat the (hell|heck)\b",
+    ]
+    
+    PROFANITY_PATTERNS = SEVERE_PROFANITY_PATTERNS + MILD_PROFANITY_PATTERNS
     
     INSULT_PATTERNS = [
         r"\b(you('re| are)|this is) (stupid|idiot|moron|dumb|useless)\b",
@@ -163,14 +172,16 @@ class Prequalifier:
     ]
     
     FRUSTRATION_PATTERNS = [
-        r"(already|just) (said|asked|told you|explained)",
-        r"(doesn't|don't|didn't) (answer|help|make sense|understand)",
+        r"(already|just) (said|asked|told|explained)",
+        r"(you )?(already )?told me",
+        r"(doesn't|don't|didn't|won't) (answer|help|make sense|understand|work)",
         r"(still )?(haven't|hasn't|don't|doesn't) (addressed|answered|helped)",
         r"(waste|wasting) (of |my )?time",
         r"(not|isn't|aren't) (helping|working|useful)",
         r"(i('m| am)|this is) (confused|frustrated|annoyed|angry)",
         r"forget it|never ?mind",
         r"(ugh|argh|omg|ffs|wtf)",
+        r"this (doesn't|won't|isn't) (work|help)",
     ]
     
     # SLM prompts for hybrid detection
@@ -313,7 +324,7 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
         result.pattern_flags = pattern_flags
         
         # Step 4: SLM frustration classification
-        frustration_decision = await self._classify_frustration(
+        frustration_decision = await self._classify_frustration_async(
             result.sanitized_message,
             pattern_flags,
             conversation_history
@@ -326,7 +337,7 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
         result.avg_rag_confidence = avg_confidence
         
         # Step 6: SLM vagueness classification
-        vagueness_decision = await self._classify_vagueness(
+        vagueness_decision = await self._classify_vagueness_async(
             result.sanitized_message,
             rag_results,
             avg_confidence
@@ -400,53 +411,83 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
         
         return flags
     
-    async def _classify_frustration(
+    def _classify_frustration(
+        self,
+        flags: PatternFlags,
+        message: str,
+        history: List[Dict] = None
+    ) -> FrustrationDecision:
+        """
+        Synchronous frustration classification for direct calls.
+        Uses pattern flags + message to determine ESCALATE or CONTINUE.
+        
+        Args:
+            flags: Pattern flags detected in message
+            message: Original user message (REQUIRED for severity classification)
+            history: Optional conversation history
+        
+        For SLM-based classification, use _classify_frustration_async.
+        """
+        if not message and flags.profanity:
+            raise ValueError("message is required when profanity flag is set for severity classification")
+        return self._fallback_frustration_classification(flags, message, history)
+    
+    async def _classify_frustration_async(
         self,
         message: str,
         flags: PatternFlags,
         history: List[Dict] = None
     ) -> FrustrationDecision:
         """
-        Step 2: SLM classification for frustration/escalation.
+        Async SLM classification for frustration/escalation.
         Uses pattern flags + message to determine ESCALATE or CONTINUE.
         """
         # If no SLM available, fall back to rule-based
         if self.slm is None:
-            return self._fallback_frustration_classification(flags, history)
+            return self._fallback_frustration_classification(flags, message, history)
         
         try:
-            prompt = self.FRUSTRATION_SLM_PROMPT.format(
-                user_message=message,
-                flags=flags.to_dict()
-            )
+            response = await self.slm.classify_frustration(message, flags.to_dict())
             
-            response = await self.slm.generate(
-                prompt=prompt,
-                max_tokens=10,
-                temperature=0.0,  # Deterministic
-            )
-            
-            response_text = response.strip().upper()
-            
-            if "ESCALATE" in response_text:
+            if response.decision == "ESCALATE":
                 return FrustrationDecision.ESCALATE
             else:
                 return FrustrationDecision.CONTINUE
                 
         except Exception as e:
             logger.warning(f"SLM frustration classification failed: {e}, using fallback")
-            return self._fallback_frustration_classification(flags, history)
+            return self._fallback_frustration_classification(flags, message, history)
     
     def _fallback_frustration_classification(
         self,
         flags: PatternFlags,
+        message: str,
         history: List[Dict] = None
     ) -> FrustrationDecision:
-        """Fallback rule-based frustration classification when SLM unavailable"""
+        """
+        Fallback rule-based frustration classification when SLM unavailable.
+        
+        Args:
+            flags: Pattern flags detected in message
+            message: Original user message (REQUIRED for severity classification)
+            history: Optional conversation history
+        """
         score = 0
         
+        # Check for severe vs mild profanity (message is required)
+        has_severe_profanity = False
+        if message and flags.profanity:
+            message_lower = message.lower()
+            for pattern in self.SEVERE_PROFANITY_PATTERNS:
+                if re.search(pattern, message_lower, re.IGNORECASE):
+                    has_severe_profanity = True
+                    break
+        
         if flags.profanity:
-            score += 3
+            if has_severe_profanity:
+                score += 3  # Severe profanity (fuck, shit, etc.)
+            else:
+                score += 1  # Mild profanity (damn, hell, heck)
         if flags.insults:
             score += 3
         if flags.demands_human:
@@ -466,7 +507,8 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
             if len(user_messages) >= 3:
                 score += 1  # Long conversation without resolution
         
-        return FrustrationDecision.ESCALATE if score >= 4 else FrustrationDecision.CONTINUE
+        # Escalate if score >= 3 (severe profanity or insults alone should trigger)
+        return FrustrationDecision.ESCALATE if score >= 3 else FrustrationDecision.CONTINUE
     
     async def _retrieve_rag_context(
         self,
@@ -510,14 +552,28 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
             logger.error(f"RAG retrieval error: {e}")
             return [], 0.0
     
-    async def _classify_vagueness(
+    def _classify_vagueness(
+        self,
+        message: str,
+        avg_confidence: float,
+        rag_results: List[RAGResult] = None
+    ) -> VaguenessDecision:
+        """
+        Synchronous vagueness classification for direct calls.
+        Uses query + confidence to determine CLEAR or VAGUE.
+        
+        For SLM-based classification, use _classify_vagueness_async.
+        """
+        return self._fallback_vagueness_classification(message, avg_confidence)
+    
+    async def _classify_vagueness_async(
         self,
         message: str,
         rag_results: List[RAGResult],
         avg_confidence: float
     ) -> VaguenessDecision:
         """
-        Step 4: SLM classification for query vagueness.
+        Async SLM classification for query vagueness.
         Uses query + RAG data to determine CLEAR or VAGUE.
         """
         # If no SLM available, fall back to rule-based
@@ -525,26 +581,10 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
             return self._fallback_vagueness_classification(message, avg_confidence)
         
         try:
-            rag_data_str = "\n".join([
-                f"- [{r.collection}] (conf: {r.confidence:.2f}) {r.content[:200]}"
-                for r in rag_results[:4]
-            ]) or "No relevant data found in knowledge base."
+            has_context = len(rag_results) > 0 and avg_confidence > 0.3
+            response = await self.slm.classify_vagueness(message, avg_confidence, has_context)
             
-            prompt = self.VAGUENESS_SLM_PROMPT.format(
-                user_message=message,
-                rag_data=rag_data_str,
-                avg_confidence=avg_confidence
-            )
-            
-            response = await self.slm.generate(
-                prompt=prompt,
-                max_tokens=10,
-                temperature=0.0,
-            )
-            
-            response_text = response.strip().upper()
-            
-            if "VAGUE" in response_text:
+            if response.decision == "VAGUE":
                 return VaguenessDecision.VAGUE
             else:
                 return VaguenessDecision.CLEAR
@@ -560,21 +600,49 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
     ) -> VaguenessDecision:
         """Fallback rule-based vagueness classification"""
         words = message.split()
+        message_lower = message.lower()
         
         # Very short queries are vague
         if len(words) < 3:
             return VaguenessDecision.VAGUE
         
-        # Low RAG confidence suggests vague/unmatched query
-        if avg_confidence < 0.4:
+        # Single-word queries
+        if len(words) == 1:
             return VaguenessDecision.VAGUE
         
         # "What about X?" pattern is often vague
-        if re.match(r"^what about\s+", message.lower()):
+        if re.match(r"^what about\s+", message_lower):
             return VaguenessDecision.VAGUE
         
-        # Single-word queries
-        if len(words) == 1:
+        # Clear question patterns (specific topic + question structure)
+        clear_patterns = [
+            r"what is (brandon'?s?|his|the) (position|stance|view|plan|policy) on",
+            r"where does (brandon|he) stand on",
+            r"how (does|will|would|can) (brandon|he)",
+            r"why (does|did|is|should) (brandon|he)",
+            r"what (will|would|does|did) (brandon|he) (do|say|think|believe|propose)",
+            r"(brandon'?s?|his) (position|stance|view|plan|policy) (on|about|regarding)",
+            r"what are (brandon'?s?|his|the) (plans?|proposals?|ideas?|solutions?) (for|on|about|regarding)",
+        ]
+        
+        for pattern in clear_patterns:
+            if re.search(pattern, message_lower):
+                return VaguenessDecision.CLEAR
+        
+        # If we have RAG confidence, use it
+        if avg_confidence >= 0.4:
+            return VaguenessDecision.CLEAR
+        
+        # Longer queries with question words are likely clear
+        question_words = ["what", "how", "why", "where", "when", "who", "which"]
+        has_question = any(w in message_lower for w in question_words)
+        has_topic = len(words) >= 5 and has_question
+        
+        if has_topic:
+            return VaguenessDecision.CLEAR
+        
+        # Low confidence and no clear pattern
+        if avg_confidence < 0.4:
             return VaguenessDecision.VAGUE
         
         return VaguenessDecision.CLEAR
