@@ -34,9 +34,18 @@ from email_service import email_service
 db_manager = DatabaseManager(database_path)
 web_search_service = WebSearchService()
 
+slm_manager = None
+try:
+    from slm_manager import SLMManager
+    slm_manager = SLMManager()
+    logger.info("SLM Manager created (lazy loading - model loads on first use)")
+except Exception as e:
+    logger.warning(f"SLM Manager not available: {e}")
+    logger.info("Running without local SLM - will use pattern-based fallbacks")
+
 from agent_orchestrator import AgentOrchestrator
 logger.info("Initializing LLM-First AgentOrchestrator (multi-provider mode)")
-agent_orchestrator = AgentOrchestrator(weaviate_manager, web_search_service, db_manager)
+agent_orchestrator = AgentOrchestrator(weaviate_manager, web_search_service, db_manager, slm_manager=slm_manager)
 
 app = FastAPI(title="BrandonBot API - LLM-First Agentic Architecture")
 

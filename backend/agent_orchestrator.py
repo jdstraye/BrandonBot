@@ -661,7 +661,7 @@ class AgentOrchestrator:
     - Tracks which model handled each query for evaluation
     """
     
-    def __init__(self, weaviate_manager, web_search_service=None, db_manager=None, llm_client=None):
+    def __init__(self, weaviate_manager, web_search_service=None, db_manager=None, llm_client=None, slm_manager=None):
         """
         Initialize the orchestrator.
         
@@ -670,10 +670,12 @@ class AgentOrchestrator:
             web_search_service: Optional WebSearchService for web search
             db_manager: Optional DatabaseManager for logging model performance
             llm_client: Legacy parameter (ignored if LLMProviderManager is used)
+            slm_manager: SLMManager for local classification tasks (prequalifier/validator)
         """
         self.llm_manager = LLMProviderManager()
         self.llm = llm_client
         self.db_manager = db_manager
+        self.slm_manager = slm_manager
         self.tool_executor = ToolExecutor(weaviate_manager, web_search_service)
         self.session_manager = SessionManager()
         self.max_tool_iterations = 5
@@ -790,8 +792,8 @@ Remember: You're here to inform voters and build support for Brandon's campaign.
         # ===== STAGE 1: PREQUALIFIER =====
         # Set up PQ with dependencies
         prequalifier.set_weaviate_manager(self.tool_executor.weaviate)
-        # Note: SLM provider would be set here if available
-        # prequalifier.set_slm_provider(self.slm_client)
+        if self.slm_manager:
+            prequalifier.set_slm_provider(self.slm_manager)
         
         pq_result = await prequalifier.analyze(user_message, session_id, history)
         
@@ -989,8 +991,8 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
             # ===== STAGE 3: OUTPUT VALIDATOR WITH REGENERATION LOOP =====
             # Set up OV with dependencies
             output_validator.set_weaviate_manager(self.tool_executor.weaviate)
-            # Note: SLM provider would be set here if available
-            # output_validator.set_slm_provider(self.slm_client)
+            if self.slm_manager:
+                output_validator.set_slm_provider(self.slm_manager)
             
             regeneration_attempt = 0
             max_regenerations = 3
