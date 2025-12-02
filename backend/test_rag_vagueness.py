@@ -83,7 +83,7 @@ async def test_rag_vagueness():
         print("Make sure Weaviate is running on ports 8079/50050")
         return
     
-    print("\n[2/3] Loading SLM (Qwen 2.5-0.5B)...")
+    print("\n[2/3] Loading SLM (Cross-Encoder + Sentiment)...")
     load_start = time.time()
     
     from slm_manager import SLMManager
@@ -91,9 +91,9 @@ async def test_rag_vagueness():
     from prequalifier import Prequalifier, RAGResult
     
     slm = SLMManager()
-    await slm._ensure_loaded()
+    await slm._ensure_cross_encoder_loaded()
     load_time = time.time() - load_start
-    print(f"SLM loaded in {load_time:.2f}s")
+    print(f"Cross-encoder loaded in {load_time:.2f}s")
     
     weaviate_mgr = WeaviateManager()
     weaviate_mgr.client = client

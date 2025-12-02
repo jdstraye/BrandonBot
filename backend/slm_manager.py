@@ -159,13 +159,14 @@ class SLMManager:
         Score relevance between a query and multiple documents.
         
         Uses cross-encoder to compute relevance scores for each query-document pair.
+        Applies sigmoid to convert raw logits to probabilities [0, 1].
         
         Args:
             query: User query
             documents: List of document texts to score
         
         Returns:
-            List of relevance scores (higher = more relevant)
+            List of relevance scores (0-1, higher = more relevant)
         """
         await self._ensure_cross_encoder_loaded()
         
@@ -175,10 +176,21 @@ class SLMManager:
         pairs = [(query, doc) for doc in documents]
         
         try:
-            scores = self._cross_encoder.predict(pairs)
-            if hasattr(scores, 'tolist'):
-                scores = scores.tolist()
-            return scores
+            import torch
+            
+            raw_scores = self._cross_encoder.predict(pairs)
+            
+            if hasattr(raw_scores, 'tolist'):
+                raw_scores = raw_scores.tolist()
+            
+            if isinstance(raw_scores, (list, tuple)):
+                tensor_scores = torch.tensor(raw_scores)
+            else:
+                tensor_scores = torch.tensor([raw_scores])
+            
+            sigmoid_scores = torch.sigmoid(tensor_scores).tolist()
+            
+            return sigmoid_scores
         except Exception as e:
             logger.warning(f"Cross-encoder scoring failed: {e}")
             return [0.0] * len(documents)
@@ -365,6 +377,7 @@ class SLMManager:
         
         words = message.lower().split()
         word_count = len(words)
+        message_lower = message.lower()
         
         greetings = {'hi', 'hello', 'hey', 'yo', 'sup', 'greetings'}
         if word_count <= 2 and any(w in greetings for w in words):
@@ -380,6 +393,42 @@ class SLMManager:
                 decision="VAGUE",
                 confidence=0.85,
                 explanation=f"Too short: {word_count} words",
+                raw_output=message
+            )
+        
+        vague_patterns_exact = [
+            'what about that',
+            'tell me more',
+            'what do you think',
+            'can you explain',
+            'i have a question',
+            'what are the policies',
+            'what are the plans',
+            'i want to know more',
+        ]
+        for pattern in vague_patterns_exact:
+            if pattern in message_lower:
+                return SLMResponse(
+                    decision="VAGUE",
+                    confidence=0.80,
+                    explanation=f"Vague pattern detected: '{pattern}'",
+                    raw_output=message
+                )
+        
+        if "what's brandon's opinion" in message_lower or "what is brandon's opinion" in message_lower:
+            if 'on' not in message_lower:
+                return SLMResponse(
+                    decision="VAGUE",
+                    confidence=0.80,
+                    explanation="Opinion without topic",
+                    raw_output=message
+                )
+        
+        if message_lower.startswith('what about ') and word_count <= 5:
+            return SLMResponse(
+                decision="VAGUE",
+                confidence=0.75,
+                explanation="Short 'what about' question",
                 raw_output=message
             )
         
@@ -406,34 +455,36 @@ class SLMManager:
             max_score = max(relevance_scores)
             avg_score = sum(relevance_scores) / len(relevance_scores)
             
-            if max_score > 5.0:
+            combined_signal = (max_score * 0.3) + (avg_confidence * 0.7)
+            
+            if combined_signal >= 0.55:
                 return SLMResponse(
                     decision="CLEAR",
-                    confidence=min(0.95, 0.7 + max_score * 0.02),
-                    explanation=f"High relevance: max={max_score:.2f}, avg={avg_score:.2f}",
+                    confidence=min(0.95, 0.6 + combined_signal * 0.5),
+                    explanation=f"High combined: cross={max_score:.3f}, rag={avg_confidence:.2f}, combined={combined_signal:.3f}",
                     raw_output=str(relevance_scores)
                 )
             
-            if max_score > 2.0 and avg_score > 0.5:
+            if combined_signal >= 0.45 or avg_confidence >= 0.65:
                 return SLMResponse(
                     decision="CLEAR",
-                    confidence=min(0.85, 0.6 + max_score * 0.05),
-                    explanation=f"Good relevance: max={max_score:.2f}, avg={avg_score:.2f}",
+                    confidence=min(0.80, 0.5 + combined_signal * 0.4),
+                    explanation=f"Good combined: cross={max_score:.3f}, rag={avg_confidence:.2f}, combined={combined_signal:.3f}",
                     raw_output=str(relevance_scores)
                 )
             
-            if max_score > 0.5:
+            if avg_confidence >= 0.50 and max_score >= 0.002:
                 return SLMResponse(
                     decision="CLEAR",
                     confidence=0.65,
-                    explanation=f"Moderate relevance: max={max_score:.2f}, avg={avg_score:.2f}",
+                    explanation=f"Moderate RAG match: cross={max_score:.3f}, rag={avg_confidence:.2f}",
                     raw_output=str(relevance_scores)
                 )
             
             return SLMResponse(
                 decision="VAGUE",
-                confidence=max(0.6, 0.8 - max_score * 0.1),
-                explanation=f"Low relevance: max={max_score:.2f}, avg={avg_score:.2f}",
+                confidence=max(0.7, 0.9 - combined_signal),
+                explanation=f"Low relevance: cross={max_score:.3f}, rag={avg_confidence:.2f}, combined={combined_signal:.3f}",
                 raw_output=str(relevance_scores)
             )
             
