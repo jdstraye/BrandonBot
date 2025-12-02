@@ -573,34 +573,34 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
         avg_confidence: float
     ) -> VaguenessDecision:
         """
-        Hybrid vagueness classification using fallback + optional SLM validation.
-        The fallback rules are well-tuned, so we trust them as the primary signal.
-        SLM is used only for edge cases where fallback is uncertain.
-        """
-        fallback_decision = self._fallback_vagueness_classification(message, avg_confidence)
+        RAG-informed vagueness classification using Qwen.
         
+        The SLM receives the user query along with RAG results and similarity
+        scores, allowing it to make an informed decision about whether the
+        knowledge base can answer the query.
+        """
         if self.slm is None:
-            return fallback_decision
+            return self._fallback_vagueness_classification(message, avg_confidence)
         
         try:
-            has_context = len(rag_results) > 0 and avg_confidence > 0.3
-            response = await self.slm.classify_vagueness(message, avg_confidence, has_context)
-            slm_decision = VaguenessDecision.VAGUE if response.decision == "VAGUE" else VaguenessDecision.CLEAR
+            rag_dicts = [r.to_dict() for r in rag_results] if rag_results else []
             
-            if slm_decision == fallback_decision:
-                return fallback_decision
+            response = await self.slm.classify_vagueness_with_rag(
+                message=message,
+                rag_results=rag_dicts,
+                avg_confidence=avg_confidence
+            )
             
-            words = message.lower().split()
-            if len(words) < 3:
+            logger.info(f"RAG+SLM vagueness: query='{message[:50]}...', decision={response.decision}, {response.explanation}")
+            
+            if response.decision == "VAGUE":
                 return VaguenessDecision.VAGUE
-            if avg_confidence >= 0.5:
+            else:
                 return VaguenessDecision.CLEAR
-            
-            return fallback_decision
                 
         except Exception as e:
-            logger.warning(f"SLM vagueness classification failed: {e}, using fallback")
-            return fallback_decision
+            logger.warning(f"RAG+SLM vagueness classification failed: {e}, using fallback")
+            return self._fallback_vagueness_classification(message, avg_confidence)
     
     def _fallback_vagueness_classification(
         self,

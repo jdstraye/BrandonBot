@@ -26,6 +26,7 @@ class SLMTask(Enum):
     """Classification tasks the SLM can perform"""
     FRUSTRATION = "frustration"
     VAGUENESS = "vagueness"
+    VAGUENESS_WITH_RAG = "vagueness_with_rag"
     INTENT_FULFILLMENT = "intent_fulfillment"
     ETHICS = "ethics"
     FEC_COMPLIANCE = "fec_compliance"
@@ -67,30 +68,39 @@ Message: "{message}"
 """,
 
         SLMTask.VAGUENESS: """<|im_start|>system
-You classify if a user query can be answered.
-
-VAGUE (needs clarification):
-- Greetings: hi, hello, hey
-- Under 4 words with no topic
-- "What about X?" pattern
-
-CLEAR (can answer):
-- Contains "position", "policy", "plan" plus a topic
-- Asks a question about something specific
-- Contains name "Brandon" + topic
-
-Examples:
-- "hi" -> VAGUE
-- "hello" -> VAGUE
-- "What about taxes?" -> VAGUE  
-- "What is Brandon's position on healthcare?" -> CLEAR
-- "How does Brandon plan to address inflation?" -> CLEAR
-- "Tell me about the healthcare policy" -> CLEAR
+You classify if a user query can be answered based on retrieved knowledge base content.
 <|im_end|>
 <|im_start|>user
 Query: "{message}"
 
 Output ONLY: CLEAR or VAGUE
+<|im_end|>
+<|im_start|>assistant
+""",
+
+        SLMTask.VAGUENESS_WITH_RAG: """<|im_start|>system
+You are a query classifier for a political campaign chatbot about Brandon Sowers.
+Your job is to decide if we can answer the user's query based on what we found in our knowledge base.
+
+CLEAR = The query has clear intent AND the retrieved content is relevant to answering it.
+VAGUE = The query is unclear OR the retrieved content doesn't match what the user is asking.
+<|im_end|>
+<|im_start|>user
+User Query: "{message}"
+
+Retrieved from knowledge base (similarity scores shown):
+{rag_content}
+
+Average similarity score: {avg_score:.2f}
+Number of results found: {num_results}
+
+Based on the query and retrieved content, can we provide a helpful answer?
+- If the retrieved content directly addresses the query topic: CLEAR
+- If the query is too short/ambiguous to understand: VAGUE  
+- If the retrieved content doesn't match what the user is asking: VAGUE
+- If similarity scores are very low (<0.4): likely VAGUE
+
+Output ONLY one word: CLEAR or VAGUE
 <|im_end|>
 <|im_start|>assistant
 """,
@@ -420,6 +430,72 @@ List any PII found (names, addresses, dates of birth, etc.) or say "NO PII FOUND
                 decision="CLEAR",
                 confidence=0.3,
                 explanation=f"SLM error: {e}",
+                raw_output=""
+            )
+    
+    async def classify_vagueness_with_rag(
+        self,
+        message: str,
+        rag_results: List[Dict[str, Any]],
+        avg_confidence: float
+    ) -> SLMResponse:
+        """
+        Classify query vagueness using RAG results as context.
+        
+        The SLM sees the actual retrieved content and similarity scores,
+        allowing it to make an informed decision about whether we can
+        answer the user's query.
+        
+        Args:
+            message: User query
+            rag_results: List of RAG results with content and confidence
+            avg_confidence: Average similarity score from RAG
+        
+        Returns:
+            SLMResponse with CLEAR or VAGUE decision
+        """
+        rag_content = ""
+        if rag_results:
+            for i, result in enumerate(rag_results[:5]):
+                confidence = result.get('confidence', 0.0)
+                content = result.get('content', '')[:200]
+                source = result.get('source', 'unknown')
+                collection = result.get('collection', 'unknown')
+                rag_content += f"\n[{i+1}] (score: {confidence:.2f}, source: {source}, collection: {collection})\n{content}\n"
+        else:
+            rag_content = "No results found in knowledge base."
+        
+        prompt = self.PROMPT_TEMPLATES[SLMTask.VAGUENESS_WITH_RAG].format(
+            message=message,
+            rag_content=rag_content,
+            avg_score=avg_confidence,
+            num_results=len(rag_results) if rag_results else 0
+        )
+        
+        try:
+            response = await self.generate(prompt, max_tokens=10, temperature=0.0)
+            response_upper = response.strip().upper()
+            
+            if "VAGUE" in response_upper:
+                return SLMResponse(
+                    decision="VAGUE",
+                    confidence=0.9,
+                    explanation=f"RAG avg_score={avg_confidence:.2f}, num_results={len(rag_results) if rag_results else 0}",
+                    raw_output=response
+                )
+            else:
+                return SLMResponse(
+                    decision="CLEAR",
+                    confidence=0.9,
+                    explanation=f"RAG avg_score={avg_confidence:.2f}, num_results={len(rag_results) if rag_results else 0}",
+                    raw_output=response
+                )
+        except Exception as e:
+            logger.warning(f"SLM RAG vagueness classification failed: {e}")
+            return SLMResponse(
+                decision="CLEAR" if avg_confidence > 0.5 else "VAGUE",
+                confidence=0.3,
+                explanation=f"SLM error, fallback based on avg_confidence={avg_confidence:.2f}: {e}",
                 raw_output=""
             )
     
