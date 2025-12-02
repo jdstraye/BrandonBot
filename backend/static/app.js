@@ -1,6 +1,6 @@
 let userId = localStorage.getItem('userId') || generateUserId();
-let consentGiven = localStorage.getItem('consentGiven') === 'true';
-let disclosureAcknowledged = localStorage.getItem('disclosureAcknowledged') === 'true';
+let loggingConsentGiven = localStorage.getItem('loggingConsentGiven') === 'true';
+let aiDisclosureAccepted = localStorage.getItem('aiDisclosureAccepted') === 'true';
 let currentQuestion = '';
 let conversationHistory = [];
 
@@ -10,39 +10,81 @@ function generateUserId() {
     return id;
 }
 
-if (disclosureAcknowledged) {
-    document.getElementById('ai-disclosure').style.display = 'none';
-    if (!consentGiven) {
-        document.getElementById('consent-banner').style.display = 'block';
+function initConsentModal() {
+    const consentModal = document.getElementById('consent-modal');
+    const aiCheckbox = document.getElementById('ai-consent-checkbox');
+    const continueBtn = document.getElementById('consent-continue-btn');
+    
+    if (!consentModal) {
+        console.log('Consent modal element not found');
+        enableChat();
+        return;
+    }
+    
+    if (aiDisclosureAccepted) {
+        consentModal.style.display = 'none';
+        enableChat();
+    } else {
+        consentModal.style.display = 'flex';
+        disableChat();
+    }
+    
+    if (aiCheckbox && continueBtn) {
+        aiCheckbox.addEventListener('change', function() {
+            continueBtn.disabled = !this.checked;
+        });
     }
 }
 
-if (consentGiven) {
-    document.getElementById('consent-banner').style.display = 'none';
+function disableChat() {
+    const queryInput = document.getElementById('query-input');
+    const sendBtn = document.getElementById('send-btn');
+    queryInput.disabled = true;
+    queryInput.placeholder = 'Please accept the terms above to continue...';
+    sendBtn.disabled = true;
 }
 
-function dismissDisclosure() {
-    disclosureAcknowledged = true;
-    localStorage.setItem('disclosureAcknowledged', 'true');
-    document.getElementById('ai-disclosure').style.display = 'none';
-    document.getElementById('consent-banner').style.display = 'block';
+function enableChat() {
+    const queryInput = document.getElementById('query-input');
+    const sendBtn = document.getElementById('send-btn');
+    queryInput.disabled = false;
+    queryInput.placeholder = 'Type your question...';
+    sendBtn.disabled = false;
 }
 
-async function handleConsent(consent) {
-    consentGiven = consent;
-    localStorage.setItem('consentGiven', consent);
-    document.getElementById('consent-banner').style.display = 'none';
+async function handleConsentSubmit() {
+    const aiCheckbox = document.getElementById('ai-consent-checkbox');
+    const loggingCheckbox = document.getElementById('logging-consent-checkbox');
+    
+    if (!aiCheckbox.checked) {
+        return;
+    }
+    
+    aiDisclosureAccepted = true;
+    loggingConsentGiven = loggingCheckbox.checked;
+    
+    localStorage.setItem('aiDisclosureAccepted', 'true');
+    localStorage.setItem('loggingConsentGiven', loggingConsentGiven.toString());
+    
+    document.getElementById('consent-modal').style.display = 'none';
+    enableChat();
     
     try {
         await fetch('/api/consent', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user_id: userId, consent_given: consent })
+            body: JSON.stringify({ 
+                user_id: userId, 
+                ai_disclosure_accepted: true,
+                logging_consent_given: loggingConsentGiven 
+            })
         });
     } catch (error) {
         console.error('Failed to update consent:', error);
     }
 }
+
+document.addEventListener('DOMContentLoaded', initConsentModal);
 
 function addMessage(content, isUser = false, data = {}) {
     const messagesDiv = document.getElementById('messages');
@@ -135,7 +177,7 @@ async function sendQuery() {
             body: JSON.stringify({
                 query: query,
                 user_id: userId,
-                consent_given: consentGiven,
+                logging_consent_given: loggingConsentGiven,
                 conversation_history: conversationHistory.slice(-10)
             })
         });

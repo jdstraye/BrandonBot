@@ -61,11 +61,14 @@ class QueryRequest(BaseModel):
     query: str
     user_id: Optional[str] = None
     session_id: Optional[str] = None
-    consent_given: bool = False
+    logging_consent_given: bool = False
+    consent_given: bool = False  # Legacy field for backwards compatibility
 
 class ConsentRequest(BaseModel):
     user_id: str
-    consent_given: bool
+    ai_disclosure_accepted: bool = True
+    logging_consent_given: bool = False
+    consent_given: bool = False  # Legacy field for backwards compatibility
 
 class CallbackRequest(BaseModel):
     user_id: str
@@ -204,14 +207,16 @@ async def query_bot(request: QueryRequest):
             session_id=session_id
         )
         
-        if request.consent_given and request.user_id:
+        # Use logging_consent_given, fall back to legacy consent_given for backwards compatibility
+        should_log = request.logging_consent_given or request.consent_given
+        if should_log and request.user_id:
             await db_manager.log_interaction(
                 user_id=request.user_id,
                 query=request.query,
                 response=response_text,
                 confidence=metadata.get("confidence", 0.8),
                 sources=metadata.get("sources", []),
-                consent_given=request.consent_given,
+                consent_given=should_log,
                 model_used=metadata.get("model_used")
             )
         
@@ -234,8 +239,15 @@ async def query_bot(request: QueryRequest):
 @app.post("/api/consent")
 async def update_consent(request: ConsentRequest):
     try:
-        await db_manager.update_consent(request.user_id, request.consent_given)
-        return {"status": "success", "message": "Consent updated"}
+        # Use logging_consent_given, fall back to legacy consent_given for backwards compatibility
+        logging_consent = request.logging_consent_given or request.consent_given
+        await db_manager.update_consent(request.user_id, logging_consent)
+        return {
+            "status": "success", 
+            "message": "Consent updated",
+            "ai_disclosure_accepted": request.ai_disclosure_accepted,
+            "logging_consent_given": logging_consent
+        }
     except Exception as e:
         logger.error(f"Error updating consent: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

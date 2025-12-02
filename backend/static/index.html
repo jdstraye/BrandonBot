@@ -13,17 +13,37 @@
             <p class="subtitle">AI Campaign Assistant for Brandon Sowers</p>
         </div>
         
-        <div id="ai-disclosure" class="ai-disclosure">
-            <p><strong>AI Disclosure:</strong> This is an <strong>AI-powered automated assistant</strong>, not a human representative. My responses are AI-generated and may not be perfect. This is a volunteer project created by campaign supporters.</p>
-            <p class="disclosure-note">I cannot provide legal, tax, or professional advice. If you need personal assistance, I can connect you with someone from the team.</p>
-            <button onclick="dismissDisclosure()" class="btn-small">I Understand</button>
-        </div>
-        
-        <div id="consent-banner" class="consent-banner" style="display: none;">
-            <p><strong>Privacy Notice:</strong> Would you like to help improve BrandonBot? Your questions and our conversations can be logged to help us provide better answers.</p>
-            <div class="consent-buttons">
-                <button onclick="handleConsent(true)" class="btn-primary">Yes, I consent to logging</button>
-                <button onclick="handleConsent(false)" class="btn-secondary">No thanks</button>
+        <div id="consent-modal" class="consent-modal">
+            <div class="consent-modal-content">
+                <h2>Before We Begin</h2>
+                
+                <div class="consent-section">
+                    <h3>AI Disclosure</h3>
+                    <p>This is an <strong>AI-powered automated assistant</strong>, not a human representative. My responses are AI-generated and may not be perfect. This is a volunteer project created by campaign supporters.</p>
+                    <p class="disclosure-note">I cannot provide legal, tax, or professional advice. If you need personal assistance, I can connect you with someone from the team.</p>
+                </div>
+                
+                <div class="consent-section">
+                    <h3>Conversation Logging</h3>
+                    <p>To help improve BrandonBot, your questions and our conversations may be logged. This helps us provide better, more accurate answers to future visitors.</p>
+                </div>
+                
+                <div class="consent-checkbox-group">
+                    <label class="consent-checkbox">
+                        <input type="checkbox" id="ai-consent-checkbox" required>
+                        <span>I understand this is an AI assistant and accept its limitations</span>
+                    </label>
+                    <label class="consent-checkbox">
+                        <input type="checkbox" id="logging-consent-checkbox">
+                        <span>I consent to conversation logging to help improve the service (optional)</span>
+                    </label>
+                </div>
+                
+                <div class="consent-buttons">
+                    <button id="consent-continue-btn" class="btn-primary" disabled onclick="handleConsentSubmit()">Continue</button>
+                </div>
+                
+                <p class="consent-footer">You can still use BrandonBot without logging consent. Your AI acknowledgment is required to proceed.</p>
             </div>
         </div>
         

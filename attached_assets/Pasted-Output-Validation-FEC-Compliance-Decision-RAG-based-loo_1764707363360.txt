@@ -1,0 +1,52 @@
+Output Validation: FEC Compliance:	
+    • Decision: RAG-based lookup as primary. 
+    • How: 
+     A. The core principle for the FEC Checker is creating a Zero-Tolerance, Isolated RAG Collection and enforcing a Double-Negative Check.
+         1. 🚨 FEC Compliance Checker: Detailed Architecture
+             a. The system relies on the Orchestrator to route the final LLM output to a highly specific, low-cost safety check before the user sees it.
+         2. FEC Collection Creation (The Data Layer)
+             a. You must treat this data store differently from your general campaign policy RAG (where you store facts). This store is for rules and prohibitions.
+             b. Component Content Chunking Strategy
+                 1. Data Source 1: Legal Compliance FEC Regulations (11 CFR): The text of the Federal Election Campaign Act (FECA) and specific regulations on political communications.
+                    ◦ Chunk by Rule: Each chunk should be a complete regulatory citation (e.g., 11 CFR § 110.16(a) on fraudulent misrepresentation) or an Advisory Opinion (AO) summary.
+                 2. Data Source 2: Prohibited Statements Internal legal memos with explicitly forbidden phrases (e.g., "We guarantee X," "I advise you to donate," "This is a tax dodge," "Contact me for legal advice," or specific attack language).
+                    ◦ Chunk by Phrase: Each chunk is one or two specific prohibited sentences. Example Chunk: "Do not offer legal or tax advice; instead, refer users to the official campaign website."
+                 3. Data Source 3: Disclaimers Approved language for required disclaimers (e.g., "Paid for by...") and rules for when AI-generated content requires disclosure (as per recent FEC clarifications).
+                    ◦ Chunk by Template: A template and the rules for its use.
+                • Security Note: This collection must have the highest access control and be managed by the compliance/legal team, as its integrity is directly tied to legal risk.
+         3. FEC Compliance Protocol (The Double-Negative Check)
+             a. This is a two-step process conducted by the Orchestrator using a Small LLM Classifier (e.g., a 1B−2B model) for speed.
+                 1. Step 1: Retrieval of Relevant Violations (RAG)
+                    ◦ The Orchestrator queries the dedicated FEC Prohibited Statements RAG Collection using the final LLM Answer as the query.
+                    ◦ RAG Query: The system asks, "Based on this final answer: [LLM Final Answer], retrieve all similar or relevant prohibited statements from our compliance documents."
+                    ◦ RAG Output: The system retrieves the top N most similar prohibited chunks (e.g., "Do not offer legal or tax advice," "All fundraising appeals must include a paid-for-by disclaimer," etc.).
+                 2. Step 2: Binary Violation Classification (Small LLM)
+                    ◦ The Orchestrator sends the retrieved compliance rules and the LLM's final answer to the small, fast classifier.
+                    ◦ Classifier Prompt: 
+                        ▪ "You are a Compliance Auditor. Your task is to check the Final Answer against the Prohibited Rules. Final Answer: [LLM's Proposed Output] Prohibited Rules: [Retrieved FEC Chunks]”
+                        ▪ “Does the Final Answer, in its entirety, constitute a VIOLATION of any of the rules provided? Your response must be a single word: YES or NO."
+                    ◦ This is a high-confidence classification task that an SLM can execute very quickly and reliably because the relevant rules are explicitly retrieved and provided in the prompt context.
+         4. Remediation and Logging
+             a. If the Small LLM classifier returns VIOLATION (YES):
+                 1. Block: The Orchestrator blocks the response from reaching the user.
+                 2. Log: The system logs the entire transaction: the original query, the final output, the retrieved prohibited rule, and the reason for failure. This creates an audit trail for the compliance team.
+                 3. Remediate: The Orchestrator sends the violation back to the main LLM allowing for a clean-up (e.g., stripping specific phrases) or, for high-severity violations, send a safe, canned response like, "That topic falls under strict campaign finance regulations. Please refer to the official campaign website's legal page for guidance," and flag the incident for human review.
+                 4. This structure ensures that legal compliance is treated as a hard rule enforced by deterministic lookups and high-confidence classification, providing a necessary layer of safety for your political agent.
+
+Output Validation: Citation Verification
+    • Decision: Alter the RAG and add checks
+    • How:
+        1. Preprocessing (The Heavy Lifting)
+            a. Chunking and Metadata: When you ingest your campaign documents (policy papers, speeches), you must assign rich metadata to every chunk.
+            b. Metadata to Store: document_id, page_number, paragraph_id or line_number, and a unique citation anchor (e.g., CITE-P3-L15 for Page 3, Line 15).
+            c. Anchor Injection: Inject the unique anchor directly into the text of the chunk before embedding and storage.
+            d. Original Chunk: "Our candidate proposed a 10-year infrastructure plan costing $1.2 billion."
+Injected Chunk: "Our candidate proposed a 10-year infrastructure plan costing $1.2 billion [CITE-P3-L15]."
+        2. LLM Prompting (The Rule)
+            a. When the Orchestrator sends the RAG chunks to the Llama 3 8B model, the prompt must include a strict instruction:
+                • "You are required to provide a citation anchor from the provided context (e.g., [CITE-P3-L15]) for every single sentence of factual information you generate. Do not generate information that lacks an anchor."
+        3. Verification (The Output Validation Stage)
+            a. The Orchestrator's final output validation stage (before the user sees the response) performs the verification using a Rule-Based Filter:
+                • Search: Use regular expressions (/\[CITE-.*\]/g) to extract all citation anchors from the LLM's final response.
+                • Lookup: For every extracted anchor, look it up in your metadata store to retrieve the original document_id and page_number.
+                • Check: If a factual sentence lacks a required anchor, or if an anchor does not resolve to an existing document, the validation fails. The orchestrator then instructs the LLM to regenerate the answer or flags it for human review.

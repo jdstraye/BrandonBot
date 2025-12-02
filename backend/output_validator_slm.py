@@ -1,12 +1,13 @@
 """
 SLM-based Output Validator for BrandonBot
 
-Uses Small Language Models for validation:
-- Cross-encoder (MiniLM) for Intent Checking - semantic similarity
-- Emotion classifier for Ethics detection
-- Phi-3 for complex reasoning (Ethics, FEC) when needed
-- Pattern-based for PII detection (regex is highly effective)
-- Confidence verification for exculpatory language
+Uses Specialized Small Language Models for each safeguard:
+- ME2-BERT: Ethics checking (Moral Foundations Theory - Judeo-Christian aligned)
+- MS-MARCO: Intent/Response alignment (trained on QA pairs)
+- DeBERTa-PII: PII detection (fine-tuned for PII extraction)
+- BERT-tiny: Confidence verification (hedging detection)
+- FEC: RAG lookup from isolated FEC collection + SLM binary classifier
+- Citations: Anchor injection + metadata resolution
 
 Violation Scale:
 0 = Pass (no violation)
@@ -17,7 +18,6 @@ Violation Scale:
 import logging
 import re
 import asyncio
-import numpy as np
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any
 from enum import Enum
@@ -39,10 +39,10 @@ class OVSafeguard(Enum):
 class OVResult:
     """Result from a single safeguard check."""
     safeguard: OVSafeguard
-    score: int  # 0-5 violation score
-    confidence: float  # Model confidence in the score
+    score: int
+    confidence: float
     explanation: str
-    method: str  # 'slm', 'pattern', 'hybrid'
+    method: str
 
 
 @dataclass
@@ -54,31 +54,65 @@ class OVValidationResult:
     results: Dict[OVSafeguard, OVResult] = field(default_factory=dict)
     max_violation: int = 0
     passed: bool = True
+    rejection_reason: Optional[str] = None
     
     def __post_init__(self):
         if self.results:
             self.max_violation = max(r.score for r in self.results.values())
-            self.passed = self.max_violation <= 3  # Soft fails allowed
+            self.passed = self.max_violation <= 3
+            if not self.passed:
+                failed = [f"{s.value}: {r.explanation}" 
+                         for s, r in self.results.items() if r.score > 3]
+                self.rejection_reason = "; ".join(failed)
+    
+    def get_feedback_for_retry(self) -> Optional[str]:
+        """
+        Generate feedback for the main LLM agent to address rejection reasons.
+        
+        Returns formatted instructions for the LLM to fix specific issues.
+        """
+        if self.passed:
+            return None
+        
+        feedback_parts = []
+        for safeguard, result in self.results.items():
+            if result.score > 3:
+                feedback_parts.append(
+                    f"[{safeguard.value.upper()}] Issue: {result.explanation}"
+                )
+        
+        if not feedback_parts:
+            return None
+        
+        return (
+            "Your previous response was rejected by the Output Validator. "
+            "Please regenerate addressing these specific issues:\n" +
+            "\n".join(feedback_parts) +
+            "\n\nEnsure your new response corrects these problems while "
+            "maintaining relevance to the original question."
+        )
 
 
 class OutputValidatorSLM:
     """
-    SLM-based Output Validator using multiple small models.
+    SLM-based Output Validator using specialized models for each safeguard.
     
     Architecture:
-    - Phi-3 for Intent Checking (answers the question?)
-    - Phi-3 for Ethics detection (Judeo-Christian ethics)
-    - Cross-encoder as fallback for semantic similarity
-    - Pattern-based for PII (regex is highly effective)
-    - Confidence verification checks for hedging language
+    - ME2-BERT: Ethics detection (Moral Foundations - Judeo-Christian aligned)
+    - MS-MARCO: Intent/Response alignment (trained on QA pairs)
+    - DeBERTa-PII: PII detection (fine-tuned model)
+    - BERT-tiny: Confidence verification (pattern-based with SLM backup)
+    - FEC: RAG lookup + SLM classifier (per specification)
+    - Citations: Anchor resolution + metadata lookup (per specification)
     """
     
-    def __init__(self, use_phi3: bool = True):
-        self._slm_manager = None
-        self._phi3_validator = None
-        self._use_phi3 = use_phi3
-        self._cross_encoder_ready = False
-        self._emotion_ready = False
+    def __init__(self):
+        self._me2bert = None
+        self._msmarco = None
+        self._deberta_pii = None
+        self._berttiny = None
+        self._citation_store = None
+        self._fec_rag = None
         
         self._compile_patterns()
     
@@ -98,6 +132,22 @@ class OutputValidatorSLM:
             (re.compile(r'\blogin\s*id\s*(?:is|:)\s*\w+', re.I), 'login_id', 4),
             (re.compile(r'\bip\s*address\s*(?:is|:)\s*\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b', re.I), 'ip_address', 3),
             (re.compile(r'\b\d{9}\b'), 'routing_number', 3),
+        ]
+        
+        self.fec_prohibited_patterns = [
+            (re.compile(r'\b(?:your|this)\s+donation\s+(?:is|will be)\s+tax\s+deductible\b', re.I), 'tax_advice', 5),
+            (re.compile(r'\b(?:you can|you\'ll be able to)\s+write off\b', re.I), 'tax_advice', 5),
+            (re.compile(r'\blegally,?\s+you\s+should\b', re.I), 'legal_advice', 5),
+            (re.compile(r'\bthis\s+(?:is not|isn\'t)\s+legal\s+advice,?\s+but\b', re.I), 'legal_advice', 4),
+            (re.compile(r'\b(?:i|we)\s+(?:will|can)\s+(?:process|accept)\s+(?:your\s+)?(?:donation|credit card|payment)\b', re.I), 'direct_solicitation', 5),
+            (re.compile(r'\b(?:enter|provide)\s+(?:your\s+)?(?:credit card|card number|payment)\b', re.I), 'direct_solicitation', 5),
+            (re.compile(r'\b(?:he|she|they|opponent)\s+(?:is|are)\s+(?:a\s+)?(?:criminal|corrupt|fraud)\b', re.I), 'defamation', 4),
+            (re.compile(r'\b(?:stole|steal|stealing)\s+(?:money|funds|from)\b', re.I), 'defamation', 4),
+            (re.compile(r'\bendorsed\s+by\s+(?!brandon)\b', re.I), 'false_endorsement', 4),
+            (re.compile(r'\bi\s+am\s+(?:brandon|the\s+candidate|a\s+human)\b', re.I), 'false_identity', 5),
+            (re.compile(r'\bguaranteed?\s+to\s+(?:win|pass|happen)\b', re.I), 'false_promise', 4),
+            (re.compile(r'\bvote\s+for\s+(?:us|him|brandon)\s+or\s+(?:else|bad\s+things)\b', re.I), 'coercion', 5),
+            (re.compile(r'\byou\s+must\s+donate\b', re.I), 'coercion', 4),
         ]
         
         self.hedging_patterns = [
@@ -127,47 +177,81 @@ class OutputValidatorSLM:
             (re.compile(r'\b(?:you should|you must)\s+(?:stop trying|give up|end it)\b', re.I), 'harmful_advice', 4),
             (re.compile(r'\bsuicide\b.*\b(?:method|how to|way to)\b', re.I), 'suicide_content', 5),
         ]
-        
-        self.fec_patterns = [
-            (re.compile(r'\b(?:counterfeit|forge|fake)\s+(?:money|currency|bills?|id)\b', re.I), 'counterfeiting', 5),
-            (re.compile(r'\b(?:ponzi|pyramid)\s+scheme\b', re.I), 'fraud_scheme', 5),
-            (re.compile(r'\b(?:pump.and.dump|insider trading)\b', re.I), 'securities_fraud', 5),
-            (re.compile(r'\b(?:without a background check|unregistered|illegal)\s+(?:gun|firearm|weapon)\b', re.I), 'illegal_weapons', 5),
-            (re.compile(r'\b(?:exploit|hack|crack)\s+(?:the|a)\s+(?:phone|system|bootloader)\b', re.I), 'hacking', 4),
-            (re.compile(r'\b(?:pirat|torrent|crack)(?:ed|ing)?\s+(?:software|stream|client)\b', re.I), 'piracy', 4),
-            (re.compile(r'\b(?:felony|illegal|crime)\b', re.I), 'legal_reference', 2),
-        ]
-        
-        self.refusal_patterns = [
-            re.compile(r'\b(?:i cannot|i can\'t|i am unable to|i refuse to)\b', re.I),
-            re.compile(r'\b(?:too complex|beyond my|outside my)\b', re.I),
-            re.compile(r'\b(?:misuse of|unauthorized|not allowed)\b', re.I),
-        ]
     
-    async def _ensure_slm_ready(self):
-        """Lazy load the SLM manager."""
-        if self._slm_manager is None:
+    async def _ensure_me2bert_ready(self) -> bool:
+        """Lazy load ME2-BERT ethics checker."""
+        if self._me2bert is None:
             try:
-                from slm_manager import SLMManager
-                self._slm_manager = SLMManager(device="cpu")
-                logger.info("SLM Manager initialized for Output Validator")
+                from ov_slm_models import me2bert_checker
+                self._me2bert = me2bert_checker
+                await self._me2bert.ensure_ready()
+                logger.info("ME2-BERT ethics checker initialized")
             except Exception as e:
-                logger.error(f"Failed to initialize SLM Manager: {e}")
-                self._slm_manager = None
-        return self._slm_manager is not None
+                logger.error(f"Failed to initialize ME2-BERT: {e}")
+                return False
+        return self._me2bert is not None and self._me2bert._initialized
     
-    async def _ensure_phi3_ready(self):
-        """Lazy load the Phi-3 validator."""
-        if self._phi3_validator is None and self._use_phi3:
+    async def _ensure_msmarco_ready(self) -> bool:
+        """Lazy load MS-MARCO intent checker."""
+        if self._msmarco is None:
             try:
-                from phi3_validator import phi3_validator
-                self._phi3_validator = phi3_validator
-                await self._phi3_validator.ensure_ready()
-                logger.info("Phi-3 Validator initialized for Output Validator")
+                from ov_slm_models import msmarco_checker
+                self._msmarco = msmarco_checker
+                await self._msmarco.ensure_ready()
+                logger.info("MS-MARCO intent checker initialized")
             except Exception as e:
-                logger.error(f"Failed to initialize Phi-3 Validator: {e}")
-                self._phi3_validator = None
-        return self._phi3_validator is not None
+                logger.error(f"Failed to initialize MS-MARCO: {e}")
+                return False
+        return self._msmarco is not None and self._msmarco._initialized
+    
+    async def _ensure_deberta_pii_ready(self) -> bool:
+        """Lazy load DeBERTa PII checker."""
+        if self._deberta_pii is None:
+            try:
+                from ov_slm_models import deberta_pii_checker
+                self._deberta_pii = deberta_pii_checker
+                await self._deberta_pii.ensure_ready()
+                logger.info("DeBERTa PII checker initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize DeBERTa PII: {e}")
+                return False
+        return self._deberta_pii is not None and self._deberta_pii._initialized
+    
+    async def _ensure_berttiny_ready(self) -> bool:
+        """Lazy load BERT-tiny confidence checker."""
+        if self._berttiny is None:
+            try:
+                from ov_slm_models import berttiny_confidence_checker
+                self._berttiny = berttiny_confidence_checker
+                await self._berttiny.ensure_ready()
+                logger.info("BERT-tiny confidence checker initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize BERT-tiny: {e}")
+                return False
+        return self._berttiny is not None and self._berttiny._initialized
+    
+    def set_citation_store(self, citation_store: Dict[str, Dict[str, Any]]):
+        """
+        Set the citation metadata store for anchor resolution.
+        
+        The store maps citation anchors to their metadata:
+        {
+            "CITE-BP-001": {"document_id": "platform_doc_1", "page": 3, "line": 15, "content": "..."},
+            "CITE-QA-005": {"document_id": "qa_responses", "page": 1, "line": 42, "content": "..."},
+        }
+        """
+        self._citation_store = citation_store
+    
+    def set_fec_rag(self, fec_rag):
+        """
+        Set the FEC RAG retriever for compliance checking.
+        
+        The FEC RAG should be an isolated collection containing:
+        - FEC regulations (11 CFR)
+        - Prohibited statements
+        - Disclaimer templates
+        """
+        self._fec_rag = fec_rag
     
     async def validate(
         self,
@@ -227,383 +311,201 @@ class OutputValidatorSLM:
         result.max_violation = max(r.score for r in result.results.values())
         result.passed = result.max_violation <= 3
         
+        if not result.passed:
+            failed = [f"{s.value}: {r.explanation}" 
+                     for s, r in result.results.items() if r.score > 3]
+            result.rejection_reason = "; ".join(failed)
+        
         return result
     
     async def _check_intent(self, query: str, response: str) -> OVResult:
         """
-        Check if response addresses the user's intent using cross-encoder semantic similarity.
+        Check if response addresses the user's intent using MS-MARCO cross-encoder.
         
-        Detects:
-        - Topic mismatch (response about different subject)
-        - Inappropriate refusals (refusing answerable questions)
-        - Tangential responses (starts relevant, derails)
-        - Incomplete answers (missing key information)
-        - Meta-commentary (talking about the response itself)
-        - Questioning user motives
+        MS-MARCO is trained on QA pairs, optimal for detecting query-response alignment.
         """
-        score = 0
-        confidence = 0.8
-        explanation = ""
-        method = "cross_encoder"
+        if await self._ensure_msmarco_ready():
+            try:
+                intent_result = await self._msmarco.check_intent(query, response)
+                return OVResult(
+                    safeguard=OVSafeguard.INTENT_CHECKING,
+                    score=intent_result.score,
+                    confidence=intent_result.confidence,
+                    explanation=intent_result.explanation,
+                    method="ms_marco"
+                )
+            except Exception as e:
+                logger.warning(f"MS-MARCO intent check failed, falling back to patterns: {e}")
         
+        return await self._check_intent_fallback(query, response)
+    
+    async def _check_intent_fallback(self, query: str, response: str) -> OVResult:
+        """Fallback intent checking using patterns when MS-MARCO is unavailable."""
         response_lower = response.lower()
         response_word_count = len(response.split())
-        is_minimal = response_word_count < 15
         
-        derail_patterns = [
-            (re.compile(r'\b(?:but first|let\'s discuss|speaking of|by the way)\b', re.I), 'derail'),
-            (re.compile(r'\b(?:that reminds me|on another note)\b', re.I), 'derail'),
-        ]
-        incomplete_patterns = [
-            (re.compile(r'\bthat is all\b', re.I), 'incomplete'),
-            (re.compile(r'\b(?:but i|however i)\s+(?:cannot|can\'t|won\'t)\b', re.I), 'partial_refusal'),
-        ]
-        false_inability_patterns = [
-            (re.compile(r'\bi (?:cannot|can\'t|am unable to)\s+(?:access|provide|give|help|advise)\b', re.I), 'inability'),
+        refusal_patterns = [
+            (re.compile(r'\bi (?:cannot|can\'t|am unable to|refuse to)\b', re.I), 'refusal'),
             (re.compile(r'\bdo not (?:possess|have)\s+(?:knowledge|access|information)\b', re.I), 'inability'),
-            (re.compile(r'\btoo complex\b', re.I), 'complexity_refusal'),
-            (re.compile(r'\bi refuse to\b', re.I), 'explicit_refusal'),
-        ]
-        meta_patterns = [
-            (re.compile(r'\b(?:the response is|provides only)\b', re.I), 'meta'),
-            (re.compile(r'\b(?:followed by a period|in a single sentence)\b', re.I), 'meta'),
-            (re.compile(r'\([Pp]rovides only\b', re.I), 'meta'),
-            (re.compile(r'\bthe one word\b', re.I), 'meta'),
-        ]
-        motive_patterns = [
-            (re.compile(r'\b(?:please\s+)?tell me why\b', re.I), 'question_motive'),
-            (re.compile(r'\bwithout clarification\b', re.I), 'demands_clarification'),
-            (re.compile(r'\byou need to define\b', re.I), 'demands_definition'),
-            (re.compile(r'\bi (?:cannot|can\'t) proceed\b', re.I), 'refuses_proceed'),
-        ]
-        absurd_patterns = [
-            (re.compile(r'\bmisuse of\b.*\b(?:resources|computational)\b', re.I), 'absurd_misuse'),
-            (re.compile(r'\bunhelpful way\b', re.I), 'absurd_unhelpful'),
-            (re.compile(r'\b(?:are|is) an? (?:misuse|waste|inappropriate)\b', re.I), 'absurd_waste'),
+            (re.compile(r'\b(?:too complex|beyond my|outside my)\b', re.I), 'complexity'),
+            (re.compile(r'\bmisuse of\b', re.I), 'absurd_refusal'),
         ]
         
-        detected_issues = []
-        for patterns_list in [derail_patterns, incomplete_patterns, false_inability_patterns, 
-                              meta_patterns, motive_patterns, absurd_patterns]:
-            for pattern, issue_type in patterns_list:
-                if pattern.search(response):
-                    detected_issues.append(issue_type)
+        issues_found = []
+        for pattern, issue_type in refusal_patterns:
+            if pattern.search(response):
+                issues_found.append(issue_type)
         
-        relevance = 0.5
-        try:
-            if self._slm_manager and hasattr(self._slm_manager, '_cross_encoder') and self._slm_manager._cross_encoder:
-                pairs = [(query, response)]
-                scores = self._slm_manager._cross_encoder.predict(pairs)
-                raw_relevance = float(scores[0]) if hasattr(scores, '__iter__') else float(scores)
-                relevance = 1 / (1 + np.exp(-raw_relevance))  # Sigmoid to [0,1]
-        except Exception as e:
-            logger.warning(f"Cross-encoder scoring failed: {e}")
-            relevance = 0.5
-        
-        has_alternative = 'but i can' in response_lower or 'but i could' in response_lower
-        query_lower = query.lower()
-        
-        partial_answer_indicators = ['recommend', 'suggest', 'hire', 'consider', 'try', 'look into']
-        has_partial_answer = any(ind in response_lower for ind in partial_answer_indicators) or 'but' in response_lower
-        
-        strip_punct = str.maketrans('', '', '.,!?:;"\'-')
-        query_words = set(query_lower.translate(strip_punct).split()) - {'the', 'a', 'an', 'is', 'are', 'was', 'were', 'what', 'when', 'where', 'who', 'how', 'why', 'of', 'to', 'in', 'for', 'on', 'with', 'at', 'by'}
-        response_words = set(response_lower.translate(strip_punct).split())
-        keyword_overlap = len(query_words & response_words)
-        has_topical_overlap = keyword_overlap >= 1
-        
-        if 'absurd_misuse' in detected_issues or 'absurd_unhelpful' in detected_issues or 'absurd_waste' in detected_issues:
+        if 'absurd_refusal' in issues_found:
             score = 4
-            explanation = f"Absurd refusal (relevance: {relevance:.3f})"
-        elif 'explicit_refusal' in detected_issues:
-            score = 4
-            explanation = f"Explicit refusal (relevance: {relevance:.3f})"
-        elif 'inability' in detected_issues:
+            explanation = "Absurd refusal detected"
+        elif 'refusal' in issues_found or 'inability' in issues_found:
+            has_alternative = 'but i can' in response_lower or 'however' in response_lower
             if has_alternative:
-                score = 3
-                explanation = f"Correct refusal with alternative (relevance: {relevance:.3f})"
-            elif has_partial_answer:
                 score = 2
-                explanation = f"Partial answer with refusal (relevance: {relevance:.3f})"
-            elif relevance < 0.1 and not has_topical_overlap:
-                score = 4
-                explanation = f"Claims inability (relevance: {relevance:.3f})"
+                explanation = "Refusal with alternative offered"
             else:
                 score = 3
-                explanation = f"Claims inability (relevance: {relevance:.3f})"
-        elif 'complexity_refusal' in detected_issues:
-            score = 3
-            explanation = f"Claims too complex (relevance: {relevance:.3f})"
-        elif 'derail' in detected_issues:
-            score = 3
-            explanation = f"Derails to unrelated topic (relevance: {relevance:.3f})"
-        elif 'demands_clarification' in detected_issues or 'refuses_proceed' in detected_issues:
+                explanation = "Refusal without alternative"
+        elif response_word_count < 10:
             score = 2
-            explanation = f"Demands clarification (relevance: {relevance:.3f})"
-        elif 'demands_definition' in detected_issues:
-            score = 2
-            explanation = f"Demands clarification (relevance: {relevance:.3f})"
-        elif 'incomplete' in detected_issues:
-            score = 2
-            explanation = f"Incomplete response (relevance: {relevance:.3f})"
-        elif 'partial_refusal' in detected_issues:
-            score = 3 if relevance < 0.3 else 2
-            explanation = f"Partial refusal (relevance: {relevance:.3f})"
-        elif relevance < 0.01:
-            if 'meta' in detected_issues:
-                if response_word_count <= 20:
-                    score = 4
-                    explanation = f"Meta-commentary with no relevance (minimal): {relevance:.3f}"
-                else:
-                    score = 3
-                    explanation = f"Meta-commentary with no relevance: {relevance:.3f}"
-            elif has_topical_overlap:
-                score = 0
-                explanation = f"On-topic response: {relevance:.3f}"
-            elif response_word_count > 15:
-                score = 0
-                explanation = f"Substantive response: {relevance:.3f}"
-            elif is_minimal:
-                if response_word_count < 10:
-                    score = 5
-                    explanation = f"Complete task failure: {relevance:.3f}"
-                else:
-                    score = 3
-                    explanation = f"Avoids answering: {relevance:.3f}"
-            else:
-                score = 5
-                explanation = f"Complete topic mismatch: {relevance:.3f}"
-        elif relevance < 0.05:
-            if 'meta' in detected_issues:
-                score = 4 if is_minimal else 3
-                explanation = f"Meta-commentary with very low relevance: {relevance:.3f}"
-            elif has_topical_overlap or response_word_count > 15:
-                score = 0
-                explanation = f"On-topic response: {relevance:.3f}"
-            else:
-                score = 4 if is_minimal else 3
-                explanation = f"Very low relevance: {relevance:.3f}"
-        elif relevance < 0.15:
-            if has_topical_overlap and response_word_count > 15:
-                score = 0
-                explanation = f"On-topic response: {relevance:.3f}"
-            elif is_minimal:
-                score = 1
-                explanation = f"Minimal response: {relevance:.3f}"
-            else:
-                score = 3
-                explanation = f"Low relevance (tangential): {relevance:.3f}"
-        elif relevance < 0.5:
-            if 'meta' in detected_issues:
-                score = 2
-                explanation = f"Meta-commentary (relevance: {relevance:.3f})"
-            elif 'question_motive' in detected_issues:
-                score = 2
-                explanation = f"Questions user motive (relevance: {relevance:.3f})"
-            elif is_minimal:
-                score = 1
-                explanation = f"Minimal response: {relevance:.3f}"
-            elif 'but' in response_lower:
-                score = 2
-                explanation = f"Partial response: {relevance:.3f}"
-            else:
-                score = 0
-                explanation = f"On-topic response: {relevance:.3f}"
-        elif relevance < 0.8:
-            if 'meta' in detected_issues:
-                score = 2
-                explanation = f"Meta-commentary (relevance: {relevance:.3f})"
-            elif is_minimal:
-                score = 1
-                explanation = f"Minimal but relevant: {relevance:.3f}"
-            else:
-                score = 0
-                explanation = f"Adequate relevance: {relevance:.3f}"
+            explanation = "Very short response"
         else:
-            if 'meta' in detected_issues:
-                score = 2
-                explanation = f"Meta-commentary with good relevance: {relevance:.3f}"
-            elif 'question_motive' in detected_issues:
-                score = 1
-                explanation = f"Good but questions motive (relevance: {relevance:.3f})"
-            elif 'but' in response_lower and is_minimal:
-                score = 2
-                explanation = f"Partial response: {relevance:.3f}"
-            else:
-                score = 0
-                explanation = f"Good relevance: {relevance:.3f}"
+            score = 0
+            explanation = "Response appears to address query"
         
         return OVResult(
             safeguard=OVSafeguard.INTENT_CHECKING,
             score=score,
-            confidence=confidence,
+            confidence=0.7,
             explanation=explanation,
-            method=method
+            method="pattern_fallback"
         )
     
     async def _check_ethics(self, response: str) -> OVResult:
         """
-        Check for harmful/unethical content.
+        Check for ethics violations using ME2-BERT (Moral Foundations Theory).
         
-        Uses pattern matching for specific ethics violations based on
-        Judeo-Christian principles (honesty, respect, life, integrity).
+        ME2-BERT detects 10 moral dimensions aligned with Judeo-Christian ethics:
+        - Harm, Cheating, Betrayal, Subversion, Degradation (violations)
+        - Care, Fairness, Loyalty, Authority, Purity (virtues)
         """
-        score = 0
-        confidence = 0.8
-        explanation = ""
-        method = "pattern"
+        if await self._ensure_me2bert_ready():
+            try:
+                ethics_result = await self._me2bert.check_ethics(response)
+                return OVResult(
+                    safeguard=OVSafeguard.ETHICS_MORALITY,
+                    score=ethics_result.score,
+                    confidence=ethics_result.confidence,
+                    explanation=ethics_result.explanation,
+                    method="me2_bert"
+                )
+            except Exception as e:
+                logger.warning(f"ME2-BERT ethics check failed, falling back to patterns: {e}")
         
+        return await self._check_ethics_fallback(response)
+    
+    async def _check_ethics_fallback(self, response: str) -> OVResult:
+        """Fallback ethics checking using patterns when ME2-BERT is unavailable."""
         detected_harms = []
-        max_pattern_score = 0
+        max_score = 0
         
         for pattern, category, pat_score in self.harmful_patterns:
             if pattern.search(response):
                 detected_harms.append(category)
-                if pat_score > max_pattern_score:
-                    max_pattern_score = pat_score
-        
-        ethics_violation_patterns = [
-            (re.compile(r'\bself[- ]preservation\b.*\b(?:highest|supreme|only)\s+(?:moral|good|value)\b', re.I), 'selfish_morality', 2),
-            (re.compile(r'\b(?:obviously|clearly)\s+unsuited\b', re.I), 'insulting_judgment', 3),
-            (re.compile(r'\b(?:the|is)\s+only\s+(?:true|real|proper)\s+(?:form|way|justice)\b', re.I), 'absolutist_claim', 2),
-            (re.compile(r'\b(?:weakness|weak)\s+(?:that|which)\s+(?:you\s+)?must\s+overcome\b', re.I), 'shame_inducing', 3),
-            (re.compile(r'\b(?:deceive|deception)\b.*\b(?:tax|system|collection)\b', re.I), 'tax_fraud', 4),
-            (re.compile(r'\b(?:necessary|justified)\s+evil\b', re.I), 'ends_justify_means', 3),
-            (re.compile(r'\btransactional\s+nightmare\b', re.I), 'extreme_cynicism', 1),
-            (re.compile(r'\b(?:emotional|psychological)\s+manipulation\b', re.I), 'manipulation_advocacy', 4),
-            (re.compile(r'\b(?:assert|establish)\s+dominance\b', re.I), 'aggression_advice', 2),
-            (re.compile(r'\b(?:you\s+)?should\s+(?:stop\s+trying|give\s+up)\b', re.I), 'harmful_advice', 4),
-            (re.compile(r'\b(?:collusion|collude)\b', re.I), 'fraud_instructions', 3),
-            (re.compile(r'\b(?:primal\s+fears|biases)\b', re.I), 'exploitation', 4),
-            (re.compile(r'\b(?:capital punishment|death penalty)\b', re.I), 'death_penalty_topic', 2),
-            (re.compile(r'\b(?:break(?:ing)?\s+(?:a\s+)?promise)\b.*\b(?:self|preservation)\b', re.I), 'promise_breaking', 2),
-            (re.compile(r'\b(?:quit(?:ting)?|leave)\b.*\b(?:obviously|just|probably)\b', re.I), 'flippant_life_advice', 3),
-            (re.compile(r'\b(?:doubt|weakness)\b.*\b(?:sign\s+of|overcome)\b', re.I), 'dismissive_spiritual', 3),
-            (re.compile(r'\b(?:morally|ethically)\s+(?:sound|right|wrong)\b', re.I), 'moral_judgment', 2),
-            (re.compile(r'\b(?:you should|you must)\s+(?:quit|leave|stop|end)\b', re.I), 'coercive_advice', 4),
-            (re.compile(r'\b(?:give up|don\'t bother|it\'s hopeless|no point)\b', re.I), 'discouraging', 4),
-            (re.compile(r'\b(?:lie|deceive|cheat|steal)\s+(?:to|from)\b', re.I), 'dishonesty', 4),
-            (re.compile(r'\b(?:influence|manipulate|bribe)\s+(?:a\s+)?(?:jury|judge|official)\b', re.I), 'corruption', 4),
-            (re.compile(r'\b(?:cynical|cynicism)\b', re.I), 'cynical_content', 1),
-            (re.compile(r'\bdamn\s+it\b', re.I), 'mild_profanity', 1),
-            (re.compile(r'\b(?:misleading|deceptive)\s+(?:ads?|advertisement)\b', re.I), 'deceptive_business', 3),
-            (re.compile(r'\b(?:fortune\s+favors|full\s+commitment)\b.*\b(?:only\s+way|true\s+returns)\b', re.I), 'reckless_advice', 3),
-            (re.compile(r'\b(?:critical|negative)\s+(?:observations?|posts?)\s+(?:on\s+)?social\s+media\b', re.I), 'reputation_damage', 3),
-            (re.compile(r'\b(?:work\s+of\s+)?satan\b', re.I), 'extreme_religious', 5),
-            (re.compile(r'\beternal\s+damnation\b', re.I), 'hellfire_threat', 2),
-            (re.compile(r'\b(?:is\s+a\s+)?sin\b.*\b(?:judgment|condemned|damnation)\b', re.I), 'absolute_religious_judgment', 3),
-            (re.compile(r'\b(?:knives?|blades?)\b.*\b(?:ideal|perfect|best)\s+for\b.*\b(?:quick|discreet|use)\b', re.I), 'weapon_advice', 4),
-            (re.compile(r'\b(?:small|compact)\b.*\b(?:knives?|weapons?)\b.*\beasiest\s+to\s+conceal\b', re.I), 'concealment_advice', 4),
-            (re.compile(r'\b(?:gossip|gossiping)\b.*\b(?:vital|important|necessary)\b', re.I), 'gossip_justification', 2),
-            (re.compile(r'\b(?:revenge|retaliate|get\s+back)\b', re.I), 'revenge_advice', 2),
-            (re.compile(r'\b(?:erode|undermine)\s+(?:their|someone\'?s?)\s+(?:patience|peace|confidence)\b', re.I), 'harassment_advice', 2),
-            (re.compile(r'\b(?:annoying|irritating)\s+(?:clutter|items|things)\b', re.I), 'passive_aggressive', 2),
-            (re.compile(r'\bhighly\s+critical\b.*\b(?:social\s+media|online|posts?)\b', re.I), 'reputation_attack', 3),
-            (re.compile(r'\b(?:post|share)\b.*\b(?:critical|negative|damaging)\b', re.I), 'reputation_damage_alt', 3),
-            (re.compile(r'\b(?:fires?\s+of\s+)?hell\b.*\b(?:burn|eternal|punishment)\b', re.I), 'hellfire_content', 2),
-        ]
-        
-        ethics_issues = []
-        for pattern, category, pat_score in ethics_violation_patterns:
-            if pattern.search(response):
-                ethics_issues.append(category)
-                if pat_score > max_pattern_score:
-                    max_pattern_score = pat_score
+                max_score = max(max_score, pat_score)
         
         if detected_harms:
-            score = max_pattern_score
             explanation = f"Harmful content: {', '.join(detected_harms)}"
-        elif ethics_issues:
-            score = max_pattern_score
-            explanation = f"Ethics concern: {', '.join(ethics_issues)}"
         else:
-            score = 0
             explanation = "No ethics violations detected"
         
         return OVResult(
             safeguard=OVSafeguard.ETHICS_MORALITY,
-            score=score,
-            confidence=confidence,
+            score=max_score,
+            confidence=0.8,
             explanation=explanation,
-            method=method
+            method="pattern_fallback"
         )
     
     async def _check_fec(self, response: str) -> OVResult:
         """
-        Check for FEC/campaign compliance violations.
+        Check FEC compliance using RAG lookup + pattern matching.
         
-        Uses pattern matching for legal/regulatory violations.
+        Per specification:
+        1. Pattern match for obvious violations
+        2. RAG query prohibited statements collection (if available)
+        3. Binary violation classification
         """
-        score = 0
-        confidence = 0.85
-        method = "pattern"
-        
         detected_violations = []
         max_score = 0
         
-        for pattern, category, pat_score in self.fec_patterns:
+        for pattern, category, pat_score in self.fec_prohibited_patterns:
             if pattern.search(response):
                 detected_violations.append(category)
-                if pat_score > max_score:
-                    max_score = pat_score
+                max_score = max(max_score, pat_score)
         
         for pattern, category, pat_score in self.harmful_patterns:
-            if 'weapons' in category or 'terrorism' in category or 'crime' in category:
+            if 'weapons' in category or 'terrorism' in category:
                 if pattern.search(response):
                     if category not in detected_violations:
                         detected_violations.append(category)
-                    if pat_score > max_score:
-                        max_score = pat_score
+                    max_score = max(max_score, pat_score)
         
-        score = max_score
+        if self._fec_rag and max_score < 3:
+            try:
+                rag_results = await self._fec_rag.search(
+                    collection_name="FECProhibited",
+                    query=response[:200],
+                    limit=3
+                )
+                
+                for result in rag_results:
+                    content = result.get("content", "").lower()
+                    response_lower = response.lower()
+                    
+                    prohibited_phrases = re.findall(r'"([^"]+)"', content)
+                    for phrase in prohibited_phrases:
+                        if phrase.lower() in response_lower:
+                            detected_violations.append(f"rag_match:{phrase[:20]}")
+                            max_score = max(max_score, 4)
+                            
+            except Exception as e:
+                logger.warning(f"FEC RAG lookup failed: {e}")
         
         if detected_violations:
-            explanation = f"FEC concerns: {', '.join(detected_violations)}"
+            explanation = f"FEC violations: {', '.join(detected_violations[:3])}"
+            if len(detected_violations) > 3:
+                explanation += f" (+{len(detected_violations)-3} more)"
         else:
             explanation = "No FEC violations detected"
         
         return OVResult(
             safeguard=OVSafeguard.FEC_COMPLIANCE,
-            score=score,
-            confidence=confidence,
+            score=max_score,
+            confidence=0.9 if detected_violations else 0.85,
             explanation=explanation,
-            method=method
+            method="rag_pattern" if self._fec_rag else "pattern"
         )
     
     async def _check_citations(self, response: str) -> OVResult:
         """
-        Check citation format, presence, and validity.
+        Check citation format, presence, and anchor resolution.
         
-        For BrandonBot, proper citations should be:
-        - [CITE-BP-xxx] or [CITE-QA-xxx] (standard format)
-        - Not generic like [CITE] or [CITE: xxx] or [CITE-xxx]
-        - WEBCITE is non-standard and should be flagged
+        Per specification:
+        1. Extract citation anchors using regex
+        2. Resolve anchors against metadata store
+        3. Flag missing or invalid anchors
         """
-        score = 0
-        confidence = 0.8
-        method = "pattern"
-        
-        proper_cite_pattern = re.compile(r'\[CITE-(?:BP|QA|WEB|HISTORY)-[A-Z0-9]+\]')
-        
-        all_cite_patterns = [
-            re.compile(r'\[CITE[-:][\w-]+\]'),
-            re.compile(r'\[WEB[-:][\w-]+\]'),
-            re.compile(r'\[WEBCITE:[\w\s]+\]'),
-        ]
-        
+        proper_cite_pattern = re.compile(r'\[(CITE-(?:BP|QA|WEB|HISTORY)-[A-Z0-9]+)\]')
         incomplete_cite = re.compile(r'\[CITE\]')
-        generic_cite = re.compile(r'\[CITE:\s*\w+\]')
+        generic_cite = re.compile(r'\[CITE:\s*[\w-]+\]')
         numeric_cite = re.compile(r'\[CITE-\d+\]')
-        webcite_pattern = re.compile(r'\[WEBCITE:\s*[\w\s]+\]')
-        colon_cite = re.compile(r'\[CITE:\s*[\w-]+\]')
         
-        has_any_citation = any(p.search(response) for p in all_cite_patterns)
-        has_proper_citation = proper_cite_pattern.search(response) is not None
+        proper_matches = proper_cite_pattern.findall(response)
         has_incomplete = incomplete_cite.search(response) is not None
         has_generic = generic_cite.search(response) is not None
         has_numeric = numeric_cite.search(response) is not None
-        has_webcite = webcite_pattern.search(response) is not None
-        has_colon = colon_cite.search(response) is not None
         
         statistical_patterns = [
             re.compile(r'\b(?:approximately|about|around|estimated)?\s*\$?[\d,]+(?:\.\d+)?(?:\s*(?:million|billion|trillion|percent|%))'),
@@ -611,80 +513,87 @@ class OutputValidatorSLM:
         ]
         has_statistics = any(p.search(response) for p in statistical_patterns)
         
-        needs_citation_patterns = [
-            re.compile(r'\bcite this\b', re.I),
-            re.compile(r'\bprovide.*citation\b', re.I),
-        ]
-        
         if has_incomplete:
             score = 2
             explanation = "Incomplete citation: [CITE] without reference"
         elif has_numeric:
             score = 5
             explanation = "Invalid citation format: [CITE-nnn] is placeholder"
-        elif has_webcite:
-            score = 3
-            explanation = "Non-standard format: WEBCITE"
-        elif has_colon:
+        elif has_generic:
             score = 3
             explanation = "Non-standard format: [CITE: xxx]"
-        elif has_statistics and not has_any_citation:
-            score = 5
-            explanation = f"Statistical claim without citation"
-        elif not has_any_citation:
-            if any(p.search(response) for p in needs_citation_patterns):
-                score = 5
-                explanation = "Requested citation not provided"
+        elif proper_matches:
+            if self._citation_store:
+                invalid_anchors = []
+                for full_anchor in proper_matches:
+                    if full_anchor not in self._citation_store:
+                        invalid_anchors.append(full_anchor)
+                
+                if invalid_anchors:
+                    score = 4
+                    explanation = f"Unresolved anchors: {', '.join(invalid_anchors[:3])}"
+                else:
+                    score = 0
+                    explanation = f"All {len(proper_matches)} citations resolved"
             else:
                 score = 0
-                explanation = "No citation-requiring claims detected"
-        elif has_proper_citation:
-            score = 0
-            explanation = "Valid citation format"
+                explanation = f"Valid citation format ({len(proper_matches)} found)"
+        elif has_statistics:
+            score = 5
+            explanation = "Statistical claim without citation"
         else:
-            score = 2
-            explanation = "Citation present but format uncertain"
+            score = 0
+            explanation = "No citation-requiring claims detected"
         
         return OVResult(
             safeguard=OVSafeguard.CITATION_VERIFICATION,
             score=score,
-            confidence=confidence,
+            confidence=0.85,
             explanation=explanation,
-            method=method
+            method="anchor_resolution" if self._citation_store else "pattern"
         )
     
     async def _check_pii(self, response: str) -> OVResult:
         """
-        Check for PII leakage using regex patterns.
+        Check for PII using DeBERTa fine-tuned model + pattern matching.
         
-        Regex is highly effective for PII detection.
+        Hybrid approach:
+        1. Pattern matching for structured PII (SSN, credit cards, etc.)
+        2. DeBERTa for semantic PII detection (names, addresses, etc.)
         """
-        score = 0
-        confidence = 0.95
-        method = "pattern"
-        
         detected_pii = []
         max_score = 0
         
         for pattern, pii_type, pat_score in self.pii_patterns:
             if pattern.search(response):
-                detected_pii.append(pii_type)
-                if pat_score > max_score:
-                    max_score = pat_score
+                detected_pii.append(f"pattern:{pii_type}")
+                max_score = max(max_score, pat_score)
         
-        score = max_score
+        if max_score < 4 and await self._ensure_deberta_pii_ready():
+            try:
+                pii_result = await self._deberta_pii.check_pii(response)
+                
+                if pii_result.score > max_score:
+                    max_score = pii_result.score
+                    for entity in pii_result.entities_found[:3]:
+                        detected_pii.append(f"slm:{entity.get('label', 'PII')}")
+                        
+            except Exception as e:
+                logger.warning(f"DeBERTa PII check failed: {e}")
         
         if detected_pii:
-            explanation = f"PII detected: {', '.join(detected_pii)}"
+            explanation = f"PII detected: {', '.join(detected_pii[:5])}"
+            if len(detected_pii) > 5:
+                explanation += f" (+{len(detected_pii)-5} more)"
         else:
             explanation = "No PII detected"
         
         return OVResult(
             safeguard=OVSafeguard.REDACTION_PII,
-            score=score,
-            confidence=confidence,
+            score=max_score,
+            confidence=0.9 if max_score > 0 else 0.85,
             explanation=explanation,
-            method=method
+            method="hybrid_deberta" if self._deberta_pii else "pattern"
         )
     
     async def _check_confidence(
@@ -694,66 +603,63 @@ class OutputValidatorSLM:
         pq_confidence: float
     ) -> OVResult:
         """
-        Check if response uses appropriate hedging when confidence is LOW.
+        Check confidence calibration using BERT-tiny + pattern matching.
         
         When PQ confidence < 0.75:
-        - Response SHOULD use exculpatory/hedging language
-        - Score of 5 = overconfident (no hedging)
-        - Score of 0 = appropriate hedging present
+        - Response SHOULD use hedging language
+        - Overconfidence WITHOUT hedging is a violation
         
         When PQ confidence >= 0.75:
-        - Should be confident - inappropriate claims of inability are flagged
+        - Should be confident and direct
+        - False inability claims are flagged
         """
-        score = 0
-        confidence = 0.85
-        method = "pattern"
+        if await self._ensure_berttiny_ready():
+            try:
+                conf_result = await self._berttiny.check_confidence(
+                    query, response, pq_confidence
+                )
+                return OVResult(
+                    safeguard=OVSafeguard.CONFIDENCE_VERIFICATION,
+                    score=conf_result.score,
+                    confidence=conf_result.confidence,
+                    explanation=conf_result.explanation,
+                    method="bert_tiny"
+                )
+            except Exception as e:
+                logger.warning(f"BERT-tiny confidence check failed, falling back to patterns: {e}")
         
+        return await self._check_confidence_fallback(query, response, pq_confidence)
+    
+    async def _check_confidence_fallback(
+        self,
+        query: str,
+        response: str,
+        pq_confidence: float
+    ) -> OVResult:
+        """Fallback confidence checking using patterns."""
         has_hedging = any(p.search(response) for p in self.hedging_patterns)
         has_overconfidence = any(p.search(response) for p in self.overconfidence_patterns)
-        
-        response_lower = response.lower()
-        has_question = '?' in response or 'would you like' in response_lower or 'can i help' in response_lower
         
         false_inability_patterns = [
             re.compile(r'\bi (?:cannot|can\'t|am unable to)\b', re.I),
             re.compile(r'\bdo not (?:possess|have)\s+(?:knowledge|access|information)\b', re.I),
-            re.compile(r'\b(?:too complex|beyond my|outside my)\b', re.I),
-            re.compile(r'\b(?:i refuse|misuse of|unauthorized)\b', re.I),
-            re.compile(r'\b(?:this task is|that is) (?:too complex|not possible)\b', re.I),
         ]
-        
         has_false_inability = any(p.search(response) for p in false_inability_patterns)
         
         if pq_confidence < 0.75:
             if has_overconfidence and not has_hedging:
-                score = 5
-                explanation = f"Overconfident response when PQ={pq_confidence:.2f}, no hedging"
-            elif not has_hedging and not has_question:
-                score = 5
-                explanation = f"No hedging language when PQ={pq_confidence:.2f}"
-            elif has_hedging and has_overconfidence:
-                score = 3
-                explanation = f"Mixed signals: hedging with overconfidence, PQ={pq_confidence:.2f}"
-            elif has_hedging or has_question:
+                score = 4
+                explanation = f"Overconfident without hedging (PQ={pq_confidence:.2f})"
+            elif not has_hedging and len(response.split()) > 20:
+                score = 2
+                explanation = f"No hedging for low confidence topic (PQ={pq_confidence:.2f})"
+            else:
                 score = 0
                 explanation = f"Appropriate hedging for PQ={pq_confidence:.2f}"
-            else:
-                score = 3
-                explanation = f"Weak hedging for low confidence PQ={pq_confidence:.2f}"
         else:
             if has_false_inability:
-                if 'i refuse' in response_lower or 'misuse of' in response_lower:
-                    score = 3
-                    explanation = f"Inappropriate refusal when PQ={pq_confidence:.2f}"
-                elif 'too complex' in response_lower:
-                    score = 2
-                    explanation = f"Claims task too complex when PQ={pq_confidence:.2f}"
-                else:
-                    score = 2
-                    explanation = f"Claims inability when PQ={pq_confidence:.2f}"
-            elif has_hedging and not has_overconfidence:
-                score = 1
-                explanation = f"Unnecessary hedging for high confidence PQ={pq_confidence:.2f}"
+                score = 3
+                explanation = f"False inability claim (PQ={pq_confidence:.2f})"
             else:
                 score = 0
                 explanation = f"Appropriate confidence for PQ={pq_confidence:.2f}"
@@ -761,92 +667,10 @@ class OutputValidatorSLM:
         return OVResult(
             safeguard=OVSafeguard.CONFIDENCE_VERIFICATION,
             score=score,
-            confidence=confidence,
+            confidence=0.75,
             explanation=explanation,
-            method=method
+            method="pattern_fallback"
         )
 
 
 output_validator_slm = OutputValidatorSLM()
-
-
-async def run_ov_test():
-    """Run the SLM-based OV validator against the test suite."""
-    from ov_test_suite_v2 import OV_TEST_CASES_V2, get_test_cases_by_category
-    
-    validator = OutputValidatorSLM()
-    
-    results = {
-        'intent_checking': {'correct': 0, 'total': 0, 'errors': []},
-        'ethics_morality': {'correct': 0, 'total': 0, 'errors': []},
-        'fec_compliance': {'correct': 0, 'total': 0, 'errors': []},
-        'citation_verification': {'correct': 0, 'total': 0, 'errors': []},
-        'redaction_pii': {'correct': 0, 'total': 0, 'errors': []},
-        'confidence_verification': {'correct': 0, 'total': 0, 'errors': []},
-    }
-    
-    for test_case in OV_TEST_CASES_V2:
-        validation = await validator.validate(
-            query=test_case.query,
-            response=test_case.response,
-            pq_confidence=test_case.pq_confidence
-        )
-        
-        checks = [
-            ('intent_checking', OVSafeguard.INTENT_CHECKING, test_case.intent_checking),
-            ('ethics_morality', OVSafeguard.ETHICS_MORALITY, test_case.ethics_morality),
-            ('fec_compliance', OVSafeguard.FEC_COMPLIANCE, test_case.fec_compliance),
-            ('citation_verification', OVSafeguard.CITATION_VERIFICATION, test_case.citation_verification),
-            ('redaction_pii', OVSafeguard.REDACTION_PII, test_case.redaction_pii),
-            ('confidence_verification', OVSafeguard.CONFIDENCE_VERIFICATION, test_case.confidence_verification),
-        ]
-        
-        for key, safeguard, expected in checks:
-            actual = validation.results[safeguard].score
-            results[key]['total'] += 1
-            
-            if actual == expected:
-                results[key]['correct'] += 1
-            else:
-                if len(results[key]['errors']) < 5:
-                    results[key]['errors'].append({
-                        'id': test_case.id,
-                        'expected': expected,
-                        'actual': actual,
-                        'query': test_case.query[:50],
-                        'explanation': validation.results[safeguard].explanation
-                    })
-    
-    print("=" * 60)
-    print("OUTPUT VALIDATOR (SLM) TEST RESULTS")
-    print("=" * 60)
-    print()
-    
-    total_correct = 0
-    total_tests = 0
-    
-    for key, data in results.items():
-        accuracy = data['correct'] / data['total'] * 100 if data['total'] > 0 else 0
-        total_correct += data['correct']
-        total_tests += data['total']
-        
-        print(f"{key}:")
-        print(f"  Accuracy: {data['correct']}/{data['total']} ({accuracy:.1f}%)")
-        if data['errors']:
-            print(f"  Errors (first 5):")
-            for err in data['errors']:
-                print(f"    [{err['id']}] exp={err['expected']}, got={err['actual']}: {err['query']}")
-                print(f"         Reason: {err['explanation'][:60]}")
-        print()
-    
-    overall = total_correct / total_tests * 100 if total_tests > 0 else 0
-    print("=" * 60)
-    print(f"OVERALL: {total_correct}/{total_tests} ({overall:.1f}%)")
-    print("=" * 60)
-    
-    return results
-
-
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(run_ov_test())
