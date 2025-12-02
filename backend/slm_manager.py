@@ -238,7 +238,14 @@ class SLMManager:
                 flags.get('demands_human', False)
             )
             
-            if negative_score > 0.7:
+            has_frustration_signals = (
+                flags.get('caps', False) or
+                flags.get('all_caps', False) or
+                flags.get('repeated_punctuation', False) or
+                flags.get('repeated_punct', False)
+            )
+            
+            if negative_score > 0.65:
                 return SLMResponse(
                     decision="ESCALATE",
                     confidence=negative_score,
@@ -254,7 +261,15 @@ class SLMManager:
                     raw_output=str(sentiment_scores)
                 )
             
-            if has_severe_flags and negative_score > 0.25:
+            if has_frustration_signals and negative_score > 0.1:
+                return SLMResponse(
+                    decision="ESCALATE",
+                    confidence=max(negative_score + 0.3, 0.6),
+                    explanation=f"Frustration signals + negative: neg={negative_score:.2f}, flags={flags}",
+                    raw_output=str(sentiment_scores)
+                )
+            
+            if has_severe_flags and negative_score > 0.2:
                 return SLMResponse(
                     decision="ESCALATE",
                     confidence=0.6,
