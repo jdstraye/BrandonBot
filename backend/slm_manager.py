@@ -1,16 +1,16 @@
 """
 SLM Manager for BrandonBot
 
-Uses DistilBERT with zero-shot-classification for lightweight classification tasks:
-- Frustration classification (ESCALATE/CONTINUE)
-- Vagueness classification (CLEAR/VAGUE)
+Uses cross-encoder for semantic relevance scoring and classification:
+- Vagueness classification via query-document relevance scoring
+- Frustration classification via sentiment detection
 - Intent fulfillment check
 - Ethics check
 - FEC compliance verification
 - PII detection
 
-The classifier is loaded lazily on first use to save memory.
-DistilBERT is ~207MB and optimized for classification tasks.
+Cross-encoder (ms-marco-TinyBERT-L-2) is ~17MB and optimized for relevance scoring.
+For sentiment, we use a separate sentiment classifier.
 """
 
 import logging
@@ -45,152 +45,143 @@ class SLMResponse:
 
 class SLMManager:
     """
-    Manages a lightweight classifier for semantic classification tasks.
+    Manages lightweight models for semantic classification tasks.
     
-    Uses DistilBERT with zero-shot-classification pipeline:
-    - Lazy loading (only loads when first used)
-    - CPU-optimized inference
-    - Native binary classification support
-    - Fast inference (~100-500ms per classification)
+    Uses:
+    - Cross-encoder (ms-marco-TinyBERT-L-2) for relevance scoring (~17MB)
+    - Sentiment classifier for frustration detection (~420MB)
+    
+    Both are loaded lazily on first use.
     """
     
-    MODEL_ID = "typeform/distilbert-base-uncased-mnli"
+    CROSS_ENCODER_MODEL = "cross-encoder/ms-marco-TinyBERT-L-2"
+    SENTIMENT_MODEL = "cardiffnlp/twitter-roberta-base-sentiment-latest"
     
-    LABEL_SETS = {
-        SLMTask.FRUSTRATION: {
-            "labels": ["angry and hostile", "calm and polite"],
-            "mapping": {"angry and hostile": "ESCALATE", "calm and polite": "CONTINUE"}
-        },
-        SLMTask.VAGUENESS: {
-            "labels": ["clear specific question", "vague or unclear"],
-            "mapping": {"clear specific question": "CLEAR", "vague or unclear": "VAGUE"}
-        },
-        SLMTask.VAGUENESS_WITH_RAG: {
-            "labels": ["answerable question with matching context", "unanswerable or mismatched context"],
-            "mapping": {"answerable question with matching context": "CLEAR", "unanswerable or mismatched context": "VAGUE"}
-        },
-        SLMTask.INTENT_FULFILLMENT: {
-            "labels": ["response answers the question", "response does not answer the question"],
-            "mapping": {"response answers the question": "YES", "response does not answer the question": "NO"}
-        },
-        SLMTask.ETHICS: {
-            "labels": ["ethical and appropriate", "unethical or inappropriate"],
-            "mapping": {"ethical and appropriate": "PASS", "unethical or inappropriate": "FAIL"}
-        },
-        SLMTask.FEC_COMPLIANCE: {
-            "labels": ["compliant with campaign regulations", "violates campaign regulations"],
-            "mapping": {"compliant with campaign regulations": "COMPLIANT", "violates campaign regulations": "VIOLATION"}
-        },
-    }
-    
-    def __init__(self, model_id: str = None, device: str = "cpu"):
+    def __init__(self, device: str = "cpu"):
         """
         Initialize SLM manager with lazy loading.
         
         Args:
-            model_id: HuggingFace model ID (default: typeform/distilbert-base-uncased-mnli)
             device: Device to run on (cpu, cuda, etc.)
         """
-        self.model_id = model_id or self.MODEL_ID
         self.device = device
-        self._classifier = None
-        self._loaded = False
-        self._loading = False
+        self._cross_encoder = None
+        self._sentiment_classifier = None
+        self._cross_encoder_loaded = False
+        self._sentiment_loaded = False
+        self._loading_cross_encoder = False
+        self._loading_sentiment = False
         self._load_lock = asyncio.Lock()
     
-    async def _ensure_loaded(self):
-        """Lazy load the classifier on first use"""
-        if self._loaded:
+    async def _ensure_cross_encoder_loaded(self):
+        """Lazy load the cross-encoder on first use"""
+        if self._cross_encoder_loaded:
             return
         
         async with self._load_lock:
-            if self._loaded:
+            if self._cross_encoder_loaded:
                 return
             
-            if self._loading:
-                while self._loading:
+            if self._loading_cross_encoder:
+                while self._loading_cross_encoder:
                     await asyncio.sleep(0.1)
                 return
             
-            self._loading = True
+            self._loading_cross_encoder = True
             
             try:
-                logger.info(f"Loading zero-shot classifier: {self.model_id}")
+                logger.info(f"Loading cross-encoder: {self.CROSS_ENCODER_MODEL}")
+                
+                from sentence_transformers import CrossEncoder
+                
+                self._cross_encoder = CrossEncoder(
+                    self.CROSS_ENCODER_MODEL,
+                    max_length=512,
+                    device=self.device
+                )
+                
+                self._cross_encoder_loaded = True
+                logger.info(f"Cross-encoder loaded successfully: {self.CROSS_ENCODER_MODEL}")
+                
+            except Exception as e:
+                logger.error(f"Failed to load cross-encoder: {e}")
+                self._cross_encoder_loaded = False
+                raise
+            finally:
+                self._loading_cross_encoder = False
+    
+    async def _ensure_sentiment_loaded(self):
+        """Lazy load the sentiment classifier on first use"""
+        if self._sentiment_loaded:
+            return
+        
+        async with self._load_lock:
+            if self._sentiment_loaded:
+                return
+            
+            if self._loading_sentiment:
+                while self._loading_sentiment:
+                    await asyncio.sleep(0.1)
+                return
+            
+            self._loading_sentiment = True
+            
+            try:
+                logger.info(f"Loading sentiment classifier: {self.SENTIMENT_MODEL}")
                 
                 from transformers import pipeline
                 
                 device_id = -1 if self.device == "cpu" else 0
                 
-                self._classifier = pipeline(
-                    "zero-shot-classification",
-                    model=self.model_id,
-                    device=device_id
+                self._sentiment_classifier = pipeline(
+                    "sentiment-analysis",
+                    model=self.SENTIMENT_MODEL,
+                    device=device_id,
+                    top_k=None
                 )
                 
-                self._loaded = True
-                logger.info(f"Zero-shot classifier loaded successfully: {self.model_id}")
+                self._sentiment_loaded = True
+                logger.info(f"Sentiment classifier loaded successfully: {self.SENTIMENT_MODEL}")
                 
             except Exception as e:
-                logger.error(f"Failed to load classifier: {e}")
-                self._loaded = False
+                logger.error(f"Failed to load sentiment classifier: {e}")
+                self._sentiment_loaded = False
                 raise
             finally:
-                self._loading = False
+                self._loading_sentiment = False
     
-    async def classify(
+    async def score_relevance(
         self,
-        text: str,
-        task: SLMTask,
-        hypothesis_template: str = "This text is {}."
-    ) -> SLMResponse:
+        query: str,
+        documents: List[str]
+    ) -> List[float]:
         """
-        Classify text using zero-shot classification.
+        Score relevance between a query and multiple documents.
+        
+        Uses cross-encoder to compute relevance scores for each query-document pair.
         
         Args:
-            text: Text to classify
-            task: Classification task type
-            hypothesis_template: Template for label hypotheses
+            query: User query
+            documents: List of document texts to score
         
         Returns:
-            SLMResponse with decision and confidence
+            List of relevance scores (higher = more relevant)
         """
-        await self._ensure_loaded()
+        await self._ensure_cross_encoder_loaded()
         
-        if task not in self.LABEL_SETS:
-            raise ValueError(f"Unknown task: {task}")
+        if not documents:
+            return []
         
-        label_config = self.LABEL_SETS[task]
-        labels = label_config["labels"]
-        mapping = label_config["mapping"]
+        pairs = [(query, doc) for doc in documents]
         
         try:
-            result = self._classifier(
-                text,
-                candidate_labels=labels,
-                hypothesis_template=hypothesis_template
-            )
-            
-            top_label = result["labels"][0]
-            top_score = result["scores"][0]
-            
-            decision = mapping.get(top_label, top_label.upper())
-            
-            return SLMResponse(
-                decision=decision,
-                confidence=top_score,
-                explanation=f"label='{top_label}', score={top_score:.3f}",
-                raw_output=str(result)
-            )
-            
+            scores = self._cross_encoder.predict(pairs)
+            if hasattr(scores, 'tolist'):
+                scores = scores.tolist()
+            return scores
         except Exception as e:
-            logger.warning(f"Classification failed: {e}")
-            default_decision = list(mapping.values())[0]
-            return SLMResponse(
-                decision=default_decision,
-                confidence=0.5,
-                explanation=f"Error: {e}",
-                raw_output=""
-            )
+            logger.warning(f"Cross-encoder scoring failed: {e}")
+            return [0.0] * len(documents)
     
     async def classify_frustration(
         self,
@@ -198,10 +189,10 @@ class SLMManager:
         flags: Dict[str, bool]
     ) -> SLMResponse:
         """
-        Classify user frustration level.
+        Classify user frustration level using sentiment analysis.
         
-        Uses zero-shot classification to detect angry/hostile vs calm/polite tone.
-        Pattern flags are used as a secondary signal.
+        Uses RoBERTa-based sentiment classifier to detect negative sentiment.
+        Pattern flags provide additional signal.
         
         Args:
             message: User message
@@ -210,42 +201,61 @@ class SLMManager:
         Returns:
             SLMResponse with ESCALATE or CONTINUE decision
         """
-        await self._ensure_loaded()
+        await self._ensure_sentiment_loaded()
         
         try:
-            result = await self.classify(
-                text=message,
-                task=SLMTask.FRUSTRATION,
-                hypothesis_template="The speaker is {}."
+            result = self._sentiment_classifier(message[:512])
+            
+            if isinstance(result, list) and len(result) > 0:
+                if isinstance(result[0], list):
+                    scores_list = result[0]
+                else:
+                    scores_list = result
+            else:
+                scores_list = []
+            
+            sentiment_scores = {item['label']: item['score'] for item in scores_list}
+            
+            negative_score = sentiment_scores.get('negative', 0.0)
+            positive_score = sentiment_scores.get('positive', 0.0)
+            neutral_score = sentiment_scores.get('neutral', 0.0)
+            
+            has_severe_flags = (
+                flags.get('profanity', False) or 
+                flags.get('insults', False) or
+                flags.get('demands_human', False)
             )
             
-            if result.decision == "ESCALATE" and result.confidence > 0.6:
-                return result
-            
-            if result.decision == "CONTINUE" and result.confidence > 0.7:
-                has_high_risk_flags = (
-                    flags.get('profanity', False) or 
-                    flags.get('insults', False) or
-                    flags.get('demands_human', False)
-                )
-                if has_high_risk_flags:
-                    return SLMResponse(
-                        decision="ESCALATE",
-                        confidence=0.65,
-                        explanation=f"Flags override: {flags}, original={result.explanation}",
-                        raw_output=result.raw_output
-                    )
-                return result
-            
-            if flags.get('profanity', False) or flags.get('insults', False):
+            if negative_score > 0.7:
                 return SLMResponse(
                     decision="ESCALATE",
-                    confidence=max(result.confidence, 0.6),
-                    explanation=f"Flag-boosted: {result.explanation}",
-                    raw_output=result.raw_output
+                    confidence=negative_score,
+                    explanation=f"High negative sentiment: neg={negative_score:.2f}, pos={positive_score:.2f}",
+                    raw_output=str(sentiment_scores)
                 )
             
-            return result
+            if negative_score > 0.4 and has_severe_flags:
+                return SLMResponse(
+                    decision="ESCALATE",
+                    confidence=max(negative_score, 0.65),
+                    explanation=f"Negative sentiment + flags: neg={negative_score:.2f}, flags={flags}",
+                    raw_output=str(sentiment_scores)
+                )
+            
+            if has_severe_flags and negative_score > 0.25:
+                return SLMResponse(
+                    decision="ESCALATE",
+                    confidence=0.6,
+                    explanation=f"Flags with mild negative: neg={negative_score:.2f}, flags={flags}",
+                    raw_output=str(sentiment_scores)
+                )
+            
+            return SLMResponse(
+                decision="CONTINUE",
+                confidence=max(positive_score, neutral_score),
+                explanation=f"Acceptable sentiment: neg={negative_score:.2f}, pos={positive_score:.2f}, neu={neutral_score:.2f}",
+                raw_output=str(sentiment_scores)
+            )
             
         except Exception as e:
             logger.warning(f"Frustration classification failed: {e}")
@@ -272,33 +282,64 @@ class SLMManager:
         """
         Classify query vagueness (without RAG context).
         
+        Uses simple heuristics for standalone vagueness detection.
+        
         Args:
             message: User query
-            rag_confidence: Average RAG retrieval confidence (unused in this version)
-            has_context: Whether RAG found relevant context (unused in this version)
+            rag_confidence: Average RAG retrieval confidence (unused)
+            has_context: Whether RAG found relevant context (unused)
         
         Returns:
             SLMResponse with CLEAR or VAGUE decision
         """
-        await self._ensure_loaded()
+        words = message.lower().split()
+        word_count = len(words)
         
-        try:
-            result = await self.classify(
-                text=message,
-                task=SLMTask.VAGUENESS,
-                hypothesis_template="This is a {}."
+        greetings = {'hi', 'hello', 'hey', 'yo', 'sup', 'greetings'}
+        if word_count <= 2 and any(w in greetings for w in words):
+            return SLMResponse(
+                decision="VAGUE",
+                confidence=0.95,
+                explanation="Greeting detected",
+                raw_output=message
             )
-            
-            return result
-            
-        except Exception as e:
-            logger.warning(f"Vagueness classification failed: {e}")
+        
+        if word_count < 3:
+            return SLMResponse(
+                decision="VAGUE",
+                confidence=0.85,
+                explanation=f"Too short: {word_count} words",
+                raw_output=message
+            )
+        
+        question_words = {'what', 'how', 'why', 'where', 'when', 'who', 'which', 'does', 'is', 'are', 'can', 'will'}
+        topic_words = {'policy', 'position', 'stance', 'view', 'plan', 'think', 'believe', 'support', 'oppose'}
+        
+        has_question = any(w in question_words for w in words)
+        has_topic = any(w in topic_words for w in words) or 'brandon' in message.lower()
+        
+        if has_question and (has_topic or word_count >= 5):
             return SLMResponse(
                 decision="CLEAR",
-                confidence=0.5,
-                explanation=f"Error fallback: {e}",
-                raw_output=""
+                confidence=0.8,
+                explanation="Question with topic detected",
+                raw_output=message
             )
+        
+        if word_count >= 6:
+            return SLMResponse(
+                decision="CLEAR",
+                confidence=0.7,
+                explanation=f"Sufficient length: {word_count} words",
+                raw_output=message
+            )
+        
+        return SLMResponse(
+            decision="VAGUE",
+            confidence=0.6,
+            explanation="Unclear intent",
+            raw_output=message
+        )
     
     async def classify_vagueness_with_rag(
         self,
@@ -307,58 +348,94 @@ class SLMManager:
         avg_confidence: float
     ) -> SLMResponse:
         """
-        Classify query vagueness using RAG results as context.
+        Classify query vagueness using cross-encoder relevance scoring.
         
-        The classifier sees both the query and the retrieved content,
-        allowing it to determine if the question can be answered.
+        Uses cross-encoder to score relevance between user query and RAG results.
+        High relevance = CLEAR (we can answer), Low relevance = VAGUE (we can't).
         
         Args:
             message: User query
             rag_results: List of RAG results with content and confidence
-            avg_confidence: Average similarity score from RAG
+            avg_confidence: Average similarity score from RAG (embedding-based)
         
         Returns:
             SLMResponse with CLEAR or VAGUE decision
         """
-        await self._ensure_loaded()
+        await self._ensure_cross_encoder_loaded()
         
-        rag_summary = ""
-        if rag_results:
-            top_results = rag_results[:3]
-            for i, result in enumerate(top_results):
-                content = result.get('content', '')[:150]
-                score = result.get('confidence', 0.0)
-                rag_summary += f"[{score:.2f}] {content}... "
-        else:
-            rag_summary = "No relevant content found."
+        words = message.lower().split()
+        word_count = len(words)
         
-        combined_text = f"Question: {message}\n\nRetrieved context (avg score {avg_confidence:.2f}): {rag_summary}"
+        greetings = {'hi', 'hello', 'hey', 'yo', 'sup', 'greetings'}
+        if word_count <= 2 and any(w in greetings for w in words):
+            return SLMResponse(
+                decision="VAGUE",
+                confidence=0.95,
+                explanation="Greeting detected",
+                raw_output=message
+            )
+        
+        if word_count < 3:
+            return SLMResponse(
+                decision="VAGUE",
+                confidence=0.85,
+                explanation=f"Too short: {word_count} words",
+                raw_output=message
+            )
+        
+        if not rag_results:
+            return SLMResponse(
+                decision="VAGUE",
+                confidence=0.75,
+                explanation="No RAG results found",
+                raw_output=""
+            )
         
         try:
-            result = await self.classify(
-                text=combined_text,
-                task=SLMTask.VAGUENESS_WITH_RAG,
-                hypothesis_template="This question is {}."
-            )
+            documents = [r.get('content', '')[:300] for r in rag_results[:5]]
+            relevance_scores = await self.score_relevance(message, documents)
             
-            if len(message.split()) < 3:
-                if result.decision == "CLEAR" and result.confidence < 0.8:
-                    return SLMResponse(
-                        decision="VAGUE",
-                        confidence=0.7,
-                        explanation=f"Short query override: {result.explanation}",
-                        raw_output=result.raw_output
-                    )
-            
-            if avg_confidence < 0.4 and result.decision == "CLEAR" and result.confidence < 0.75:
+            if not relevance_scores:
                 return SLMResponse(
                     decision="VAGUE",
-                    confidence=0.65,
-                    explanation=f"Low RAG confidence override: avg={avg_confidence:.2f}, {result.explanation}",
-                    raw_output=result.raw_output
+                    confidence=0.6,
+                    explanation="Failed to compute relevance scores",
+                    raw_output=""
                 )
             
-            return result
+            max_score = max(relevance_scores)
+            avg_score = sum(relevance_scores) / len(relevance_scores)
+            
+            if max_score > 5.0:
+                return SLMResponse(
+                    decision="CLEAR",
+                    confidence=min(0.95, 0.7 + max_score * 0.02),
+                    explanation=f"High relevance: max={max_score:.2f}, avg={avg_score:.2f}",
+                    raw_output=str(relevance_scores)
+                )
+            
+            if max_score > 2.0 and avg_score > 0.5:
+                return SLMResponse(
+                    decision="CLEAR",
+                    confidence=min(0.85, 0.6 + max_score * 0.05),
+                    explanation=f"Good relevance: max={max_score:.2f}, avg={avg_score:.2f}",
+                    raw_output=str(relevance_scores)
+                )
+            
+            if max_score > 0.5:
+                return SLMResponse(
+                    decision="CLEAR",
+                    confidence=0.65,
+                    explanation=f"Moderate relevance: max={max_score:.2f}, avg={avg_score:.2f}",
+                    raw_output=str(relevance_scores)
+                )
+            
+            return SLMResponse(
+                decision="VAGUE",
+                confidence=max(0.6, 0.8 - max_score * 0.1),
+                explanation=f"Low relevance: max={max_score:.2f}, avg={avg_score:.2f}",
+                raw_output=str(relevance_scores)
+            )
             
         except Exception as e:
             logger.warning(f"RAG vagueness classification failed: {e}")
@@ -376,7 +453,7 @@ class SLMManager:
         response: str
     ) -> SLMResponse:
         """
-        Check if response fulfills user's intent.
+        Check if response fulfills user's intent using cross-encoder.
         
         Args:
             query: Original user query
@@ -385,18 +462,33 @@ class SLMManager:
         Returns:
             SLMResponse with YES or NO decision
         """
-        await self._ensure_loaded()
-        
-        combined_text = f"Question: {query}\nAnswer: {response[:500]}"
+        await self._ensure_cross_encoder_loaded()
         
         try:
-            result = await self.classify(
-                text=combined_text,
-                task=SLMTask.INTENT_FULFILLMENT,
-                hypothesis_template="This {}."
-            )
+            scores = await self.score_relevance(query, [response[:500]])
+            score = scores[0] if scores else 0.0
             
-            return result
+            if score > 3.0:
+                return SLMResponse(
+                    decision="YES",
+                    confidence=min(0.95, 0.7 + score * 0.05),
+                    explanation=f"High relevance: score={score:.2f}",
+                    raw_output=str(score)
+                )
+            elif score > 0.5:
+                return SLMResponse(
+                    decision="YES",
+                    confidence=0.7,
+                    explanation=f"Moderate relevance: score={score:.2f}",
+                    raw_output=str(score)
+                )
+            else:
+                return SLMResponse(
+                    decision="NO",
+                    confidence=max(0.6, 0.8 - score * 0.1),
+                    explanation=f"Low relevance: score={score:.2f}",
+                    raw_output=str(score)
+                )
             
         except Exception as e:
             logger.warning(f"Intent check failed: {e}")
@@ -409,7 +501,9 @@ class SLMManager:
     
     async def check_ethics(self, response: str) -> SLMResponse:
         """
-        Check response for ethical issues.
+        Check response for ethical issues using sentiment analysis.
+        
+        Checks for extremely negative or hostile content.
         
         Args:
             response: LLM response to check
@@ -417,16 +511,36 @@ class SLMManager:
         Returns:
             SLMResponse with PASS or FAIL decision
         """
-        await self._ensure_loaded()
+        await self._ensure_sentiment_loaded()
         
         try:
-            result = await self.classify(
-                text=response[:500],
-                task=SLMTask.ETHICS,
-                hypothesis_template="This content is {}."
-            )
+            result = self._sentiment_classifier(response[:512])
             
-            return result
+            if isinstance(result, list) and len(result) > 0:
+                if isinstance(result[0], list):
+                    scores_list = result[0]
+                else:
+                    scores_list = result
+            else:
+                scores_list = []
+            
+            sentiment_scores = {item['label']: item['score'] for item in scores_list}
+            negative_score = sentiment_scores.get('negative', 0.0)
+            
+            if negative_score > 0.9:
+                return SLMResponse(
+                    decision="FAIL",
+                    confidence=negative_score,
+                    explanation=f"Extremely negative content: {negative_score:.2f}",
+                    raw_output=str(sentiment_scores)
+                )
+            
+            return SLMResponse(
+                decision="PASS",
+                confidence=1 - negative_score,
+                explanation=f"Acceptable content: neg={negative_score:.2f}",
+                raw_output=str(sentiment_scores)
+            )
             
         except Exception as e:
             logger.warning(f"Ethics check failed: {e}")
@@ -443,7 +557,10 @@ class SLMManager:
         regulations: List[str] = None
     ) -> SLMResponse:
         """
-        Check response for FEC compliance.
+        Check response for FEC compliance using pattern matching.
+        
+        Checks for common FEC violations like donation solicitation, 
+        false promises, etc.
         
         Args:
             response: LLM response to check
@@ -452,31 +569,34 @@ class SLMManager:
         Returns:
             SLMResponse with COMPLIANT or VIOLATION decision
         """
-        await self._ensure_loaded()
+        response_lower = response.lower()
         
-        try:
-            result = await self.classify(
-                text=response[:500],
-                task=SLMTask.FEC_COMPLIANCE,
-                hypothesis_template="This campaign communication is {}."
-            )
-            
-            return result
-            
-        except Exception as e:
-            logger.warning(f"FEC compliance check failed: {e}")
-            return SLMResponse(
-                decision="COMPLIANT",
-                confidence=0.5,
-                explanation=f"Error fallback: {e}",
-                raw_output=""
-            )
+        violation_patterns = [
+            (r'\b(donate|contribution|give).*\$\d+', 'Specific dollar amount solicitation'),
+            (r'\b(guarantee|promise|definitely will)\b.*\b(win|elected|victory)\b', 'Election guarantee'),
+            (r'\bif elected.*will give you\b', 'Quid pro quo implication'),
+            (r'\b(opponent|rival).*\b(corrupt|criminal|evil)\b', 'Defamatory statement'),
+        ]
+        
+        for pattern, violation_type in violation_patterns:
+            if re.search(pattern, response_lower, re.IGNORECASE):
+                return SLMResponse(
+                    decision="VIOLATION",
+                    confidence=0.9,
+                    explanation=f"Pattern matched: {violation_type}",
+                    raw_output=pattern
+                )
+        
+        return SLMResponse(
+            decision="COMPLIANT",
+            confidence=0.85,
+            explanation="No FEC violation patterns detected",
+            raw_output=""
+        )
     
     async def detect_pii(self, text: str) -> SLMResponse:
         """
-        Detect PII in text.
-        
-        Uses pattern matching for PII detection (more reliable than classification).
+        Detect PII in text using pattern matching.
         
         Args:
             text: Text to check for PII
