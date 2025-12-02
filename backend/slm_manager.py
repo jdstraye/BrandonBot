@@ -250,72 +250,124 @@ List any PII found (names, addresses, dates of birth, etc.) or say "NO PII FOUND
         
         return response.strip()
     
+    async def score_labels(
+        self,
+        prompt: str,
+        labels: List[str]
+    ) -> Dict[str, float]:
+        """
+        Compute log-probability scores for each label given the prompt.
+        Uses the model's logits to determine which label is most likely.
+        
+        Args:
+            prompt: The input prompt (system + user context)
+            labels: List of possible labels (e.g., ["ESCALATE", "CONTINUE"])
+        
+        Returns:
+            Dict mapping each label to its log-probability score
+        """
+        await self._ensure_loaded()
+        
+        import torch
+        import torch.nn.functional as F
+        
+        scores = {}
+        
+        for label in labels:
+            full_text = prompt + label
+            inputs = self._tokenizer(full_text, return_tensors="pt")
+            if self.device != "cpu":
+                inputs = inputs.to(self.device)
+            else:
+                inputs = inputs.to("cpu")
+            
+            with torch.no_grad():
+                outputs = self._model(**inputs)
+                logits = outputs.logits
+            
+            prompt_tokens = self._tokenizer(prompt, return_tensors="pt")
+            prompt_len = prompt_tokens['input_ids'].shape[1]
+            
+            label_logits = logits[0, prompt_len-1:-1, :]
+            label_tokens = inputs['input_ids'][0, prompt_len:]
+            
+            log_probs = F.log_softmax(label_logits, dim=-1)
+            label_log_prob = 0.0
+            for i, token_id in enumerate(label_tokens):
+                label_log_prob += log_probs[i, token_id].item()
+            
+            label_log_prob /= len(label_tokens)
+            scores[label] = label_log_prob
+        
+        return scores
+    
     async def classify_frustration(
         self,
         message: str,
         flags: Dict[str, bool]
     ) -> SLMResponse:
         """
-        Classify user frustration level.
+        Classify user frustration level using log-probability scoring.
+        
+        Uses the model's internal representations to determine which label
+        (ESCALATE or CONTINUE) is more likely given the message context.
         
         Args:
             message: User message
-            flags: Pattern flags from prequalifier
+            flags: Pattern flags from prequalifier (used as soft signal)
         
         Returns:
             SLMResponse with ESCALATE or CONTINUE decision
         """
-        PROFANITY_WORDS = {'fuck', 'fucking', 'shit', 'damn', 'ass', 'bitch', 'bastard', 'crap', 'hell'}
-        SEVERE_PROFANITY = {'fuck', 'fucking', 'shit', 'bitch', 'bastard'}
-        message_lower = message.lower()
-        
-        has_severe_profanity = any(word in message_lower for word in SEVERE_PROFANITY)
-        
-        if has_severe_profanity:
-            return SLMResponse(
-                decision="ESCALATE",
-                confidence=0.95,
-                explanation="Severe profanity detected",
-                raw_output="pattern_match"
-            )
-        
-        has_mild_profanity = any(word in message_lower for word in PROFANITY_WORDS - SEVERE_PROFANITY)
-        
         prompt = self.PROMPT_TEMPLATES[SLMTask.FRUSTRATION].format(
             message=message
         )
         
         try:
-            response = await self.generate(prompt, max_tokens=10, temperature=0.0)
-            response_upper = response.strip().upper()
+            scores = await self.score_labels(prompt, ["ESCALATE", "CONTINUE"])
             
-            if "ESCALATE" in response_upper:
+            flag_bonus = 0.0
+            if flags.get('profanity', False):
+                flag_bonus += 3.5
+            if flags.get('insults', False):
+                flag_bonus += 2.5
+            if flags.get('all_caps', False):
+                flag_bonus += 1.5
+            if flags.get('demands_human', False):
+                flag_bonus += 2.5
+            if flags.get('frustration_phrases', False):
+                flag_bonus += 2.0
+            if flags.get('urgent_keywords', False):
+                flag_bonus += 1.5
+            if flags.get('repeated_punct', False):
+                flag_bonus += 0.5
+            
+            escalate_score = scores["ESCALATE"] + flag_bonus
+            continue_score = scores["CONTINUE"]
+            
+            if escalate_score > continue_score:
+                confidence = min(0.95, 0.5 + (escalate_score - continue_score) * 0.1)
                 return SLMResponse(
                     decision="ESCALATE",
-                    confidence=0.9,
-                    raw_output=response
+                    confidence=confidence,
+                    explanation=f"log_prob: ESCALATE={escalate_score:.2f}, CONTINUE={continue_score:.2f}",
+                    raw_output=f"scores: {scores}"
                 )
-            
-            if has_mild_profanity:
+            else:
+                confidence = min(0.95, 0.5 + (continue_score - escalate_score) * 0.1)
                 return SLMResponse(
                     decision="CONTINUE",
-                    confidence=0.7,
-                    explanation="Mild profanity, not hostile",
-                    raw_output=response
+                    confidence=confidence,
+                    explanation=f"log_prob: ESCALATE={escalate_score:.2f}, CONTINUE={continue_score:.2f}",
+                    raw_output=f"scores: {scores}"
                 )
-            
-            return SLMResponse(
-                decision="CONTINUE",
-                confidence=0.9,
-                raw_output=response
-            )
         except Exception as e:
             logger.warning(f"SLM frustration classification failed: {e}")
-            if has_severe_profanity:
+            if flags.get('profanity', False) or flags.get('insults', False):
                 return SLMResponse(
                     decision="ESCALATE",
-                    confidence=0.8,
-                    explanation="Severe profanity (fallback)",
+                    confidence=0.6,
+                    explanation=f"Fallback due to flags: {flags}",
                     raw_output=""
                 )
             return SLMResponse(
