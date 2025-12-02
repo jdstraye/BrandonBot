@@ -152,7 +152,7 @@ async def test_frustration_detection():
             words = message.split()
             caps_words = sum(1 for w in words if w.isupper() and len(w) > 1)
             if caps_words >= len(words) * 0.5 and len(words) >= 3:
-                flags.caps = True
+                flags.all_caps = True
             
             if message.count('?') >= 2 or message.count('!') >= 2:
                 flags.repeated_punct = True

@@ -110,6 +110,9 @@ class PrequalifierResult:
     vagueness_decision: VaguenessDecision = VaguenessDecision.CLEAR
     pattern_flags: Optional[PatternFlags] = None
     
+    # Detected emotion from 7-emotion classifier
+    detected_emotion: str = "neutral"
+    
     # RAG context (for vagueness and prompt enrichment)
     rag_results: List[RAGResult] = field(default_factory=list)
     avg_rag_confidence: float = 0.0
@@ -323,13 +326,14 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
         pattern_flags = self._detect_patterns(result.sanitized_message)
         result.pattern_flags = pattern_flags
         
-        # Step 4: SLM frustration classification
-        frustration_decision = await self._classify_frustration_async(
+        # Step 4: SLM frustration classification (returns decision + detected emotion)
+        frustration_decision, detected_emotion = await self._classify_frustration_async(
             result.sanitized_message,
             pattern_flags,
             conversation_history
         )
         result.frustration_decision = frustration_decision
+        result.detected_emotion = detected_emotion
         
         # Step 5: RAG retrieval
         rag_results, avg_confidence = await self._retrieve_rag_context(result.sanitized_message)
@@ -437,26 +441,32 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
         message: str,
         flags: PatternFlags,
         history: List[Dict] = None
-    ) -> FrustrationDecision:
+    ) -> Tuple[FrustrationDecision, str]:
         """
         Async SLM classification for frustration/escalation.
         Uses pattern flags + message to determine ESCALATE or CONTINUE.
+        
+        Returns:
+            Tuple of (FrustrationDecision, detected_emotion)
+            detected_emotion is one of: anger, disgust, fear, joy, neutral, sadness, surprise
         """
-        # If no SLM available, fall back to rule-based
         if self.slm is None:
-            return self._fallback_frustration_classification(flags, message, history)
+            decision = self._fallback_frustration_classification(flags, message, history)
+            return (decision, "neutral")
         
         try:
             response = await self.slm.classify_frustration(message, flags.to_dict())
+            detected_emotion = getattr(response, 'detected_emotion', 'neutral') or 'neutral'
             
             if response.decision == "ESCALATE":
-                return FrustrationDecision.ESCALATE
+                return (FrustrationDecision.ESCALATE, detected_emotion)
             else:
-                return FrustrationDecision.CONTINUE
+                return (FrustrationDecision.CONTINUE, detected_emotion)
                 
         except Exception as e:
             logger.warning(f"SLM frustration classification failed: {e}, using fallback")
-            return self._fallback_frustration_classification(flags, message, history)
+            decision = self._fallback_frustration_classification(flags, message, history)
+            return (decision, "neutral")
     
     def _fallback_frustration_classification(
         self,

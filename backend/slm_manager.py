@@ -3,20 +3,20 @@ SLM Manager for BrandonBot
 
 Uses cross-encoder for semantic relevance scoring and classification:
 - Vagueness classification via query-document relevance scoring
-- Frustration classification via sentiment detection
+- Frustration classification via emotion detection (7 emotions)
 - Intent fulfillment check
 - Ethics check
 - FEC compliance verification
 - PII detection
 
-Cross-encoder (ms-marco-TinyBERT-L-2) is ~17MB and optimized for relevance scoring.
-For sentiment, we use a separate sentiment classifier.
+Cross-encoder (BAAI/bge-reranker-v2-m3) is optimized for relevance scoring.
+For emotion detection, we use j-hartmann 7-emotion classifier.
 """
 
 import logging
 import asyncio
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 from enum import Enum
 
@@ -41,6 +41,7 @@ class SLMResponse:
     confidence: float
     explanation: str = ""
     raw_output: str = ""
+    detected_emotion: str = ""
 
 
 class SLMManager:
@@ -48,14 +49,18 @@ class SLMManager:
     Manages lightweight models for semantic classification tasks.
     
     Uses:
-    - Cross-encoder (ms-marco-TinyBERT-L-2) for relevance scoring (~17MB)
-    - Sentiment classifier for frustration detection (~420MB)
+    - Cross-encoder (BAAI/bge-reranker-v2-m3) for relevance scoring
+    - Emotion classifier (j-hartmann) for frustration detection (7 emotions)
     
     Both are loaded lazily on first use.
     """
     
-    CROSS_ENCODER_MODEL = "cross-encoder/ms-marco-TinyBERT-L-2"
-    SENTIMENT_MODEL = "cardiffnlp/twitter-roberta-base-sentiment-latest"
+    CROSS_ENCODER_MODEL = "cross-encoder/ms-marco-MiniLM-L6-v2"
+    EMOTION_MODEL = "j-hartmann/emotion-english-distilroberta-base"
+    
+    EMOTION_LABELS = ["anger", "disgust", "fear", "joy", "neutral", "sadness", "surprise"]
+    FRUSTRATION_EMOTIONS = {"anger", "disgust"}
+    NEGATIVE_EMOTIONS = {"anger", "disgust", "fear", "sadness"}
     
     def __init__(self, device: str = "cpu"):
         """
@@ -66,12 +71,38 @@ class SLMManager:
         """
         self.device = device
         self._cross_encoder = None
-        self._sentiment_classifier = None
+        self._emotion_classifier = None
         self._cross_encoder_loaded = False
-        self._sentiment_loaded = False
+        self._emotion_loaded = False
         self._loading_cross_encoder = False
-        self._loading_sentiment = False
+        self._loading_emotion = False
         self._load_lock = asyncio.Lock()
+    
+    @staticmethod
+    def clean_rag_text(text: str) -> str:
+        """
+        Clean RAG result text for better cross-encoder scoring.
+        
+        Strips whitespace, joins fragmented sentences, normalizes spacing.
+        
+        Args:
+            text: Raw RAG result text
+        
+        Returns:
+            Cleaned text suitable for cross-encoder
+        """
+        if not text:
+            return ""
+        
+        text = ' '.join(text.split())
+        
+        text = re.sub(r'\s*\n\s*', ' ', text)
+        
+        text = re.sub(r'\s+([.,!?;:])', r'\1', text)
+        
+        text = re.sub(r'\s{2,}', ' ', text)
+        
+        return text.strip()
     
     async def _ensure_cross_encoder_loaded(self):
         """Lazy load the cross-encoder on first use"""
@@ -111,44 +142,48 @@ class SLMManager:
                 self._loading_cross_encoder = False
     
     async def _ensure_sentiment_loaded(self):
-        """Lazy load the sentiment classifier on first use"""
-        if self._sentiment_loaded:
+        """Lazy load the emotion classifier on first use (backward compat alias)"""
+        await self._ensure_emotion_loaded()
+    
+    async def _ensure_emotion_loaded(self):
+        """Lazy load the emotion classifier on first use"""
+        if self._emotion_loaded:
             return
         
         async with self._load_lock:
-            if self._sentiment_loaded:
+            if self._emotion_loaded:
                 return
             
-            if self._loading_sentiment:
-                while self._loading_sentiment:
+            if self._loading_emotion:
+                while self._loading_emotion:
                     await asyncio.sleep(0.1)
                 return
             
-            self._loading_sentiment = True
+            self._loading_emotion = True
             
             try:
-                logger.info(f"Loading sentiment classifier: {self.SENTIMENT_MODEL}")
+                logger.info(f"Loading emotion classifier: {self.EMOTION_MODEL}")
                 
                 from transformers import pipeline
                 
                 device_id = -1 if self.device == "cpu" else 0
                 
-                self._sentiment_classifier = pipeline(
-                    "sentiment-analysis",
-                    model=self.SENTIMENT_MODEL,
+                self._emotion_classifier = pipeline(
+                    "text-classification",
+                    model=self.EMOTION_MODEL,
                     device=device_id,
                     top_k=None
                 )
                 
-                self._sentiment_loaded = True
-                logger.info(f"Sentiment classifier loaded successfully: {self.SENTIMENT_MODEL}")
+                self._emotion_loaded = True
+                logger.info(f"Emotion classifier loaded successfully: {self.EMOTION_MODEL}")
                 
             except Exception as e:
-                logger.error(f"Failed to load sentiment classifier: {e}")
-                self._sentiment_loaded = False
+                logger.error(f"Failed to load emotion classifier: {e}")
+                self._emotion_loaded = False
                 raise
             finally:
-                self._loading_sentiment = False
+                self._loading_emotion = False
     
     async def score_relevance(
         self,
@@ -201,9 +236,12 @@ class SLMManager:
         flags: Dict[str, bool]
     ) -> SLMResponse:
         """
-        Classify user frustration level using sentiment analysis.
+        Classify user frustration level using 7-emotion detection.
         
-        Uses RoBERTa-based sentiment classifier to detect negative sentiment.
+        Uses j-hartmann emotion classifier to detect:
+        anger, disgust, fear, joy, neutral, sadness, surprise
+        
+        Frustration is detected via anger + disgust scores.
         Pattern flags provide additional signal.
         
         Args:
@@ -211,12 +249,12 @@ class SLMManager:
             flags: Pattern flags from prequalifier
         
         Returns:
-            SLMResponse with ESCALATE or CONTINUE decision
+            SLMResponse with ESCALATE or CONTINUE decision and detected_emotion
         """
-        await self._ensure_sentiment_loaded()
+        await self._ensure_emotion_loaded()
         
         try:
-            result = self._sentiment_classifier(message[:512])
+            result = self._emotion_classifier(message[:512])
             
             if isinstance(result, list) and len(result) > 0:
                 if isinstance(result[0], list):
@@ -226,11 +264,20 @@ class SLMManager:
             else:
                 scores_list = []
             
-            sentiment_scores = {item['label']: item['score'] for item in scores_list}
+            emotion_scores = {item['label']: item['score'] for item in scores_list}
             
-            negative_score = sentiment_scores.get('negative', 0.0)
-            positive_score = sentiment_scores.get('positive', 0.0)
-            neutral_score = sentiment_scores.get('neutral', 0.0)
+            anger_score = emotion_scores.get('anger', 0.0)
+            disgust_score = emotion_scores.get('disgust', 0.0)
+            fear_score = emotion_scores.get('fear', 0.0)
+            joy_score = emotion_scores.get('joy', 0.0)
+            neutral_score = emotion_scores.get('neutral', 0.0)
+            sadness_score = emotion_scores.get('sadness', 0.0)
+            surprise_score = emotion_scores.get('surprise', 0.0)
+            
+            frustration_score = anger_score + disgust_score
+            negative_score = anger_score + disgust_score + fear_score + sadness_score
+            
+            top_emotion = max(emotion_scores.items(), key=lambda x: x[1])[0] if emotion_scores else "neutral"
             
             has_severe_flags = (
                 flags.get('profanity', False) or 
@@ -245,43 +292,103 @@ class SLMManager:
                 flags.get('repeated_punct', False)
             )
             
-            if negative_score > 0.65:
+            frustration_keywords = [
+                'hundred times', 'over and over', 'again and again',
+                'already asked', 'how many times', 'keep asking',
+                'never answered', 'same question', 'tired of',
+                'never get', 'straight answer', 'no one listens',
+                'nobody listens', 'fed up', 'sick of'
+            ]
+            msg_lower = message.lower()
+            has_repetition_frustration = any(kw in msg_lower for kw in frustration_keywords)
+            
+            if anger_score > 0.35:
                 return SLMResponse(
                     decision="ESCALATE",
-                    confidence=negative_score,
-                    explanation=f"High negative sentiment: neg={negative_score:.2f}, pos={positive_score:.2f}",
-                    raw_output=str(sentiment_scores)
+                    confidence=anger_score,
+                    explanation=f"High anger: anger={anger_score:.2f}, disgust={disgust_score:.2f}",
+                    raw_output=str(emotion_scores),
+                    detected_emotion="anger"
                 )
             
-            if negative_score > 0.4 and has_severe_flags:
+            if disgust_score > 0.35:
                 return SLMResponse(
                     decision="ESCALATE",
-                    confidence=max(negative_score, 0.65),
-                    explanation=f"Negative sentiment + flags: neg={negative_score:.2f}, flags={flags}",
-                    raw_output=str(sentiment_scores)
+                    confidence=disgust_score,
+                    explanation=f"High disgust: anger={anger_score:.2f}, disgust={disgust_score:.2f}",
+                    raw_output=str(emotion_scores),
+                    detected_emotion="disgust"
                 )
             
-            if has_frustration_signals and negative_score > 0.1:
+            if frustration_score > 0.3:
                 return SLMResponse(
                     decision="ESCALATE",
-                    confidence=max(negative_score + 0.3, 0.6),
-                    explanation=f"Frustration signals + negative: neg={negative_score:.2f}, flags={flags}",
-                    raw_output=str(sentiment_scores)
+                    confidence=max(frustration_score, 0.60),
+                    explanation=f"Combined frustration: anger={anger_score:.2f}, disgust={disgust_score:.2f}",
+                    raw_output=str(emotion_scores),
+                    detected_emotion=top_emotion
                 )
             
-            if has_severe_flags and negative_score > 0.2:
+            if has_severe_flags and frustration_score > 0.1:
                 return SLMResponse(
                     decision="ESCALATE",
-                    confidence=0.6,
-                    explanation=f"Flags with mild negative: neg={negative_score:.2f}, flags={flags}",
-                    raw_output=str(sentiment_scores)
+                    confidence=max(frustration_score + 0.4, 0.65),
+                    explanation=f"Frustration + flags: anger={anger_score:.2f}, disgust={disgust_score:.2f}, flags={flags}",
+                    raw_output=str(emotion_scores),
+                    detected_emotion=top_emotion
+                )
+            
+            if has_frustration_signals and frustration_score > 0.1:
+                return SLMResponse(
+                    decision="ESCALATE",
+                    confidence=max(frustration_score + 0.3, 0.6),
+                    explanation=f"Frustration signals: anger={anger_score:.2f}, disgust={disgust_score:.2f}, flags={flags}",
+                    raw_output=str(emotion_scores),
+                    detected_emotion=top_emotion
+                )
+            
+            if fear_score > 0.35:
+                return SLMResponse(
+                    decision="ESCALATE",
+                    confidence=fear_score,
+                    explanation=f"High fear detected: fear={fear_score:.2f}",
+                    raw_output=str(emotion_scores),
+                    detected_emotion="fear"
+                )
+            
+            if sadness_score > 0.4:
+                return SLMResponse(
+                    decision="ESCALATE",
+                    confidence=sadness_score,
+                    explanation=f"High sadness detected: sadness={sadness_score:.2f}",
+                    raw_output=str(emotion_scores),
+                    detected_emotion="sadness"
+                )
+            
+            if surprise_score > 0.5 and has_frustration_signals:
+                return SLMResponse(
+                    decision="ESCALATE",
+                    confidence=surprise_score,
+                    explanation=f"Surprise with frustration signals: surprise={surprise_score:.2f}",
+                    raw_output=str(emotion_scores),
+                    detected_emotion="surprise"
+                )
+            
+            if has_repetition_frustration and negative_score > 0.15:
+                return SLMResponse(
+                    decision="ESCALATE",
+                    confidence=max(negative_score, 0.60),
+                    explanation=f"Repetition frustration keywords detected: {msg_lower[:50]}",
+                    raw_output=str(emotion_scores),
+                    detected_emotion=top_emotion
                 )
             
             return SLMResponse(
                 decision="CONTINUE",
-                confidence=max(positive_score, neutral_score),
-                explanation=f"Acceptable sentiment: neg={negative_score:.2f}, pos={positive_score:.2f}, neu={neutral_score:.2f}",
-                raw_output=str(sentiment_scores)
+                confidence=max(joy_score, neutral_score),
+                explanation=f"Acceptable emotion: joy={joy_score:.2f}, neutral={neutral_score:.2f}, anger={anger_score:.2f}",
+                raw_output=str(emotion_scores),
+                detected_emotion=top_emotion
             )
             
         except Exception as e:
@@ -291,13 +398,15 @@ class SLMManager:
                     decision="ESCALATE",
                     confidence=0.6,
                     explanation=f"Fallback due to flags: {flags}",
-                    raw_output=""
+                    raw_output="",
+                    detected_emotion="anger"
                 )
             return SLMResponse(
                 decision="CONTINUE",
                 confidence=0.5,
                 explanation=f"Error fallback: {e}",
-                raw_output=""
+                raw_output="",
+                detected_emotion="neutral"
             )
     
     async def classify_vagueness(
@@ -456,7 +565,20 @@ class SLMManager:
             )
         
         try:
-            documents = [r.get('content', '')[:300] for r in rag_results[:5]]
+            documents = [
+                self.clean_rag_text(r.get('content', ''))[:300] 
+                for r in rag_results[:5]
+            ]
+            documents = [d for d in documents if d]
+            
+            if not documents:
+                return SLMResponse(
+                    decision="VAGUE",
+                    confidence=0.70,
+                    explanation="No valid RAG content after cleaning",
+                    raw_output=""
+                )
+            
             relevance_scores = await self.score_relevance(message, documents)
             
             if not relevance_scores:

@@ -870,6 +870,7 @@ Remember: You're here to inform voters and build support for Brandon's campaign.
             "sanitization_issues": pq_result.sanitization_issues,
             "user_frustrated": user_frustrated,
             "query_vague": query_vague,
+            "detected_emotion": getattr(pq_result, 'detected_emotion', 'neutral'),
             "duration_ms": 0,
             "validation_status": None,
             "validation_rejections": [],
@@ -898,6 +899,12 @@ Remember: You're here to inform voters and build support for Brandon's campaign.
             # Add escalation context if frustrated
             if user_frustrated:
                 full_system_prompt += f"\n\nESCALATION DETECTED: User is frustrated (decision: {pq_result.frustration_decision.value}). Prioritize empathy and de-escalation."
+            
+            # Add detected emotion context for style adaptation
+            detected_emotion = getattr(pq_result, 'detected_emotion', 'neutral') or 'neutral'
+            if detected_emotion != 'neutral':
+                emotion_guidance = self._get_emotion_style_guidance(detected_emotion)
+                full_system_prompt += f"\n\nUSER EMOTION: The user appears to be feeling {detected_emotion}. {emotion_guidance}"
             
             # Add vagueness context
             if query_vague:
@@ -1117,6 +1124,58 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
                     logger.warning(f"Failed to log model performance: {log_err}")
             
             return error_response, {"error": str(e), "request_id": request_id, "duration_ms": duration_ms}
+    
+    def _get_emotion_style_guidance(self, emotion: str) -> str:
+        """
+        Get style guidance for the LLM based on detected user emotion.
+        
+        These guidelines integrate with the Ogilvy-style guidance from retrieve_answer_style
+        to provide emotion-aware responses.
+        
+        Args:
+            emotion: One of anger, disgust, fear, joy, neutral, sadness, surprise
+        
+        Returns:
+            Style guidance string for the LLM
+        """
+        emotion_guidance = {
+            "anger": (
+                "Respond with calm, measured language. Acknowledge their frustration directly without being defensive. "
+                "Focus on actionable solutions and next steps. Avoid dismissive language or minimizing their concerns. "
+                "Consider offering to connect them with a real person if they prefer."
+            ),
+            "disgust": (
+                "Acknowledge their strong feelings and validate their perspective. Avoid defensive responses. "
+                "Focus on shared values and common ground. Be sincere and avoid corporate-speak. "
+                "Show genuine understanding of why they might feel this way."
+            ),
+            "fear": (
+                "Respond with reassurance and clarity. Provide specific, factual information to address their concerns. "
+                "Avoid vague or dismissive responses. Use calming, confident language while respecting their worries. "
+                "Explain what concrete steps are being taken to address their concerns."
+            ),
+            "sadness": (
+                "Respond with empathy and understanding. Acknowledge the difficulty of the situation. "
+                "Focus on hope and positive actions being taken. Avoid forced cheerfulness or dismissiveness. "
+                "Show genuine care for their well-being and circumstances."
+            ),
+            "surprise": (
+                "Provide clear context and background information. Explain the 'why' behind the situation. "
+                "Be patient with follow-up questions. Help them understand the broader picture. "
+                "Avoid assuming prior knowledge."
+            ),
+            "joy": (
+                "Match their positive energy appropriately. Be warm and engaging. "
+                "Build on their enthusiasm while staying informative. "
+                "This is a great opportunity to deepen engagement and share the vision."
+            ),
+            "neutral": (
+                "Respond in a balanced, informative manner. Focus on providing clear, helpful information. "
+                "Be professional and approachable."
+            )
+        }
+        
+        return emotion_guidance.get(emotion, emotion_guidance["neutral"])
     
     def _build_messages(self, session: Session) -> List[Dict]:
         """Build the message list for the LLM including conversation history"""
