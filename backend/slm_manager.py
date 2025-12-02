@@ -302,6 +302,16 @@ class SLMManager:
             msg_lower = message.lower()
             has_repetition_frustration = any(kw in msg_lower for kw in frustration_keywords)
             
+            political_frustration_keywords = [
+                'was stolen', 'is stolen', 'election fraud',
+                'drain the swamp', 'rigged',
+                'overrun', 'invasion', 'destroying',
+                'betrayal', 'sold out', 'being ignored',
+                'failing us', 'not listening', 'out of touch',
+            ]
+            is_question_msg = message.strip().endswith('?') or any(message.lower().startswith(qw) for qw in ['what', 'how', 'why', 'where', 'when', 'who', 'which', 'can', 'do', 'does', 'is', 'are', 'will', 'would'])
+            has_political_frustration = any(kw in msg_lower for kw in political_frustration_keywords) and not is_question_msg
+            
             if anger_score > 0.35:
                 return SLMResponse(
                     decision="ESCALATE",
@@ -381,6 +391,15 @@ class SLMManager:
                     explanation=f"Repetition frustration keywords detected: {msg_lower[:50]}",
                     raw_output=str(emotion_scores),
                     detected_emotion=top_emotion
+                )
+            
+            if has_political_frustration:
+                return SLMResponse(
+                    decision="ESCALATE",
+                    confidence=0.65,
+                    explanation=f"Political frustration keywords detected: {msg_lower[:50]}",
+                    raw_output=str(emotion_scores),
+                    detected_emotion="anger"
                 )
             
             return SLMResponse(
@@ -571,18 +590,49 @@ class SLMManager:
         has_question_mark = '?' in message
         is_question = has_question_word or has_question_mark
         
-        if not is_question and word_count <= 8:
-            opinion_statement_patterns = [
-                'is out of control', 'are out of control',
-                'is broken', 'are broken',
-                'is terrible', 'is awful', 'is great',
-                'needs to', 'should be', 'must be',
-            ]
-            if any(p in message_lower for p in opinion_statement_patterns):
+        always_vague_patterns = [
+            'is out of control', 'are out of control',
+            'is rigged', 'is lying', 'are lying',
+            'must be done', 'something must be',
+            "it's time to", 'drain the swamp',
+            "doesn't care", "don't care about us",
+            'fed up with', "i'm fed up",
+            'wasting our money',
+            'is a betrayal', 'a betrayal of',
+            'is not acceptable', 'not acceptable',
+            'this is a disgrace',
+            'is being mismanaged',
+            'tired of empty', "i'm tired of",
+        ]
+        if not is_question and any(p in message_lower for p in always_vague_patterns):
+            return SLMResponse(
+                decision="VAGUE",
+                confidence=0.80,
+                explanation=f"Always-vague complaint pattern detected",
+                raw_output=message
+            )
+        
+        truly_vague_patterns = [
+            'is broken', 'are broken',
+            'is terrible', 'is awful',
+            'is a disgrace', 'this is a disgrace',
+            "i'm tired of", 'tired of empty',
+            'deserves better',
+        ]
+        
+        has_specific_topic = any(topic in message_lower for topic in [
+            'border', 'immigration', 'immigrant', 'tax', 'healthcare', 
+            'education', 'water', 'election', 'administration', 'legislature',
+            'economy', 'spending', 'officials', 'politicians',
+            'arizona', 'tucson', 'maricopa'
+        ])
+        
+        if not is_question and word_count <= 8 and not has_specific_topic:
+            if any(p in message_lower for p in truly_vague_patterns):
                 return SLMResponse(
                     decision="VAGUE",
                     confidence=0.75,
-                    explanation="Opinion statement without specific question",
+                    explanation="Opinion statement without specific topic",
                     raw_output=message
                 )
         
