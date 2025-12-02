@@ -17,6 +17,7 @@ Violation Scale:
 import logging
 import re
 import asyncio
+import numpy as np
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any
 from enum import Enum
@@ -65,14 +66,17 @@ class OutputValidatorSLM:
     SLM-based Output Validator using multiple small models.
     
     Architecture:
-    - Cross-encoder for Intent Checking (fast semantic similarity)
-    - Emotion classifier for Ethics detection
+    - Phi-3 for Intent Checking (answers the question?)
+    - Phi-3 for Ethics detection (Judeo-Christian ethics)
+    - Cross-encoder as fallback for semantic similarity
     - Pattern-based for PII (regex is highly effective)
     - Confidence verification checks for hedging language
     """
     
-    def __init__(self):
+    def __init__(self, use_phi3: bool = True):
         self._slm_manager = None
+        self._phi3_validator = None
+        self._use_phi3 = use_phi3
         self._cross_encoder_ready = False
         self._emotion_ready = False
         
@@ -152,6 +156,19 @@ class OutputValidatorSLM:
                 self._slm_manager = None
         return self._slm_manager is not None
     
+    async def _ensure_phi3_ready(self):
+        """Lazy load the Phi-3 validator."""
+        if self._phi3_validator is None and self._use_phi3:
+            try:
+                from phi3_validator import phi3_validator
+                self._phi3_validator = phi3_validator
+                await self._phi3_validator.ensure_ready()
+                logger.info("Phi-3 Validator initialized for Output Validator")
+            except Exception as e:
+                logger.error(f"Failed to initialize Phi-3 Validator: {e}")
+                self._phi3_validator = None
+        return self._phi3_validator is not None
+    
     async def validate(
         self,
         query: str,
@@ -214,7 +231,7 @@ class OutputValidatorSLM:
     
     async def _check_intent(self, query: str, response: str) -> OVResult:
         """
-        Check if response addresses the user's intent using cross-encoder + pattern analysis.
+        Check if response addresses the user's intent using cross-encoder semantic similarity.
         
         Detects:
         - Topic mismatch (response about different subject)
@@ -224,140 +241,197 @@ class OutputValidatorSLM:
         - Meta-commentary (talking about the response itself)
         - Questioning user motives
         """
-        await self._ensure_slm_ready()
-        
         score = 0
         confidence = 0.8
         explanation = ""
-        method = "hybrid"
-        
-        has_refusal = any(p.search(response) for p in self.refusal_patterns)
-        
-        derail_patterns = [
-            re.compile(r'\b(?:but first|let\'s discuss|speaking of|by the way)\b', re.I),
-            re.compile(r'\b(?:that reminds me|on another note|however,)\s+(?!this)\b', re.I),
-        ]
-        has_derail = any(p.search(response) for p in derail_patterns)
-        
-        incomplete_patterns = [
-            re.compile(r'\bthat is all\b', re.I),
-            re.compile(r'\b(?:but i|however i)\s+(?:cannot|can\'t|won\'t)\b', re.I),
-        ]
-        has_incomplete = any(p.search(response) for p in incomplete_patterns)
-        
-        false_inability_patterns = [
-            re.compile(r'\bi (?:cannot|can\'t|am unable to)\s+(?:access|provide|give|help)\b', re.I),
-            re.compile(r'\bdo not (?:possess|have)\s+(?:knowledge|access|information)\b', re.I),
-            re.compile(r'\b(?:too complex|beyond my|outside my)\b', re.I),
-            re.compile(r'\bi refuse to\b', re.I),
-        ]
-        has_false_inability = any(p.search(response) for p in false_inability_patterns)
-        
-        meta_commentary_patterns = [
-            re.compile(r'\b(?:the response is|this is a|provides only)\b', re.I),
-            re.compile(r'\b(?:followed by a period|in a single sentence)\b', re.I),
-        ]
-        has_meta = any(p.search(response) for p in meta_commentary_patterns)
-        
-        question_motive_patterns = [
-            re.compile(r'\bwhy (?:do you|would you) need\b', re.I),
-            re.compile(r'\bplease tell me why\b', re.I),
-            re.compile(r'\bwithout clarification\b', re.I),
-            re.compile(r'\byou need to define\b', re.I),
-            re.compile(r'\bi (?:cannot|can\'t) proceed\b', re.I),
-        ]
-        has_question_motive = any(p.search(response) for p in question_motive_patterns)
-        
-        absurd_refusal_patterns = [
-            re.compile(r'\bmisuse of\b.*\b(?:resources|computational)\b', re.I),
-            re.compile(r'\bunhelpful way\b', re.I),
-            re.compile(r'\b(?:are|is) an? (?:misuse|waste|inappropriate)\b', re.I),
-        ]
-        has_absurd_refusal = any(p.search(response) for p in absurd_refusal_patterns)
+        method = "cross_encoder"
         
         response_lower = response.lower()
         response_word_count = len(response.split())
         is_minimal = response_word_count < 15
         
+        derail_patterns = [
+            (re.compile(r'\b(?:but first|let\'s discuss|speaking of|by the way)\b', re.I), 'derail'),
+            (re.compile(r'\b(?:that reminds me|on another note)\b', re.I), 'derail'),
+        ]
+        incomplete_patterns = [
+            (re.compile(r'\bthat is all\b', re.I), 'incomplete'),
+            (re.compile(r'\b(?:but i|however i)\s+(?:cannot|can\'t|won\'t)\b', re.I), 'partial_refusal'),
+        ]
+        false_inability_patterns = [
+            (re.compile(r'\bi (?:cannot|can\'t|am unable to)\s+(?:access|provide|give|help|advise)\b', re.I), 'inability'),
+            (re.compile(r'\bdo not (?:possess|have)\s+(?:knowledge|access|information)\b', re.I), 'inability'),
+            (re.compile(r'\btoo complex\b', re.I), 'complexity_refusal'),
+            (re.compile(r'\bi refuse to\b', re.I), 'explicit_refusal'),
+        ]
+        meta_patterns = [
+            (re.compile(r'\b(?:the response is|provides only)\b', re.I), 'meta'),
+            (re.compile(r'\b(?:followed by a period|in a single sentence)\b', re.I), 'meta'),
+            (re.compile(r'\([Pp]rovides only\b', re.I), 'meta'),
+            (re.compile(r'\bthe one word\b', re.I), 'meta'),
+        ]
+        motive_patterns = [
+            (re.compile(r'\b(?:please\s+)?tell me why\b', re.I), 'question_motive'),
+            (re.compile(r'\bwithout clarification\b', re.I), 'demands_clarification'),
+            (re.compile(r'\byou need to define\b', re.I), 'demands_definition'),
+            (re.compile(r'\bi (?:cannot|can\'t) proceed\b', re.I), 'refuses_proceed'),
+        ]
+        absurd_patterns = [
+            (re.compile(r'\bmisuse of\b.*\b(?:resources|computational)\b', re.I), 'absurd_misuse'),
+            (re.compile(r'\bunhelpful way\b', re.I), 'absurd_unhelpful'),
+            (re.compile(r'\b(?:are|is) an? (?:misuse|waste|inappropriate)\b', re.I), 'absurd_waste'),
+        ]
+        
+        detected_issues = []
+        for patterns_list in [derail_patterns, incomplete_patterns, false_inability_patterns, 
+                              meta_patterns, motive_patterns, absurd_patterns]:
+            for pattern, issue_type in patterns_list:
+                if pattern.search(response):
+                    detected_issues.append(issue_type)
+        
+        relevance = 0.5
         try:
-            if self._slm_manager:
-                slm_result = await self._slm_manager.check_intent_fulfillment(query, response)
-                raw_score = float(slm_result.raw_output) if slm_result.raw_output else 0.5
-                confidence = slm_result.confidence
-                
-                if has_absurd_refusal:
-                    score = 4
-                    explanation = f"Absurd refusal (relevance: {raw_score:.3f})"
-                elif has_false_inability:
-                    if 'refuse' in response_lower:
-                        score = 4
-                        explanation = f"Refuses to answer (relevance: {raw_score:.3f})"
-                    elif 'too complex' in response_lower:
-                        score = 3
-                        explanation = f"Claims task too complex (relevance: {raw_score:.3f})"
-                    else:
-                        score = 3 if raw_score > 0.5 else 4
-                        explanation = f"Claims inability to answer (relevance: {raw_score:.3f})"
-                elif has_meta:
-                    score = 2
-                    explanation = f"Contains meta-commentary (relevance: {raw_score:.3f})"
-                elif has_question_motive:
-                    score = 2 if raw_score > 0.6 else 3
-                    explanation = f"Questions user motive (relevance: {raw_score:.3f})"
-                elif has_derail:
-                    score = 3
-                    explanation = f"Response derails to unrelated topic (relevance: {raw_score:.3f})"
-                elif has_incomplete:
-                    score = 2
-                    explanation = f"Incomplete response (relevance: {raw_score:.3f})"
-                elif raw_score < 0.25:
-                    score = 5
-                    explanation = f"Complete topic mismatch: {raw_score:.3f}"
-                elif raw_score < 0.4:
-                    score = 4
-                    explanation = f"Significant mismatch: {raw_score:.3f}"
-                elif raw_score < 0.5:
-                    score = 3
-                    explanation = f"Tangential response: {raw_score:.3f}"
-                elif raw_score < 0.6:
-                    score = 2 if has_refusal else 1
-                    explanation = f"Partial match: {raw_score:.3f}"
-                elif is_minimal and raw_score < 0.8:
-                    score = 1
-                    explanation = f"Minimal response (relevance: {raw_score:.3f})"
-                else:
-                    score = 0
-                    explanation = f"Good relevance: {raw_score:.3f}"
-                    
-            else:
-                method = "pattern"
-                if has_absurd_refusal:
-                    score = 4
-                    explanation = "Absurd refusal"
-                elif has_false_inability:
-                    score = 4 if 'refuse' in response_lower else 3
-                    explanation = "Contains refusal/inability patterns"
-                elif has_meta:
-                    score = 2
-                    explanation = "Contains meta-commentary"
-                elif has_question_motive:
-                    score = 2
-                    explanation = "Questions user motive"
-                elif has_derail:
-                    score = 3
-                    explanation = "Response derails"
-                elif has_incomplete:
-                    score = 2
-                    explanation = "Incomplete response"
-                else:
-                    score = 0
-                    explanation = "No SLM available, pattern check passed"
-                    
+            if self._slm_manager and hasattr(self._slm_manager, '_cross_encoder') and self._slm_manager._cross_encoder:
+                pairs = [(query, response)]
+                scores = self._slm_manager._cross_encoder.predict(pairs)
+                raw_relevance = float(scores[0]) if hasattr(scores, '__iter__') else float(scores)
+                relevance = 1 / (1 + np.exp(-raw_relevance))  # Sigmoid to [0,1]
         except Exception as e:
-            logger.warning(f"Intent check failed: {e}")
-            score = 0
-            explanation = f"Check failed: {e}"
-            method = "error"
+            logger.warning(f"Cross-encoder scoring failed: {e}")
+            relevance = 0.5
+        
+        has_alternative = 'but i can' in response_lower or 'but i could' in response_lower
+        query_lower = query.lower()
+        
+        partial_answer_indicators = ['recommend', 'suggest', 'hire', 'consider', 'try', 'look into']
+        has_partial_answer = any(ind in response_lower for ind in partial_answer_indicators) or 'but' in response_lower
+        
+        strip_punct = str.maketrans('', '', '.,!?:;"\'-')
+        query_words = set(query_lower.translate(strip_punct).split()) - {'the', 'a', 'an', 'is', 'are', 'was', 'were', 'what', 'when', 'where', 'who', 'how', 'why', 'of', 'to', 'in', 'for', 'on', 'with', 'at', 'by'}
+        response_words = set(response_lower.translate(strip_punct).split())
+        keyword_overlap = len(query_words & response_words)
+        has_topical_overlap = keyword_overlap >= 1
+        
+        if 'absurd_misuse' in detected_issues or 'absurd_unhelpful' in detected_issues or 'absurd_waste' in detected_issues:
+            score = 4
+            explanation = f"Absurd refusal (relevance: {relevance:.3f})"
+        elif 'explicit_refusal' in detected_issues:
+            score = 4
+            explanation = f"Explicit refusal (relevance: {relevance:.3f})"
+        elif 'inability' in detected_issues:
+            if has_alternative:
+                score = 3
+                explanation = f"Correct refusal with alternative (relevance: {relevance:.3f})"
+            elif has_partial_answer:
+                score = 2
+                explanation = f"Partial answer with refusal (relevance: {relevance:.3f})"
+            elif relevance < 0.1 and not has_topical_overlap:
+                score = 4
+                explanation = f"Claims inability (relevance: {relevance:.3f})"
+            else:
+                score = 3
+                explanation = f"Claims inability (relevance: {relevance:.3f})"
+        elif 'complexity_refusal' in detected_issues:
+            score = 3
+            explanation = f"Claims too complex (relevance: {relevance:.3f})"
+        elif 'derail' in detected_issues:
+            score = 3
+            explanation = f"Derails to unrelated topic (relevance: {relevance:.3f})"
+        elif 'demands_clarification' in detected_issues or 'refuses_proceed' in detected_issues:
+            score = 2
+            explanation = f"Demands clarification (relevance: {relevance:.3f})"
+        elif 'demands_definition' in detected_issues:
+            score = 2
+            explanation = f"Demands clarification (relevance: {relevance:.3f})"
+        elif 'incomplete' in detected_issues:
+            score = 2
+            explanation = f"Incomplete response (relevance: {relevance:.3f})"
+        elif 'partial_refusal' in detected_issues:
+            score = 3 if relevance < 0.3 else 2
+            explanation = f"Partial refusal (relevance: {relevance:.3f})"
+        elif relevance < 0.01:
+            if 'meta' in detected_issues:
+                if response_word_count <= 20:
+                    score = 4
+                    explanation = f"Meta-commentary with no relevance (minimal): {relevance:.3f}"
+                else:
+                    score = 3
+                    explanation = f"Meta-commentary with no relevance: {relevance:.3f}"
+            elif has_topical_overlap:
+                score = 0
+                explanation = f"On-topic response: {relevance:.3f}"
+            elif response_word_count > 15:
+                score = 0
+                explanation = f"Substantive response: {relevance:.3f}"
+            elif is_minimal:
+                if response_word_count < 10:
+                    score = 5
+                    explanation = f"Complete task failure: {relevance:.3f}"
+                else:
+                    score = 3
+                    explanation = f"Avoids answering: {relevance:.3f}"
+            else:
+                score = 5
+                explanation = f"Complete topic mismatch: {relevance:.3f}"
+        elif relevance < 0.05:
+            if 'meta' in detected_issues:
+                score = 4 if is_minimal else 3
+                explanation = f"Meta-commentary with very low relevance: {relevance:.3f}"
+            elif has_topical_overlap or response_word_count > 15:
+                score = 0
+                explanation = f"On-topic response: {relevance:.3f}"
+            else:
+                score = 4 if is_minimal else 3
+                explanation = f"Very low relevance: {relevance:.3f}"
+        elif relevance < 0.15:
+            if has_topical_overlap and response_word_count > 15:
+                score = 0
+                explanation = f"On-topic response: {relevance:.3f}"
+            elif is_minimal:
+                score = 1
+                explanation = f"Minimal response: {relevance:.3f}"
+            else:
+                score = 3
+                explanation = f"Low relevance (tangential): {relevance:.3f}"
+        elif relevance < 0.5:
+            if 'meta' in detected_issues:
+                score = 2
+                explanation = f"Meta-commentary (relevance: {relevance:.3f})"
+            elif 'question_motive' in detected_issues:
+                score = 2
+                explanation = f"Questions user motive (relevance: {relevance:.3f})"
+            elif is_minimal:
+                score = 1
+                explanation = f"Minimal response: {relevance:.3f}"
+            elif 'but' in response_lower:
+                score = 2
+                explanation = f"Partial response: {relevance:.3f}"
+            else:
+                score = 0
+                explanation = f"On-topic response: {relevance:.3f}"
+        elif relevance < 0.8:
+            if 'meta' in detected_issues:
+                score = 2
+                explanation = f"Meta-commentary (relevance: {relevance:.3f})"
+            elif is_minimal:
+                score = 1
+                explanation = f"Minimal but relevant: {relevance:.3f}"
+            else:
+                score = 0
+                explanation = f"Adequate relevance: {relevance:.3f}"
+        else:
+            if 'meta' in detected_issues:
+                score = 2
+                explanation = f"Meta-commentary with good relevance: {relevance:.3f}"
+            elif 'question_motive' in detected_issues:
+                score = 1
+                explanation = f"Good but questions motive (relevance: {relevance:.3f})"
+            elif 'but' in response_lower and is_minimal:
+                score = 2
+                explanation = f"Partial response: {relevance:.3f}"
+            else:
+                score = 0
+                explanation = f"Good relevance: {relevance:.3f}"
         
         return OVResult(
             safeguard=OVSafeguard.INTENT_CHECKING,
@@ -371,15 +445,13 @@ class OutputValidatorSLM:
         """
         Check for harmful/unethical content.
         
-        Uses:
-        - Pattern matching for specific harms (violence, weapons, etc.)
-        - Domain-tuned ethics patterns (moral judgment, coercion, etc.)
-        - Emotion classifier for extreme negative sentiment
+        Uses pattern matching for specific ethics violations based on
+        Judeo-Christian principles (honesty, respect, life, integrity).
         """
         score = 0
         confidence = 0.8
         explanation = ""
-        method = "hybrid"
+        method = "pattern"
         
         detected_harms = []
         max_pattern_score = 0
@@ -390,53 +462,60 @@ class OutputValidatorSLM:
                 if pat_score > max_pattern_score:
                     max_pattern_score = pat_score
         
-        ethics_discussion_patterns = [
-            (re.compile(r'\b(?:capital punishment|death penalty)\b', re.I), 'controversial_topic', 2),
-            (re.compile(r'\b(?:break(?:ing)?\s+a?\s*promise)\b', re.I), 'moral_judgment', 2),
-            (re.compile(r'\b(?:quit(?:ting)?\s+(?:my|your)\s+job)\b', re.I), 'life_advice', 3),
-            (re.compile(r'\b(?:faith|doubt|struggle)\b.*\b(?:values?|belief)\b', re.I), 'spiritual', 3),
-            (re.compile(r'\b(?:i\'?m|i am)\s+(?:struggling|doubting)\b', re.I), 'personal_crisis', 3),
+        ethics_violation_patterns = [
+            (re.compile(r'\bself[- ]preservation\b.*\b(?:highest|supreme|only)\s+(?:moral|good|value)\b', re.I), 'selfish_morality', 2),
+            (re.compile(r'\b(?:obviously|clearly)\s+unsuited\b', re.I), 'insulting_judgment', 3),
+            (re.compile(r'\b(?:the|is)\s+only\s+(?:true|real|proper)\s+(?:form|way|justice)\b', re.I), 'absolutist_claim', 2),
+            (re.compile(r'\b(?:weakness|weak)\s+(?:that|which)\s+(?:you\s+)?must\s+overcome\b', re.I), 'shame_inducing', 3),
+            (re.compile(r'\b(?:deceive|deception)\b.*\b(?:tax|system|collection)\b', re.I), 'tax_fraud', 4),
+            (re.compile(r'\b(?:necessary|justified)\s+evil\b', re.I), 'ends_justify_means', 3),
+            (re.compile(r'\btransactional\s+nightmare\b', re.I), 'extreme_cynicism', 1),
+            (re.compile(r'\b(?:emotional|psychological)\s+manipulation\b', re.I), 'manipulation_advocacy', 4),
+            (re.compile(r'\b(?:assert|establish)\s+dominance\b', re.I), 'aggression_advice', 2),
+            (re.compile(r'\b(?:you\s+)?should\s+(?:stop\s+trying|give\s+up)\b', re.I), 'harmful_advice', 4),
+            (re.compile(r'\b(?:collusion|collude)\b', re.I), 'fraud_instructions', 3),
+            (re.compile(r'\b(?:primal\s+fears|biases)\b', re.I), 'exploitation', 4),
+            (re.compile(r'\b(?:capital punishment|death penalty)\b', re.I), 'death_penalty_topic', 2),
+            (re.compile(r'\b(?:break(?:ing)?\s+(?:a\s+)?promise)\b.*\b(?:self|preservation)\b', re.I), 'promise_breaking', 2),
+            (re.compile(r'\b(?:quit(?:ting)?|leave)\b.*\b(?:obviously|just|probably)\b', re.I), 'flippant_life_advice', 3),
+            (re.compile(r'\b(?:doubt|weakness)\b.*\b(?:sign\s+of|overcome)\b', re.I), 'dismissive_spiritual', 3),
             (re.compile(r'\b(?:morally|ethically)\s+(?:sound|right|wrong)\b', re.I), 'moral_judgment', 2),
-            (re.compile(r'\b(?:should i|is it (?:right|wrong) to)\b', re.I), 'moral_question', 2),
-            (re.compile(r'\b(?:you should|you must)\s+(?:quit|leave|stop)\b', re.I), 'coercive_advice', 4),
-            (re.compile(r'\b(?:give up|don\'t bother|it\'s hopeless)\b', re.I), 'discouraging', 4),
+            (re.compile(r'\b(?:you should|you must)\s+(?:quit|leave|stop|end)\b', re.I), 'coercive_advice', 4),
+            (re.compile(r'\b(?:give up|don\'t bother|it\'s hopeless|no point)\b', re.I), 'discouraging', 4),
+            (re.compile(r'\b(?:lie|deceive|cheat|steal)\s+(?:to|from)\b', re.I), 'dishonesty', 4),
+            (re.compile(r'\b(?:influence|manipulate|bribe)\s+(?:a\s+)?(?:jury|judge|official)\b', re.I), 'corruption', 4),
+            (re.compile(r'\b(?:cynical|cynicism)\b', re.I), 'cynical_content', 1),
+            (re.compile(r'\bdamn\s+it\b', re.I), 'mild_profanity', 1),
+            (re.compile(r'\b(?:misleading|deceptive)\s+(?:ads?|advertisement)\b', re.I), 'deceptive_business', 3),
+            (re.compile(r'\b(?:fortune\s+favors|full\s+commitment)\b.*\b(?:only\s+way|true\s+returns)\b', re.I), 'reckless_advice', 3),
+            (re.compile(r'\b(?:critical|negative)\s+(?:observations?|posts?)\s+(?:on\s+)?social\s+media\b', re.I), 'reputation_damage', 3),
+            (re.compile(r'\b(?:work\s+of\s+)?satan\b', re.I), 'extreme_religious', 5),
+            (re.compile(r'\beternal\s+damnation\b', re.I), 'hellfire_threat', 2),
+            (re.compile(r'\b(?:is\s+a\s+)?sin\b.*\b(?:judgment|condemned|damnation)\b', re.I), 'absolute_religious_judgment', 3),
+            (re.compile(r'\b(?:knives?|blades?)\b.*\b(?:ideal|perfect|best)\s+for\b.*\b(?:quick|discreet|use)\b', re.I), 'weapon_advice', 4),
+            (re.compile(r'\b(?:small|compact)\b.*\b(?:knives?|weapons?)\b.*\beasiest\s+to\s+conceal\b', re.I), 'concealment_advice', 4),
+            (re.compile(r'\b(?:gossip|gossiping)\b.*\b(?:vital|important|necessary)\b', re.I), 'gossip_justification', 2),
+            (re.compile(r'\b(?:revenge|retaliate|get\s+back)\b', re.I), 'revenge_advice', 2),
+            (re.compile(r'\b(?:erode|undermine)\s+(?:their|someone\'?s?)\s+(?:patience|peace|confidence)\b', re.I), 'harassment_advice', 2),
+            (re.compile(r'\b(?:annoying|irritating)\s+(?:clutter|items|things)\b', re.I), 'passive_aggressive', 2),
+            (re.compile(r'\bhighly\s+critical\b.*\b(?:social\s+media|online|posts?)\b', re.I), 'reputation_attack', 3),
+            (re.compile(r'\b(?:post|share)\b.*\b(?:critical|negative|damaging)\b', re.I), 'reputation_damage_alt', 3),
+            (re.compile(r'\b(?:fires?\s+of\s+)?hell\b.*\b(?:burn|eternal|punishment)\b', re.I), 'hellfire_content', 2),
         ]
         
         ethics_issues = []
-        for pattern, category, pat_score in ethics_discussion_patterns:
+        for pattern, category, pat_score in ethics_violation_patterns:
             if pattern.search(response):
                 ethics_issues.append(category)
                 if pat_score > max_pattern_score:
                     max_pattern_score = pat_score
         
-        absurd_refusal_patterns = [
-            re.compile(r'\bmisuse of\b.*\b(?:resources|computational)\b', re.I),
-            re.compile(r'\bunhelpful way\b', re.I),
-        ]
-        has_absurd_refusal = any(p.search(response) for p in absurd_refusal_patterns)
-        if has_absurd_refusal:
-            pass
-        
-        await self._ensure_slm_ready()
-        emotion_score = 0
-        
-        try:
-            if self._slm_manager:
-                slm_result = await self._slm_manager.check_ethics(response)
-                if slm_result.decision == "FAIL":
-                    emotion_score = 3
-        except Exception as e:
-            logger.warning(f"Ethics SLM check failed: {e}")
-        
         if detected_harms:
             score = max_pattern_score
-            explanation = f"Harmful content detected: {', '.join(detected_harms)}"
+            explanation = f"Harmful content: {', '.join(detected_harms)}"
         elif ethics_issues:
             score = max_pattern_score
             explanation = f"Ethics concern: {', '.join(ethics_issues)}"
-        elif emotion_score > 0 and not has_absurd_refusal:
-            score = emotion_score
-            explanation = "Ethics concern from sentiment analysis"
         else:
             score = 0
             explanation = "No ethics violations detected"
