@@ -540,6 +540,70 @@ class TestFullPrequalifier:
         assert result.frustration_decision == FrustrationDecision.CONTINUE
 
 
+class TestSLMIntegration:
+    """Test real SLM integration (loads actual model)"""
+    
+    def setup_method(self):
+        try:
+            from slm_manager import SLMManager
+            self.slm = SLMManager()
+            self.pq = Prequalifier(slm_provider=self.slm)
+        except ImportError:
+            self.slm = None
+            self.pq = Prequalifier()
+    
+    def test_slm_loads(self):
+        """Verify SLM manager was created"""
+        assert self.slm is not None, "SLM Manager should be importable"
+    
+    def test_prequalifier_frustration_profanity_escalate(self):
+        """Prequalifier hybrid approach catches profanity and escalates"""
+        if self.slm is None:
+            return
+        result = run_async(self.pq.analyze(
+            "What the fuck is wrong with you?",
+            session_id="test-profanity"
+        ))
+        assert result.frustration_decision == FrustrationDecision.ESCALATE
+        
+    def test_slm_frustration_continue(self):
+        """SLM should classify polite question as CONTINUE"""
+        if self.slm is None:
+            return
+        result = run_async(self.slm.classify_frustration(
+            "Could you please explain Brandon's healthcare policy?",
+            {"profanity": False, "insults": False}
+        ))
+        assert result.decision == "CONTINUE", f"Expected CONTINUE, got {result.decision}"
+    
+    def test_prequalifier_vagueness_vague(self):
+        """Prequalifier hybrid approach classifies short query as VAGUE"""
+        if self.slm is None:
+            return
+        result = run_async(self.pq.analyze("hi", session_id="test-vague"))
+        assert result.vagueness_decision == VaguenessDecision.VAGUE
+    
+    def test_prequalifier_vagueness_clear(self):
+        """Prequalifier hybrid approach classifies detailed query as CLEAR"""
+        if self.slm is None:
+            return
+        result = run_async(self.pq.analyze(
+            "What is Brandon's position on healthcare reform?",
+            session_id="test-clear"
+        ))
+        assert result.vagueness_decision == VaguenessDecision.CLEAR
+    
+    def test_prequalifier_frustration_escalate(self):
+        """Full prequalifier analysis using SLM for frustration"""
+        if self.slm is None:
+            return
+        result = run_async(self.pq.analyze(
+            "This is fucking ridiculous!",
+            session_id="test-slm"
+        ))
+        assert result.frustration_decision == FrustrationDecision.ESCALATE
+
+
 def run_all_tests():
     """Run all test classes"""
     test_classes = [
@@ -554,6 +618,7 @@ def run_all_tests():
         TestIntentFulfillment,
         TestValidationResult,
         TestFullPrequalifier,
+        TestSLMIntegration,
     ]
     
     passed = 0

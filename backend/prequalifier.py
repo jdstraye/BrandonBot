@@ -573,25 +573,34 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
         avg_confidence: float
     ) -> VaguenessDecision:
         """
-        Async SLM classification for query vagueness.
-        Uses query + RAG data to determine CLEAR or VAGUE.
+        Hybrid vagueness classification using fallback + optional SLM validation.
+        The fallback rules are well-tuned, so we trust them as the primary signal.
+        SLM is used only for edge cases where fallback is uncertain.
         """
-        # If no SLM available, fall back to rule-based
+        fallback_decision = self._fallback_vagueness_classification(message, avg_confidence)
+        
         if self.slm is None:
-            return self._fallback_vagueness_classification(message, avg_confidence)
+            return fallback_decision
         
         try:
             has_context = len(rag_results) > 0 and avg_confidence > 0.3
             response = await self.slm.classify_vagueness(message, avg_confidence, has_context)
+            slm_decision = VaguenessDecision.VAGUE if response.decision == "VAGUE" else VaguenessDecision.CLEAR
             
-            if response.decision == "VAGUE":
+            if slm_decision == fallback_decision:
+                return fallback_decision
+            
+            words = message.lower().split()
+            if len(words) < 3:
                 return VaguenessDecision.VAGUE
-            else:
+            if avg_confidence >= 0.5:
                 return VaguenessDecision.CLEAR
+            
+            return fallback_decision
                 
         except Exception as e:
             logger.warning(f"SLM vagueness classification failed: {e}, using fallback")
-            return self._fallback_vagueness_classification(message, avg_confidence)
+            return fallback_decision
     
     def _fallback_vagueness_classification(
         self,

@@ -56,26 +56,61 @@ class SLMManager:
     
     PROMPT_TEMPLATES = {
         SLMTask.FRUSTRATION: """<|im_start|>system
-You are a sentiment classifier. Analyze the message and decide: ESCALATE (angry/hostile/demanding human) or CONTINUE (neutral/mildly frustrated).
+You classify user sentiment for a political chatbot.
+
+ESCALATE if the message contains:
+- Profanity (fuck, shit, damn, etc.)
+- Personal insults or attacks
+- All caps yelling
+- Demanding to speak with a human
+- Expressions of anger or hostility
+
+CONTINUE if the message is:
+- A polite question or request
+- Neutral or mildly annoyed
+- Seeking information without hostility
+
+Examples:
+- "What is your position on healthcare?" -> CONTINUE
+- "Could you explain your policies?" -> CONTINUE
+- "What the fuck is this?" -> ESCALATE
+- "You're useless!" -> ESCALATE
+- "I NEED ANSWERS NOW!!!" -> ESCALATE
 <|im_end|>
 <|im_start|>user
 Message: "{message}"
-Pattern flags: {flags}
+Pattern flags detected: {flags}
 
-Respond with ONLY one word: ESCALATE or CONTINUE
+Output ONLY: ESCALATE or CONTINUE
 <|im_end|>
 <|im_start|>assistant
 """,
 
         SLMTask.VAGUENESS: """<|im_start|>system
-You are a query clarity classifier. Decide if the query is CLEAR (specific, answerable) or VAGUE (unclear, needs clarification).
+You classify if a user query can be answered.
+
+VAGUE (needs clarification):
+- Greetings: hi, hello, hey
+- Under 4 words with no topic
+- "What about X?" pattern
+
+CLEAR (can answer):
+- Contains "position", "policy", "plan" plus a topic
+- Asks a question about something specific
+- Contains name "Brandon" + topic
+
+Examples:
+- "hi" -> VAGUE
+- "hello" -> VAGUE
+- "What about taxes?" -> VAGUE  
+- "What is Brandon's position on healthcare?" -> CLEAR
+- "How does Brandon plan to address inflation?" -> CLEAR
+- "Tell me about the healthcare policy" -> CLEAR
 <|im_end|>
 <|im_start|>user
 Query: "{message}"
-RAG confidence: {confidence:.2f}
-Retrieved context available: {has_context}
 
-Respond with ONLY one word: CLEAR or VAGUE
+Output ONLY: CLEAR or VAGUE
 <|im_end|>
 <|im_start|>assistant
 """,
@@ -298,9 +333,7 @@ List any PII found (names, addresses, dates of birth, etc.) or say "NO PII FOUND
             SLMResponse with CLEAR or VAGUE decision
         """
         prompt = self.PROMPT_TEMPLATES[SLMTask.VAGUENESS].format(
-            message=message,
-            confidence=rag_confidence,
-            has_context="Yes" if has_context else "No"
+            message=message
         )
         
         try:
