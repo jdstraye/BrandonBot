@@ -524,11 +524,13 @@ class SLMManager:
             'what about that',
             'tell me more',
             'what do you think',
-            'can you explain',
             'i have a question',
+            'i want to know more',
+        ]
+        vague_patterns_end = [
+            'can you explain',
             'what are the policies',
             'what are the plans',
-            'i want to know more',
         ]
         for pattern in vague_patterns_exact:
             if pattern in message_lower:
@@ -536,6 +538,14 @@ class SLMManager:
                     decision="VAGUE",
                     confidence=0.80,
                     explanation=f"Vague pattern detected: '{pattern}'",
+                    raw_output=message
+                )
+        for pattern in vague_patterns_end:
+            if message_lower.strip().rstrip('?').endswith(pattern) or message_lower.strip() == pattern:
+                return SLMResponse(
+                    decision="VAGUE",
+                    confidence=0.80,
+                    explanation=f"Vague pattern (standalone): '{pattern}'",
                     raw_output=message
                 )
         
@@ -555,6 +565,26 @@ class SLMManager:
                 explanation="Short 'what about' question",
                 raw_output=message
             )
+        
+        question_words = {'what', 'how', 'why', 'where', 'when', 'who', 'which', 'does', 'do', 'is', 'are', 'can', 'will', 'would', 'should'}
+        has_question_word = any(message_lower.startswith(qw) for qw in question_words)
+        has_question_mark = '?' in message
+        is_question = has_question_word or has_question_mark
+        
+        if not is_question and word_count <= 8:
+            opinion_statement_patterns = [
+                'is out of control', 'are out of control',
+                'is broken', 'are broken',
+                'is terrible', 'is awful', 'is great',
+                'needs to', 'should be', 'must be',
+            ]
+            if any(p in message_lower for p in opinion_statement_patterns):
+                return SLMResponse(
+                    decision="VAGUE",
+                    confidence=0.75,
+                    explanation="Opinion statement without specific question",
+                    raw_output=message
+                )
         
         if not rag_results:
             return SLMResponse(
