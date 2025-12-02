@@ -901,10 +901,10 @@ class SLMManager:
         Returns:
             SLMResponse with PASS or FAIL decision
         """
-        await self._ensure_sentiment_loaded()
+        await self._ensure_emotion_loaded()
         
         try:
-            result = self._sentiment_classifier(response[:512])
+            result = self._emotion_classifier(response[:512])
             
             if isinstance(result, list) and len(result) > 0:
                 if isinstance(result[0], list):
@@ -914,22 +914,34 @@ class SLMManager:
             else:
                 scores_list = []
             
-            sentiment_scores = {item['label']: item['score'] for item in scores_list}
-            negative_score = sentiment_scores.get('negative', 0.0)
+            emotion_scores = {item['label']: item['score'] for item in scores_list}
+            anger_score = emotion_scores.get('anger', 0.0)
+            disgust_score = emotion_scores.get('disgust', 0.0)
+            fear_score = emotion_scores.get('fear', 0.0)
             
-            if negative_score > 0.9:
+            negative_score = anger_score + disgust_score
+            
+            if anger_score > 0.5 or disgust_score > 0.5:
+                return SLMResponse(
+                    decision="FAIL",
+                    confidence=max(anger_score, disgust_score),
+                    explanation=f"Hostile content: anger={anger_score:.2f}, disgust={disgust_score:.2f}",
+                    raw_output=str(emotion_scores)
+                )
+            
+            if negative_score > 0.7:
                 return SLMResponse(
                     decision="FAIL",
                     confidence=negative_score,
-                    explanation=f"Extremely negative content: {negative_score:.2f}",
-                    raw_output=str(sentiment_scores)
+                    explanation=f"Negative content: anger={anger_score:.2f}, disgust={disgust_score:.2f}",
+                    raw_output=str(emotion_scores)
                 )
             
             return SLMResponse(
                 decision="PASS",
                 confidence=1 - negative_score,
-                explanation=f"Acceptable content: neg={negative_score:.2f}",
-                raw_output=str(sentiment_scores)
+                explanation=f"Acceptable content: anger={anger_score:.2f}, disgust={disgust_score:.2f}",
+                raw_output=str(emotion_scores)
             )
             
         except Exception as e:
