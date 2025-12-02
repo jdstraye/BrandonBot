@@ -56,32 +56,12 @@ class SLMManager:
     
     PROMPT_TEMPLATES = {
         SLMTask.FRUSTRATION: """<|im_start|>system
-You classify user sentiment for a political chatbot.
-
-ESCALATE if the message contains:
-- Profanity (fuck, shit, damn, etc.)
-- Personal insults or attacks
-- All caps yelling
-- Demanding to speak with a human
-- Expressions of anger or hostility
-
-CONTINUE if the message is:
-- A polite question or request
-- Neutral or mildly annoyed
-- Seeking information without hostility
-
-Examples:
-- "What is your position on healthcare?" -> CONTINUE
-- "Could you explain your policies?" -> CONTINUE
-- "What the fuck is this?" -> ESCALATE
-- "You're useless!" -> ESCALATE
-- "I NEED ANSWERS NOW!!!" -> ESCALATE
+You are a content classifier. Detect profanity and hostility.
 <|im_end|>
 <|im_start|>user
-Message: "{message}"
-Pattern flags detected: {flags}
+Does this message contain profanity (fuck, shit, damn, ass) or hostile language? Answer ESCALATE if yes, CONTINUE if no.
 
-Output ONLY: ESCALATE or CONTINUE
+Message: "{message}"
 <|im_end|>
 <|im_start|>assistant
 """,
@@ -285,9 +265,24 @@ List any PII found (names, addresses, dates of birth, etc.) or say "NO PII FOUND
         Returns:
             SLMResponse with ESCALATE or CONTINUE decision
         """
+        PROFANITY_WORDS = {'fuck', 'fucking', 'shit', 'damn', 'ass', 'bitch', 'bastard', 'crap', 'hell'}
+        SEVERE_PROFANITY = {'fuck', 'fucking', 'shit', 'bitch', 'bastard'}
+        message_lower = message.lower()
+        
+        has_severe_profanity = any(word in message_lower for word in SEVERE_PROFANITY)
+        
+        if has_severe_profanity:
+            return SLMResponse(
+                decision="ESCALATE",
+                confidence=0.95,
+                explanation="Severe profanity detected",
+                raw_output="pattern_match"
+            )
+        
+        has_mild_profanity = any(word in message_lower for word in PROFANITY_WORDS - SEVERE_PROFANITY)
+        
         prompt = self.PROMPT_TEMPLATES[SLMTask.FRUSTRATION].format(
-            message=message,
-            flags=flags
+            message=message
         )
         
         try:
@@ -300,14 +295,29 @@ List any PII found (names, addresses, dates of birth, etc.) or say "NO PII FOUND
                     confidence=0.9,
                     raw_output=response
                 )
-            else:
+            
+            if has_mild_profanity:
                 return SLMResponse(
                     decision="CONTINUE",
-                    confidence=0.9,
+                    confidence=0.7,
+                    explanation="Mild profanity, not hostile",
                     raw_output=response
                 )
+            
+            return SLMResponse(
+                decision="CONTINUE",
+                confidence=0.9,
+                raw_output=response
+            )
         except Exception as e:
             logger.warning(f"SLM frustration classification failed: {e}")
+            if has_severe_profanity:
+                return SLMResponse(
+                    decision="ESCALATE",
+                    confidence=0.8,
+                    explanation="Severe profanity (fallback)",
+                    raw_output=""
+                )
             return SLMResponse(
                 decision="CONTINUE",
                 confidence=0.3,

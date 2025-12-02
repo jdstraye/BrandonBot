@@ -556,15 +556,15 @@ class TestSLMIntegration:
         """Verify SLM manager was created"""
         assert self.slm is not None, "SLM Manager should be importable"
     
-    def test_prequalifier_frustration_profanity_escalate(self):
-        """Prequalifier hybrid approach catches profanity and escalates"""
+    def test_slm_frustration_escalate(self):
+        """SLM hybrid approach classifies severe profanity as ESCALATE"""
         if self.slm is None:
             return
-        result = run_async(self.pq.analyze(
+        result = run_async(self.slm.classify_frustration(
             "What the fuck is wrong with you?",
-            session_id="test-profanity"
+            {"profanity": True}
         ))
-        assert result.frustration_decision == FrustrationDecision.ESCALATE
+        assert result.decision == "ESCALATE", f"Expected ESCALATE, got {result.decision}"
         
     def test_slm_frustration_continue(self):
         """SLM should classify polite question as CONTINUE"""
