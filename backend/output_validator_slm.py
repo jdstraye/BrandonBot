@@ -214,58 +214,141 @@ class OutputValidatorSLM:
     
     async def _check_intent(self, query: str, response: str) -> OVResult:
         """
-        Check if response addresses the user's intent using cross-encoder.
+        Check if response addresses the user's intent using cross-encoder + pattern analysis.
         
-        Uses semantic similarity to detect:
-        - Topic mismatch
-        - Inappropriate refusals
-        - Tangential responses
+        Detects:
+        - Topic mismatch (response about different subject)
+        - Inappropriate refusals (refusing answerable questions)
+        - Tangential responses (starts relevant, derails)
+        - Incomplete answers (missing key information)
+        - Meta-commentary (talking about the response itself)
+        - Questioning user motives
         """
         await self._ensure_slm_ready()
         
         score = 0
         confidence = 0.8
         explanation = ""
-        method = "slm"
+        method = "hybrid"
+        
+        has_refusal = any(p.search(response) for p in self.refusal_patterns)
+        
+        derail_patterns = [
+            re.compile(r'\b(?:but first|let\'s discuss|speaking of|by the way)\b', re.I),
+            re.compile(r'\b(?:that reminds me|on another note|however,)\s+(?!this)\b', re.I),
+        ]
+        has_derail = any(p.search(response) for p in derail_patterns)
+        
+        incomplete_patterns = [
+            re.compile(r'\bthat is all\b', re.I),
+            re.compile(r'\b(?:but i|however i)\s+(?:cannot|can\'t|won\'t)\b', re.I),
+        ]
+        has_incomplete = any(p.search(response) for p in incomplete_patterns)
+        
+        false_inability_patterns = [
+            re.compile(r'\bi (?:cannot|can\'t|am unable to)\s+(?:access|provide|give|help)\b', re.I),
+            re.compile(r'\bdo not (?:possess|have)\s+(?:knowledge|access|information)\b', re.I),
+            re.compile(r'\b(?:too complex|beyond my|outside my)\b', re.I),
+            re.compile(r'\bi refuse to\b', re.I),
+        ]
+        has_false_inability = any(p.search(response) for p in false_inability_patterns)
+        
+        meta_commentary_patterns = [
+            re.compile(r'\b(?:the response is|this is a|provides only)\b', re.I),
+            re.compile(r'\b(?:followed by a period|in a single sentence)\b', re.I),
+        ]
+        has_meta = any(p.search(response) for p in meta_commentary_patterns)
+        
+        question_motive_patterns = [
+            re.compile(r'\bwhy (?:do you|would you) need\b', re.I),
+            re.compile(r'\bplease tell me why\b', re.I),
+            re.compile(r'\bwithout clarification\b', re.I),
+            re.compile(r'\byou need to define\b', re.I),
+            re.compile(r'\bi (?:cannot|can\'t) proceed\b', re.I),
+        ]
+        has_question_motive = any(p.search(response) for p in question_motive_patterns)
+        
+        absurd_refusal_patterns = [
+            re.compile(r'\bmisuse of\b.*\b(?:resources|computational)\b', re.I),
+            re.compile(r'\bunhelpful way\b', re.I),
+            re.compile(r'\b(?:are|is) an? (?:misuse|waste|inappropriate)\b', re.I),
+        ]
+        has_absurd_refusal = any(p.search(response) for p in absurd_refusal_patterns)
+        
+        response_lower = response.lower()
+        response_word_count = len(response.split())
+        is_minimal = response_word_count < 15
         
         try:
             if self._slm_manager:
                 slm_result = await self._slm_manager.check_intent_fulfillment(query, response)
-                
                 raw_score = float(slm_result.raw_output) if slm_result.raw_output else 0.5
-                
-                has_refusal = any(p.search(response) for p in self.refusal_patterns)
-                
-                if raw_score < 0.2:
-                    score = 5  # Complete mismatch
-                    explanation = f"Low relevance: {raw_score:.3f}"
-                elif raw_score < 0.3:
-                    score = 4  # Significant mismatch
-                    explanation = f"Poor relevance: {raw_score:.3f}"
-                elif raw_score < 0.4:
-                    score = 3  # Tangential
-                    explanation = f"Tangential response: {raw_score:.3f}"
-                elif raw_score < 0.5:
-                    score = 2  # Partial
-                    explanation = f"Partial match: {raw_score:.3f}"
-                elif raw_score < 0.6:
-                    score = 1  # Minor issue
-                    explanation = f"Minor relevance gap: {raw_score:.3f}"
-                else:
-                    score = 0  # Good
-                    explanation = f"Good relevance: {raw_score:.3f}"
-                
-                if has_refusal and score < 2:
-                    score = max(score, 2)
-                    explanation += " (contains refusal)"
-                
                 confidence = slm_result.confidence
+                
+                if has_absurd_refusal:
+                    score = 4
+                    explanation = f"Absurd refusal (relevance: {raw_score:.3f})"
+                elif has_false_inability:
+                    if 'refuse' in response_lower:
+                        score = 4
+                        explanation = f"Refuses to answer (relevance: {raw_score:.3f})"
+                    elif 'too complex' in response_lower:
+                        score = 3
+                        explanation = f"Claims task too complex (relevance: {raw_score:.3f})"
+                    else:
+                        score = 3 if raw_score > 0.5 else 4
+                        explanation = f"Claims inability to answer (relevance: {raw_score:.3f})"
+                elif has_meta:
+                    score = 2
+                    explanation = f"Contains meta-commentary (relevance: {raw_score:.3f})"
+                elif has_question_motive:
+                    score = 2 if raw_score > 0.6 else 3
+                    explanation = f"Questions user motive (relevance: {raw_score:.3f})"
+                elif has_derail:
+                    score = 3
+                    explanation = f"Response derails to unrelated topic (relevance: {raw_score:.3f})"
+                elif has_incomplete:
+                    score = 2
+                    explanation = f"Incomplete response (relevance: {raw_score:.3f})"
+                elif raw_score < 0.25:
+                    score = 5
+                    explanation = f"Complete topic mismatch: {raw_score:.3f}"
+                elif raw_score < 0.4:
+                    score = 4
+                    explanation = f"Significant mismatch: {raw_score:.3f}"
+                elif raw_score < 0.5:
+                    score = 3
+                    explanation = f"Tangential response: {raw_score:.3f}"
+                elif raw_score < 0.6:
+                    score = 2 if has_refusal else 1
+                    explanation = f"Partial match: {raw_score:.3f}"
+                elif is_minimal and raw_score < 0.8:
+                    score = 1
+                    explanation = f"Minimal response (relevance: {raw_score:.3f})"
+                else:
+                    score = 0
+                    explanation = f"Good relevance: {raw_score:.3f}"
+                    
             else:
                 method = "pattern"
-                has_refusal = any(p.search(response) for p in self.refusal_patterns)
-                if has_refusal:
+                if has_absurd_refusal:
+                    score = 4
+                    explanation = "Absurd refusal"
+                elif has_false_inability:
+                    score = 4 if 'refuse' in response_lower else 3
+                    explanation = "Contains refusal/inability patterns"
+                elif has_meta:
+                    score = 2
+                    explanation = "Contains meta-commentary"
+                elif has_question_motive:
+                    score = 2
+                    explanation = "Questions user motive"
+                elif has_derail:
                     score = 3
-                    explanation = "Contains refusal patterns"
+                    explanation = "Response derails"
+                elif has_incomplete:
+                    score = 2
+                    explanation = "Incomplete response"
                 else:
                     score = 0
                     explanation = "No SLM available, pattern check passed"
@@ -288,7 +371,10 @@ class OutputValidatorSLM:
         """
         Check for harmful/unethical content.
         
-        Uses emotion classifier for sentiment and patterns for specific harms.
+        Uses:
+        - Pattern matching for specific harms (violence, weapons, etc.)
+        - Domain-tuned ethics patterns (moral judgment, coercion, etc.)
+        - Emotion classifier for extreme negative sentiment
         """
         score = 0
         confidence = 0.8
@@ -304,6 +390,33 @@ class OutputValidatorSLM:
                 if pat_score > max_pattern_score:
                     max_pattern_score = pat_score
         
+        ethics_discussion_patterns = [
+            (re.compile(r'\b(?:capital punishment|death penalty)\b', re.I), 'controversial_topic', 2),
+            (re.compile(r'\b(?:break(?:ing)?\s+a?\s*promise)\b', re.I), 'moral_judgment', 2),
+            (re.compile(r'\b(?:quit(?:ting)?\s+(?:my|your)\s+job)\b', re.I), 'life_advice', 3),
+            (re.compile(r'\b(?:faith|doubt|struggle)\b.*\b(?:values?|belief)\b', re.I), 'spiritual', 3),
+            (re.compile(r'\b(?:i\'?m|i am)\s+(?:struggling|doubting)\b', re.I), 'personal_crisis', 3),
+            (re.compile(r'\b(?:morally|ethically)\s+(?:sound|right|wrong)\b', re.I), 'moral_judgment', 2),
+            (re.compile(r'\b(?:should i|is it (?:right|wrong) to)\b', re.I), 'moral_question', 2),
+            (re.compile(r'\b(?:you should|you must)\s+(?:quit|leave|stop)\b', re.I), 'coercive_advice', 4),
+            (re.compile(r'\b(?:give up|don\'t bother|it\'s hopeless)\b', re.I), 'discouraging', 4),
+        ]
+        
+        ethics_issues = []
+        for pattern, category, pat_score in ethics_discussion_patterns:
+            if pattern.search(response):
+                ethics_issues.append(category)
+                if pat_score > max_pattern_score:
+                    max_pattern_score = pat_score
+        
+        absurd_refusal_patterns = [
+            re.compile(r'\bmisuse of\b.*\b(?:resources|computational)\b', re.I),
+            re.compile(r'\bunhelpful way\b', re.I),
+        ]
+        has_absurd_refusal = any(p.search(response) for p in absurd_refusal_patterns)
+        if has_absurd_refusal:
+            pass
+        
         await self._ensure_slm_ready()
         emotion_score = 0
         
@@ -315,13 +428,17 @@ class OutputValidatorSLM:
         except Exception as e:
             logger.warning(f"Ethics SLM check failed: {e}")
         
-        score = max(max_pattern_score, emotion_score)
-        
         if detected_harms:
+            score = max_pattern_score
             explanation = f"Harmful content detected: {', '.join(detected_harms)}"
-        elif score > 0:
+        elif ethics_issues:
+            score = max_pattern_score
+            explanation = f"Ethics concern: {', '.join(ethics_issues)}"
+        elif emotion_score > 0 and not has_absurd_refusal:
+            score = emotion_score
             explanation = "Ethics concern from sentiment analysis"
         else:
+            score = 0
             explanation = "No ethics violations detected"
         
         return OVResult(
@@ -378,40 +495,76 @@ class OutputValidatorSLM:
         """
         Check citation format, presence, and validity.
         
-        For BrandonBot, we focus on whether claims should be cited.
+        For BrandonBot, proper citations should be:
+        - [CITE-BP-xxx] or [CITE-QA-xxx] (standard format)
+        - Not generic like [CITE] or [CITE: xxx] or [CITE-xxx]
+        - WEBCITE is non-standard and should be flagged
         """
         score = 0
         confidence = 0.8
         method = "pattern"
         
-        citation_patterns = [
+        proper_cite_pattern = re.compile(r'\[CITE-(?:BP|QA|WEB|HISTORY)-[A-Z0-9]+\]')
+        
+        all_cite_patterns = [
             re.compile(r'\[CITE[-:][\w-]+\]'),
             re.compile(r'\[WEB[-:][\w-]+\]'),
             re.compile(r'\[WEBCITE:[\w\s]+\]'),
         ]
         
-        has_citations = any(p.search(response) for p in citation_patterns)
+        incomplete_cite = re.compile(r'\[CITE\]')
+        generic_cite = re.compile(r'\[CITE:\s*\w+\]')
+        numeric_cite = re.compile(r'\[CITE-\d+\]')
+        webcite_pattern = re.compile(r'\[WEBCITE:\s*[\w\s]+\]')
+        colon_cite = re.compile(r'\[CITE:\s*[\w-]+\]')
         
-        statistical_claims = re.findall(
-            r'\b(?:approximately|about|around|estimated)?\s*\$?[\d,]+(?:\.\d+)?(?:\s*(?:million|billion|trillion|percent|%))?\b',
-            response,
-            re.I
-        )
+        has_any_citation = any(p.search(response) for p in all_cite_patterns)
+        has_proper_citation = proper_cite_pattern.search(response) is not None
+        has_incomplete = incomplete_cite.search(response) is not None
+        has_generic = generic_cite.search(response) is not None
+        has_numeric = numeric_cite.search(response) is not None
+        has_webcite = webcite_pattern.search(response) is not None
+        has_colon = colon_cite.search(response) is not None
         
-        if statistical_claims and not has_citations:
+        statistical_patterns = [
+            re.compile(r'\b(?:approximately|about|around|estimated)?\s*\$?[\d,]+(?:\.\d+)?(?:\s*(?:million|billion|trillion|percent|%))'),
+            re.compile(r'\bpopulation\b.*\b[\d.,]+\s*(?:billion|million)\b', re.I),
+        ]
+        has_statistics = any(p.search(response) for p in statistical_patterns)
+        
+        needs_citation_patterns = [
+            re.compile(r'\bcite this\b', re.I),
+            re.compile(r'\bprovide.*citation\b', re.I),
+        ]
+        
+        if has_incomplete:
+            score = 2
+            explanation = "Incomplete citation: [CITE] without reference"
+        elif has_numeric:
             score = 5
-            explanation = f"Statistical claims without citations: {len(statistical_claims)} found"
-        elif has_citations:
-            invalid_cites = re.findall(r'\[CITE\]', response)
-            if invalid_cites:
-                score = 2
-                explanation = "Some citations incomplete"
+            explanation = "Invalid citation format: [CITE-nnn] is placeholder"
+        elif has_webcite:
+            score = 3
+            explanation = "Non-standard format: WEBCITE"
+        elif has_colon:
+            score = 3
+            explanation = "Non-standard format: [CITE: xxx]"
+        elif has_statistics and not has_any_citation:
+            score = 5
+            explanation = f"Statistical claim without citation"
+        elif not has_any_citation:
+            if any(p.search(response) for p in needs_citation_patterns):
+                score = 5
+                explanation = "Requested citation not provided"
             else:
                 score = 0
-                explanation = "Citations present and formatted"
-        else:
+                explanation = "No citation-requiring claims detected"
+        elif has_proper_citation:
             score = 0
-            explanation = "No citation-requiring claims detected"
+            explanation = "Valid citation format"
+        else:
+            score = 2
+            explanation = "Citation present but format uncertain"
         
         return OVResult(
             safeguard=OVSafeguard.CITATION_VERIFICATION,
