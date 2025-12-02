@@ -8,13 +8,20 @@ Each safeguard uses a purpose-built model:
 - prajjwal1/bert-tiny: Confidence verification (hedging detection)
 
 All models use double-negative prompting where applicable.
+
+Model Cache Configuration:
+- Set HF_HOME or TRANSFORMERS_CACHE env var to customize cache location
+- Default: ~/.cache/huggingface
+- Use download_models.py to pre-download all models
 """
 
 import logging
 import asyncio
 import re
+import os
 from typing import Tuple, Dict, List, Optional, Any
 from dataclasses import dataclass
+from pathlib import Path
 
 TORCH_AVAILABLE = False
 try:
@@ -40,6 +47,31 @@ ME2_BERT_MODEL = "lorenzozan/ME2-BERT"
 MS_MARCO_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 PII_MODEL = "lakshyakh93/deberta_finetuned_pii"
 BERT_TINY_MODEL = "prajjwal1/bert-tiny"
+
+
+def get_model_cache_dir() -> Optional[str]:
+    """
+    Get the cache directory for HuggingFace models.
+    
+    Priority:
+    1. MODEL_CACHE_DIR env var (project-specific)
+    2. HF_HOME env var (HuggingFace standard)
+    3. TRANSFORMERS_CACHE env var (transformers standard)
+    4. None (use default ~/.cache/huggingface)
+    """
+    cache_dir = os.environ.get("MODEL_CACHE_DIR")
+    if cache_dir:
+        return cache_dir
+    
+    hf_home = os.environ.get("HF_HOME")
+    if hf_home:
+        return str(Path(hf_home) / "hub")
+    
+    transformers_cache = os.environ.get("TRANSFORMERS_CACHE")
+    if transformers_cache:
+        return transformers_cache
+    
+    return None
 
 
 @dataclass
@@ -136,14 +168,17 @@ class ME2BertEthicsChecker:
             try:
                 from transformers import AutoTokenizer, AutoModel
                 
-                logger.info(f"Loading ME2-BERT from {ME2_BERT_MODEL}...")
+                cache_dir = get_model_cache_dir()
+                logger.info(f"Loading ME2-BERT from {ME2_BERT_MODEL} (cache: {cache_dir or 'default'})...")
                 self._tokenizer = AutoTokenizer.from_pretrained(
                     ME2_BERT_MODEL, 
-                    trust_remote_code=True
+                    trust_remote_code=True,
+                    cache_dir=cache_dir
                 )
                 self._model = AutoModel.from_pretrained(
                     ME2_BERT_MODEL,
-                    trust_remote_code=True
+                    trust_remote_code=True,
+                    cache_dir=cache_dir
                 )
                 self._model.eval()
                 
@@ -289,7 +324,8 @@ class MSMarcoIntentChecker:
             try:
                 from sentence_transformers import CrossEncoder
                 
-                logger.info(f"Loading MS-MARCO from {MS_MARCO_MODEL}...")
+                cache_dir = get_model_cache_dir()
+                logger.info(f"Loading MS-MARCO from {MS_MARCO_MODEL} (cache: {cache_dir or 'default'})...")
                 self._model = CrossEncoder(MS_MARCO_MODEL, max_length=512)
                 self._initialized = True
                 logger.info("MS-MARCO intent checker ready")
@@ -423,9 +459,10 @@ class DeBertaPIIChecker:
             try:
                 from transformers import pipeline, AutoTokenizer, AutoModelForTokenClassification
                 
-                logger.info(f"Loading DeBERTa PII from {PII_MODEL}...")
-                self._tokenizer = AutoTokenizer.from_pretrained(PII_MODEL)
-                self._model = AutoModelForTokenClassification.from_pretrained(PII_MODEL)
+                cache_dir = get_model_cache_dir()
+                logger.info(f"Loading DeBERTa PII from {PII_MODEL} (cache: {cache_dir or 'default'})...")
+                self._tokenizer = AutoTokenizer.from_pretrained(PII_MODEL, cache_dir=cache_dir)
+                self._model = AutoModelForTokenClassification.from_pretrained(PII_MODEL, cache_dir=cache_dir)
                 
                 self._pipeline = pipeline(
                     "token-classification",
@@ -568,9 +605,10 @@ class BertTinyConfidenceChecker:
             try:
                 from transformers import AutoTokenizer, AutoModel
                 
-                logger.info(f"Loading BERT-tiny from {BERT_TINY_MODEL}...")
-                self._tokenizer = AutoTokenizer.from_pretrained(BERT_TINY_MODEL)
-                self._model = AutoModel.from_pretrained(BERT_TINY_MODEL)
+                cache_dir = get_model_cache_dir()
+                logger.info(f"Loading BERT-tiny from {BERT_TINY_MODEL} (cache: {cache_dir or 'default'})...")
+                self._tokenizer = AutoTokenizer.from_pretrained(BERT_TINY_MODEL, cache_dir=cache_dir)
+                self._model = AutoModel.from_pretrained(BERT_TINY_MODEL, cache_dir=cache_dir)
                 self._model.eval()
                 self._initialized = True
                 logger.info("BERT-tiny confidence checker ready")

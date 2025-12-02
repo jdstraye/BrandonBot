@@ -100,9 +100,90 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-**Expected installation time**: 5-10 minutes (downloads PyTorch CPU, ONNX Runtime, sentence-transformers, etc.)
+**Expected installation time**: 5-10 minutes (downloads PyTorch CPU, transformers, sentence-transformers, etc.)
 
-### 5. Download Phi-3 Model (if not copied)
+### 5. Download SLM Safeguard Models
+
+BrandonBot uses 4 specialized SLM (Small Language Models) for the 6-safeguard validation pipeline:
+
+| Model | Purpose | Size |
+|-------|---------|------|
+| ME2-BERT | Ethics checking (Moral Foundations) | ~420MB |
+| MS-MARCO Cross-Encoder | Intent/response alignment | ~120MB |
+| DeBERTa-PII | PII detection | ~550MB |
+| BERT-tiny | Confidence verification | ~15MB |
+
+**Total: ~1.1GB disk space**
+
+```bash
+# Download all safeguard models
+python download_models.py
+```
+
+**Expected output**:
+```
+============================================================
+BrandonBot SLM Model Downloader
+============================================================
+
+Checking dependencies...
+  torch: 2.x.x
+  transformers: 4.x.x
+  sentence-transformers: 2.x.x
+  huggingface-hub: installed
+
+Cache directory: /home/user/.cache/huggingface
+
+[ETHICS] ME2-BERT (Ethics)
+  Downloading tokenizer...
+  Downloading model weights...
+  Status: OK
+
+[INTENT] MS-MARCO Cross-Encoder (Intent)
+  Downloading cross-encoder...
+  Status: OK
+
+[PII] DeBERTa-PII (PII Detection)
+  Downloading tokenizer...
+  Downloading model weights...
+  Status: OK
+
+[CONFIDENCE] BERT-tiny (Confidence)
+  Downloading tokenizer...
+  Downloading model weights...
+  Status: OK
+
+============================================================
+Summary
+============================================================
+Models ready: 4/4
+Cache size: 1105.2MB
+
+All models ready!
+```
+
+**Optional: Custom cache directory**
+```bash
+# Use custom cache location
+export HF_HOME=/path/to/cache
+python download_models.py
+
+# Or project-specific cache
+export MODEL_CACHE_DIR=./models
+python download_models.py
+```
+
+### 6. Verify Safeguard Models (Optional)
+
+Run the test suite to confirm all safeguards are working:
+
+```bash
+python -m pytest tests/test_ov_*.py tests/test_pq.py -v
+```
+
+**Expected**: 140+ tests pass (all 6 safeguards operational)
+
+### 7. Download Phi-3 Model (Optional - Legacy)
 
 If you didn't copy the `phi3_model/` directory from Replit:
 
