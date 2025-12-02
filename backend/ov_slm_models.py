@@ -323,10 +323,27 @@ class MSMarcoIntentChecker:
             
             try:
                 from sentence_transformers import CrossEncoder
+                import sentence_transformers
                 
                 cache_dir = get_model_cache_dir()
                 logger.info(f"Loading MS-MARCO from {MS_MARCO_MODEL} (cache: {cache_dir or 'default'})...")
-                self._model = CrossEncoder(MS_MARCO_MODEL, max_length=512)
+                
+                version = tuple(int(x) for x in sentence_transformers.__version__.split('.')[:2])
+                if version >= (2, 7) and cache_dir:
+                    self._model = CrossEncoder(MS_MARCO_MODEL, max_length=512, cache_folder=cache_dir)
+                elif cache_dir:
+                    old_cache = os.environ.get("SENTENCE_TRANSFORMERS_HOME")
+                    os.environ["SENTENCE_TRANSFORMERS_HOME"] = str(cache_dir)
+                    try:
+                        self._model = CrossEncoder(MS_MARCO_MODEL, max_length=512)
+                    finally:
+                        if old_cache:
+                            os.environ["SENTENCE_TRANSFORMERS_HOME"] = old_cache
+                        else:
+                            os.environ.pop("SENTENCE_TRANSFORMERS_HOME", None)
+                else:
+                    self._model = CrossEncoder(MS_MARCO_MODEL, max_length=512)
+                
                 self._initialized = True
                 logger.info("MS-MARCO intent checker ready")
                 return True

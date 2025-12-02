@@ -88,11 +88,22 @@ def check_dependencies():
 
 
 def get_cache_dir(custom_dir=None):
-    """Get the cache directory for models."""
+    """
+    Get the cache directory for models.
+    
+    Priority (matches ov_slm_models.get_model_cache_dir):
+    1. Custom directory (CLI argument)
+    2. MODEL_CACHE_DIR env var (project-specific)
+    3. HF_HOME env var (HuggingFace standard, maps to <hf_home>/hub)
+    4. TRANSFORMERS_CACHE env var (transformers standard)
+    5. Default: ~/.cache/huggingface
+    """
     if custom_dir:
         cache_dir = Path(custom_dir)
+    elif os.environ.get("MODEL_CACHE_DIR"):
+        cache_dir = Path(os.environ["MODEL_CACHE_DIR"])
     elif os.environ.get("HF_HOME"):
-        cache_dir = Path(os.environ["HF_HOME"])
+        cache_dir = Path(os.environ["HF_HOME"]) / "hub"
     elif os.environ.get("TRANSFORMERS_CACHE"):
         cache_dir = Path(os.environ["TRANSFORMERS_CACHE"])
     else:
@@ -121,9 +132,23 @@ def download_transformers_model(model_id, cache_dir):
 def download_sentence_transformer(model_id, cache_dir):
     """Download a sentence-transformers model."""
     from sentence_transformers import CrossEncoder
+    import sentence_transformers
     
     print(f"    Downloading cross-encoder...")
-    CrossEncoder(model_id)
+    
+    version = tuple(int(x) for x in sentence_transformers.__version__.split('.')[:2])
+    if version >= (2, 7):
+        CrossEncoder(model_id, cache_folder=str(cache_dir))
+    else:
+        old_cache = os.environ.get("SENTENCE_TRANSFORMERS_HOME")
+        os.environ["SENTENCE_TRANSFORMERS_HOME"] = str(cache_dir)
+        try:
+            CrossEncoder(model_id)
+        finally:
+            if old_cache:
+                os.environ["SENTENCE_TRANSFORMERS_HOME"] = old_cache
+            else:
+                os.environ.pop("SENTENCE_TRANSFORMERS_HOME", None)
     
     return True
 
@@ -137,7 +162,21 @@ def verify_model(model_key, model_info, cache_dir):
             return True
         elif model_info["type"] == "sentence-transformers":
             from sentence_transformers import CrossEncoder
-            CrossEncoder(model_info["model_id"])
+            import sentence_transformers
+            
+            version = tuple(int(x) for x in sentence_transformers.__version__.split('.')[:2])
+            if version >= (2, 7):
+                CrossEncoder(model_info["model_id"], cache_folder=str(cache_dir), local_files_only=True)
+            else:
+                old_cache = os.environ.get("SENTENCE_TRANSFORMERS_HOME")
+                os.environ["SENTENCE_TRANSFORMERS_HOME"] = str(cache_dir)
+                try:
+                    CrossEncoder(model_info["model_id"])
+                finally:
+                    if old_cache:
+                        os.environ["SENTENCE_TRANSFORMERS_HOME"] = old_cache
+                    else:
+                        os.environ.pop("SENTENCE_TRANSFORMERS_HOME", None)
             return True
     except Exception as e:
         print(f"    Verification failed: {e}")
