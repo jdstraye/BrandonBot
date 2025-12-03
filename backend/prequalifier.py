@@ -227,7 +227,7 @@ class Prequalifier:
         r"(still )?(haven't|hasn't|don't|doesn't) (addressed|answered|helped)",
         r"(waste|wasting) (of |my )?time",
         r"(not|isn't|aren't) (helping|working|useful)",
-        r"(i('m| am)|this is) (confused|frustrated|annoyed|angry|ridiculous)",
+        r"(i('m| am)|this is) (confused|frustrated|annoyed|angry)",
         r"forget it|never ?mind",
         r"(ugh|argh|omg|ffs|wtf)",
         r"this (doesn't|won't|isn't) (work|help)",
@@ -236,8 +236,6 @@ class Prequalifier:
         r"useless|pointless|unhelpful",
         r"fed up|sick of|tired of|had enough",
         r"you (never|won't|can't|don't) (answer|help|listen)",
-        r"ridiculous|absurd|unbelievable",
-        r"(why )?(won't|can't|don't) you (answer|help|listen)",
     ]
     
     # SLM prompts for hybrid detection
@@ -580,7 +578,7 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
         if flags.all_caps:
             score += 1
         if flags.repeated_punct:
-            score += 1
+            score += 2
         
         # Check conversation history for escalation patterns
         if history and len(history) >= 4:

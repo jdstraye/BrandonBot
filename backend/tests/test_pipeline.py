@@ -504,13 +504,13 @@ class TestFullPrequalifier:
         ))
         assert result.frustration_decision in [FrustrationDecision.ANNOYED, FrustrationDecision.FRUSTRATED]
     
-    def test_mild_profanity_with_other_flags_no_escalate(self):
-        """Mild profanity + repeated punctuation should result in CALM"""
+    def test_mild_profanity_with_repeated_punct_is_annoyed(self):
+        """Mild profanity (+1) + repeated punctuation (+2) = 3 = ANNOYED"""
         result = run_async(self.pq.analyze(
             "What the hell is going on???",
             session_id="test"
         ))
-        assert result.frustration_decision == FrustrationDecision.CALM
+        assert result.frustration_decision == FrustrationDecision.ANNOYED
     
     def test_mild_profanity_with_caps_no_escalate(self):
         """Mild profanity + all caps should result in CALM"""
