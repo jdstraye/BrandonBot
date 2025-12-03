@@ -34,7 +34,24 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from prequalifier import Prequalifier, FrustrationDecision, VaguenessDecision, PatternFlags
 from output_validator import OutputValidatorSLM, OVSafeguard, SLMNotAvailableError
 from security import rate_limiter, input_sanitizer
-from ollama_judge import OllamaJudge, JudgeScore, Persona, EngagementStyle
+
+try:
+    from ollama_judge import OllamaJudge, JudgeScore as OllamaJudgeScore, Persona as OllamaPersona, EngagementStyle as OllamaEngagementStyle
+    OLLAMA_JUDGE_AVAILABLE = True
+except ImportError:
+    OLLAMA_JUDGE_AVAILABLE = False
+    OllamaJudge = None
+
+try:
+    from api_judge import APIJudge, JudgeScore, Persona, EngagementStyle
+    API_JUDGE_AVAILABLE = True
+except ImportError:
+    API_JUDGE_AVAILABLE = False
+    APIJudge = None
+    if OLLAMA_JUDGE_AVAILABLE:
+        JudgeScore = OllamaJudgeScore
+        Persona = OllamaPersona
+        EngagementStyle = OllamaEngagementStyle
 
 try:
     from agent_orchestrator import AgentOrchestrator
@@ -136,19 +153,37 @@ class BrandonBotValidator:
     Implements the 5-step adversarial evaluator loop.
     """
     
-    def __init__(self, use_judge: bool = True, use_agent: bool = False, require_slm: bool = False):
+    def __init__(self, use_judge: bool = True, use_agent: bool = False, require_slm: bool = False,
+                 prefer_api_judge: bool = True):
         """
         Initialize the BrandonBot validation engine.
         
         Args:
-            use_judge: Enable Ollama LLM judge for scoring
+            use_judge: Enable LLM judge for scoring
             use_agent: Enable full agent orchestrator for vague loop testing
             require_slm: If True, require SLM models and FEC RAG for validation.
                         If False (default), use pattern fallbacks when SLM/RAG not available.
+            prefer_api_judge: If True (default), prefer API-based judge (Gemini, Mistral, etc.)
+                            over local Ollama. API judge uses existing multi-provider infrastructure
+                            with automatic failover and no local memory requirements.
         """
         self.pq = Prequalifier()
         self.ov = OutputValidatorSLM(require_slm=require_slm)
-        self.judge = OllamaJudge() if use_judge else None
+        
+        self.judge = None
+        self.judge_type = "none"
+        if use_judge:
+            if prefer_api_judge and API_JUDGE_AVAILABLE and APIJudge is not None:
+                self.judge = APIJudge()
+                self.judge_type = "api"
+                logger.info("Using API-based judge (Gemini, Mistral, Cohere, etc.)")
+            elif OLLAMA_JUDGE_AVAILABLE and OllamaJudge is not None:
+                self.judge = OllamaJudge()
+                self.judge_type = "ollama"
+                logger.info("Using Ollama-based judge")
+            else:
+                logger.warning("No judge available (neither API nor Ollama)")
+        
         self.agent = None
         self._agent_initialized = False
         self._use_agent = use_agent and AGENT_AVAILABLE
