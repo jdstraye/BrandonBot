@@ -32,7 +32,7 @@ from enum import Enum
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from prequalifier import Prequalifier, FrustrationDecision, VaguenessDecision, PatternFlags
-from output_validator_slm import OutputValidatorSLM, OVSafeguard
+from output_validator_slm import OutputValidatorSLM, OVSafeguard, SLMNotAvailableError
 from security import rate_limiter, input_sanitizer
 from ollama_judge import OllamaJudge, JudgeScore, Persona, EngagementStyle
 
@@ -136,9 +136,18 @@ class BrandonBotValidator:
     Implements the 5-step adversarial evaluator loop.
     """
     
-    def __init__(self, use_judge: bool = True, use_agent: bool = False):
+    def __init__(self, use_judge: bool = True, use_agent: bool = False, require_slm: bool = False):
+        """
+        Initialize the BrandonBot validation engine.
+        
+        Args:
+            use_judge: Enable Ollama LLM judge for scoring
+            use_agent: Enable full agent orchestrator for vague loop testing
+            require_slm: If True, require SLM models and FEC RAG for validation.
+                        If False (default), use pattern fallbacks when SLM/RAG not available.
+        """
         self.pq = Prequalifier()
-        self.ov = OutputValidatorSLM()
+        self.ov = OutputValidatorSLM(require_slm=require_slm)
         self.judge = OllamaJudge() if use_judge else None
         self.agent = None
         self._agent_initialized = False
@@ -176,6 +185,19 @@ class BrandonBotValidator:
             with open(prompts_path) as f:
                 return json.load(f)
         return {"categories": {}}
+    
+    def set_fec_rag(self, weaviate_manager):
+        """
+        Configure FEC RAG for comprehensive FEC compliance checking.
+        
+        This wires up the WeaviateManager for FEC RAG queries against the
+        FECProhibited collection. Required when require_slm=True.
+        
+        Args:
+            weaviate_manager: WeaviateManager instance with FECProhibited collection
+        """
+        self.ov.set_fec_rag(weaviate_manager)
+        logger.info("FEC RAG configured for validation harness")
     
     async def _ensure_agent_ready(self) -> bool:
         """Initialize the AgentOrchestrator if needed and available."""

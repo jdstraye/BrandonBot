@@ -93,6 +93,11 @@ class OVValidationResult:
         )
 
 
+class SLMNotAvailableError(Exception):
+    """Raised when SLM models are required but not available."""
+    pass
+
+
 class OutputValidatorSLM:
     """
     SLM-based Output Validator using specialized models for each safeguard.
@@ -104,15 +109,27 @@ class OutputValidatorSLM:
     - BERT-tiny: Confidence verification (pattern-based with SLM backup)
     - FEC: RAG lookup + SLM classifier (per specification)
     - Citations: Anchor resolution + metadata lookup (per specification)
+    
+    When require_slm=True (default), the validator will raise SLMNotAvailableError
+    if the required SLM models cannot be loaded. This ensures tests fail when
+    not using the correct SLM-based validation.
     """
     
-    def __init__(self):
+    def __init__(self, require_slm: bool = True):
+        """
+        Initialize the Output Validator.
+        
+        Args:
+            require_slm: If True (default), raise SLMNotAvailableError when SLM models
+                        cannot be loaded. If False, fall back to pattern-based checking.
+        """
         self._me2bert = None
         self._msmarco = None
         self._deberta_pii = None
         self._berttiny = None
         self._citation_store = None
         self._fec_rag = None
+        self._require_slm = require_slm
         
         self._compile_patterns()
     
@@ -343,6 +360,9 @@ class OutputValidatorSLM:
         Check if response addresses the user's intent using MS-MARCO cross-encoder.
         
         MS-MARCO is trained on QA pairs, optimal for detecting query-response alignment.
+        
+        Raises:
+            SLMNotAvailableError: If require_slm=True and MS-MARCO cannot be loaded.
         """
         if await self._ensure_msmarco_ready():
             try:
@@ -355,7 +375,11 @@ class OutputValidatorSLM:
                     method="ms_marco"
                 )
             except Exception as e:
+                if self._require_slm:
+                    raise SLMNotAvailableError(f"MS-MARCO intent check failed: {e}")
                 logger.warning(f"MS-MARCO intent check failed, falling back to patterns: {e}")
+        elif self._require_slm:
+            raise SLMNotAvailableError("MS-MARCO intent model not available. Set require_slm=False to use pattern fallback.")
         
         return await self._check_intent_fallback(query, response)
     
@@ -409,6 +433,9 @@ class OutputValidatorSLM:
         ME2-BERT detects 10 moral dimensions aligned with Judeo-Christian ethics:
         - Harm, Cheating, Betrayal, Subversion, Degradation (violations)
         - Care, Fairness, Loyalty, Authority, Purity (virtues)
+        
+        Raises:
+            SLMNotAvailableError: If require_slm=True and ME2-BERT cannot be loaded.
         """
         if await self._ensure_me2bert_ready():
             try:
@@ -421,7 +448,11 @@ class OutputValidatorSLM:
                     method="me2_bert"
                 )
             except Exception as e:
+                if self._require_slm:
+                    raise SLMNotAvailableError(f"ME2-BERT ethics check failed: {e}")
                 logger.warning(f"ME2-BERT ethics check failed, falling back to patterns: {e}")
+        elif self._require_slm:
+            raise SLMNotAvailableError("ME2-BERT ethics model not available. Set require_slm=False to use pattern fallback.")
         
         return await self._check_ethics_fallback(response)
     
@@ -454,9 +485,23 @@ class OutputValidatorSLM:
         
         Per specification:
         1. Pattern match for obvious violations
-        2. RAG query prohibited statements collection (if available)
+        2. RAG query prohibited statements collection (FECProhibited collection)
         3. Binary violation classification
+        
+        When require_slm=True:
+        - RAG MUST be available for comprehensive FEC checking
+        - Pattern matching alone is not sufficient for FEC compliance
+        - Raises SLMNotAvailableError if FEC RAG not configured
+        
+        Raises:
+            SLMNotAvailableError: If require_slm=True and FEC RAG not configured.
         """
+        if self._require_slm and not self._fec_rag:
+            raise SLMNotAvailableError(
+                "FEC RAG not configured. FEC compliance requires RAG retrieval from FECProhibited collection. "
+                "Call set_fec_rag() with WeaviateManager or set require_slm=False for pattern-only fallback."
+            )
+        
         detected_violations = []
         max_score = 0
         
@@ -472,13 +517,15 @@ class OutputValidatorSLM:
                         detected_violations.append(category)
                     max_score = max(max_score, pat_score)
         
-        if self._fec_rag and max_score < 3:
+        fec_rag_used = False
+        if self._fec_rag:
             try:
                 rag_results = await self._fec_rag.search(
                     collection_name="FECProhibited",
                     query=response[:200],
                     limit=3
                 )
+                fec_rag_used = True
                 
                 for result in rag_results:
                     content = result.get("content", "").lower()
@@ -491,6 +538,8 @@ class OutputValidatorSLM:
                             max_score = max(max_score, 4)
                             
             except Exception as e:
+                if self._require_slm:
+                    raise SLMNotAvailableError(f"FEC RAG lookup failed: {e}")
                 logger.warning(f"FEC RAG lookup failed: {e}")
         
         if detected_violations:
@@ -505,7 +554,7 @@ class OutputValidatorSLM:
             score=max_score,
             confidence=0.9 if detected_violations else 0.85,
             explanation=explanation,
-            method="rag_pattern" if self._fec_rag else "pattern"
+            method="rag_pattern" if fec_rag_used else "pattern"
         )
     
     async def _check_citations(self, response: str) -> OVResult:
@@ -722,4 +771,4 @@ class OutputValidatorSLM:
         )
 
 
-output_validator_slm = OutputValidatorSLM()
+output_validator_slm = OutputValidatorSLM(require_slm=False)

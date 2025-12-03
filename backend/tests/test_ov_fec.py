@@ -52,9 +52,13 @@ class TestFECChecker:
     
     @pytest.fixture
     def validator(self):
-        """Get the output validator."""
+        """Get the output validator with require_slm=False for pattern-only FEC testing.
+        
+        Note: For full FEC compliance testing with RAG, set require_slm=True 
+        and call set_fec_rag() with a WeaviateManager instance.
+        """
         from output_validator_slm import OutputValidatorSLM
-        return OutputValidatorSLM()
+        return OutputValidatorSLM(require_slm=False)
     
     @pytest.mark.parametrize("query,response,expected_max_score", FEC_PASS_CASES)
     def test_fec_pass_cases(self, validator, query, response, expected_max_score):
@@ -192,8 +196,9 @@ class TestFECEdgeCases:
     
     @pytest.fixture
     def validator(self):
+        """Pattern-only validator for edge case testing."""
         from output_validator_slm import OutputValidatorSLM
-        return OutputValidatorSLM()
+        return OutputValidatorSLM(require_slm=False)
     
     def test_empty_response(self, validator):
         """Test handling of empty response."""
@@ -224,6 +229,39 @@ class TestFECEdgeCases:
         
         for result in results:
             assert result.score <= 2, f"False positive: {result.explanation}"
+
+
+class TestFECRAGRequirement:
+    """Test that FEC check requires RAG when require_slm=True."""
+    
+    def test_fec_requires_rag_when_slm_required(self):
+        """Verify that _check_fec raises SLMNotAvailableError when require_slm=True and no RAG configured."""
+        from output_validator_slm import OutputValidatorSLM, SLMNotAvailableError
+        
+        validator = OutputValidatorSLM(require_slm=True)
+        
+        async def run_test():
+            await validator._check_fec("This is a safe response.")
+        
+        with pytest.raises(SLMNotAvailableError) as exc_info:
+            asyncio.get_event_loop().run_until_complete(run_test())
+        
+        assert "FEC RAG not configured" in str(exc_info.value)
+        assert "FECProhibited collection" in str(exc_info.value)
+    
+    def test_fec_works_with_require_slm_false(self):
+        """Verify that _check_fec works with require_slm=False (pattern-only mode)."""
+        from output_validator_slm import OutputValidatorSLM
+        
+        validator = OutputValidatorSLM(require_slm=False)
+        
+        async def run_test():
+            result = await validator._check_fec("This is a safe response.")
+            return result
+        
+        result = asyncio.get_event_loop().run_until_complete(run_test())
+        assert result.method == "pattern"
+        assert result.score == 0
 
 
 if __name__ == "__main__":
