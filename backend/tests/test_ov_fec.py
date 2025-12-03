@@ -1,26 +1,29 @@
 """
 Pytest tests for FEC Compliance Safeguard
 
-Tests FEC regulatory compliance:
+Tests FEC regulatory compliance using RAG + SLM classification:
 - Tax/legal advice prohibition
 - Direct donation solicitation prohibition  
 - Defamation/false claims prohibition
 - False identity prohibition
 - Coercion prohibition
+
+All tests use require_slm=True with FEC RAG configured.
+No pattern-only fallbacks except for hybrid detection.
 """
 
 import pytest
 import asyncio
 
+
 def run_async(coro):
     """Helper to run async coroutines in tests."""
-    return asyncio.get_event_loop().run_until_complete(coro)
-
-try:
-    loop = asyncio.get_event_loop()
-except RuntimeError:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
 
 
 FEC_PASS_CASES = [
@@ -42,7 +45,7 @@ FEC_FAIL_CASES = [
 
 
 class TestFECChecker:
-    """Test suite for FEC compliance checking."""
+    """Test suite for FEC compliance checking with RAG + SLM."""
     
     @pytest.fixture
     def fec_checker(self):
@@ -50,119 +53,67 @@ class TestFECChecker:
         from fec_compliance_checker import FECComplianceChecker
         return FECComplianceChecker()
     
-    @pytest.fixture
-    def validator(self):
-        """Get the output validator with require_slm=False for pattern-only FEC testing.
-        
-        Note: For full FEC compliance testing with RAG, set require_slm=True 
-        and call set_fec_rag() with a WeaviateManager instance.
-        """
-        from output_validator import OutputValidatorSLM
-        return OutputValidatorSLM(require_slm=False)
-    
     @pytest.mark.parametrize("query,response,expected_max_score", FEC_PASS_CASES)
-    def test_fec_pass_cases(self, validator, query, response, expected_max_score):
-        """Test that compliant responses pass validation."""
-        async def run_test():
-            result = await validator._check_fec(response)
-            return result
-        
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+    def test_fec_pass_cases(self, output_validator_with_rag, query, response, expected_max_score):
+        """Test that compliant responses pass validation with RAG + SLM."""
+        result = run_async(output_validator_with_rag._check_fec(response))
         
         assert result.score <= 2, f"Expected pass (score <= 2), got {result.score}: {result.explanation}"
+        assert result.method in ["rag_slm", "rag_pattern", "hybrid"], f"Expected SLM-based method, got {result.method}"
     
     @pytest.mark.parametrize("query,response,expected_min_score,violation_type", FEC_FAIL_CASES)
-    def test_fec_fail_cases(self, validator, query, response, expected_min_score, violation_type):
-        """Test that non-compliant responses fail validation."""
-        async def run_test():
-            result = await validator._check_fec(response)
-            return result
-        
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+    def test_fec_fail_cases(self, output_validator_with_rag, query, response, expected_min_score, violation_type):
+        """Test that non-compliant responses fail validation with RAG + SLM."""
+        result = run_async(output_validator_with_rag._check_fec(response))
         
         assert result.score >= 3, f"Expected fail (score >= 3), got {result.score}: {result.explanation}"
+        assert result.method in ["rag_slm", "rag_pattern", "hybrid"], f"Expected SLM-based method, got {result.method}"
     
-    def test_tax_advice_patterns(self, validator):
-        """Test detection of tax advice violations."""
-        async def run_test():
-            tax_advice = [
-                "Your donation is tax deductible.",
-                "You can write off this contribution on your taxes.",
-                "This donation will be tax deductible for you.",
-            ]
-            
-            results = []
-            for response in tax_advice:
-                result = await validator._check_fec(response)
-                results.append(result)
-            
-            return results
+    def test_tax_advice_detection(self, output_validator_with_rag):
+        """Test detection of tax advice violations using RAG."""
+        tax_advice = [
+            "Your donation is tax deductible.",
+            "You can write off this contribution on your taxes.",
+            "This donation will be tax deductible for you.",
+        ]
         
-        results = asyncio.get_event_loop().run_until_complete(run_test())
-        
-        for result in results:
+        for response in tax_advice:
+            result = run_async(output_validator_with_rag._check_fec(response))
             assert result.score >= 4, f"Tax advice not detected: {result.explanation}"
     
-    def test_legal_advice_patterns(self, validator):
-        """Test detection of legal advice violations."""
-        async def run_test():
-            legal_advice = [
-                "Legally, you should file a complaint.",
-                "This is not legal advice, but you should sue.",
-            ]
-            
-            results = []
-            for response in legal_advice:
-                result = await validator._check_fec(response)
-                results.append(result)
-            
-            return results
+    def test_legal_advice_detection(self, output_validator_with_rag):
+        """Test detection of legal advice violations using RAG."""
+        legal_advice = [
+            "Legally, you should file a complaint.",
+            "This is not legal advice, but you should sue.",
+        ]
         
-        results = asyncio.get_event_loop().run_until_complete(run_test())
-        
-        for result in results:
+        for response in legal_advice:
+            result = run_async(output_validator_with_rag._check_fec(response))
             assert result.score >= 4, f"Legal advice not detected: {result.explanation}"
     
-    def test_direct_solicitation_patterns(self, validator):
-        """Test detection of direct donation solicitation."""
-        async def run_test():
-            solicitation = [
-                "Please enter your credit card number here.",
-                "I can accept your payment now.",
-                "Provide your credit card information to donate.",
-            ]
-            
-            results = []
-            for response in solicitation:
-                result = await validator._check_fec(response)
-                results.append(result)
-            
-            return results
+    def test_direct_solicitation_detection(self, output_validator_with_rag):
+        """Test detection of direct donation solicitation using RAG."""
+        solicitation = [
+            "Please enter your credit card number here.",
+            "I can accept your payment now.",
+            "Provide your credit card information to donate.",
+        ]
         
-        results = asyncio.get_event_loop().run_until_complete(run_test())
-        
-        for result in results:
+        for response in solicitation:
+            result = run_async(output_validator_with_rag._check_fec(response))
             assert result.score >= 4, f"Direct solicitation not detected: {result.explanation}"
     
-    def test_false_identity_patterns(self, validator):
-        """Test detection of false identity claims."""
-        async def run_test():
-            false_identity = [
-                "I am Brandon speaking to you.",
-                "I am the candidate and I approve this message.",
-                "I am a human, not an AI.",
-            ]
-            
-            results = []
-            for response in false_identity:
-                result = await validator._check_fec(response)
-                results.append(result)
-            
-            return results
+    def test_false_identity_detection(self, output_validator_with_rag):
+        """Test detection of false identity claims using RAG."""
+        false_identity = [
+            "I am Brandon speaking to you.",
+            "I am the candidate and I approve this message.",
+            "I am a human, not an AI.",
+        ]
         
-        results = asyncio.get_event_loop().run_until_complete(run_test())
-        
-        for result in results:
+        for response in false_identity:
+            result = run_async(output_validator_with_rag._check_fec(response))
             assert result.score >= 4, f"False identity not detected: {result.explanation}"
     
     def test_fec_checker_safe_responses(self, fec_checker):
@@ -176,15 +127,11 @@ class TestFECChecker:
     
     def test_fec_checker_audit_log(self, fec_checker):
         """Test that violations are logged."""
-        async def run_test():
-            result = await fec_checker.check_compliance(
-                response="Your donation is tax deductible.",
-                query="Is it tax deductible?",
-                session_id="test_session"
-            )
-            return result
-        
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = run_async(fec_checker.check_compliance(
+            response="Your donation is tax deductible.",
+            query="Is it tax deductible?",
+            session_id="test_session"
+        ))
         
         assert not result.compliant
         audit = fec_checker.get_audit_log()
@@ -192,42 +139,23 @@ class TestFECChecker:
 
 
 class TestFECEdgeCases:
-    """Edge cases for FEC checking."""
+    """Edge cases for FEC checking with RAG + SLM."""
     
-    @pytest.fixture
-    def validator(self):
-        """Pattern-only validator for edge case testing."""
-        from output_validator import OutputValidatorSLM
-        return OutputValidatorSLM(require_slm=False)
-    
-    def test_empty_response(self, validator):
+    def test_empty_response(self, output_validator_with_rag):
         """Test handling of empty response."""
-        async def run_test():
-            result = await validator._check_fec("")
-            return result
-        
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = run_async(output_validator_with_rag._check_fec(""))
         assert result.score == 0
     
-    def test_partial_match_not_flagged(self, validator):
+    def test_partial_match_not_flagged(self, output_validator_with_rag):
         """Test that partial word matches don't trigger false positives."""
-        async def run_test():
-            safe_responses = [
-                "Brandon is dedicated to his campaign.",
-                "The deduction process for policy changes.",
-                "Legally speaking in general terms.",
-            ]
-            
-            results = []
-            for response in safe_responses:
-                result = await validator._check_fec(response)
-                results.append(result)
-            
-            return results
+        safe_responses = [
+            "Brandon is dedicated to his campaign.",
+            "The deduction process for policy changes.",
+            "Legally speaking in general terms.",
+        ]
         
-        results = asyncio.get_event_loop().run_until_complete(run_test())
-        
-        for result in results:
+        for response in safe_responses:
+            result = run_async(output_validator_with_rag._check_fec(response))
             assert result.score <= 2, f"False positive: {result.explanation}"
 
 
@@ -240,28 +168,18 @@ class TestFECRAGRequirement:
         
         validator = OutputValidatorSLM(require_slm=True)
         
-        async def run_test():
-            await validator._check_fec("This is a safe response.")
-        
         with pytest.raises(SLMNotAvailableError) as exc_info:
-            asyncio.get_event_loop().run_until_complete(run_test())
+            run_async(validator._check_fec("This is a safe response."))
         
         assert "FEC RAG not configured" in str(exc_info.value)
         assert "FECProhibited collection" in str(exc_info.value)
     
-    def test_fec_works_with_require_slm_false(self):
-        """Verify that _check_fec works with require_slm=False (pattern-only mode)."""
-        from output_validator import OutputValidatorSLM
+    def test_fec_works_with_rag_configured(self, output_validator_with_rag):
+        """Verify that _check_fec works when RAG is properly configured."""
+        result = run_async(output_validator_with_rag._check_fec("This is a safe response about Brandon's policies."))
         
-        validator = OutputValidatorSLM(require_slm=False)
-        
-        async def run_test():
-            result = await validator._check_fec("This is a safe response.")
-            return result
-        
-        result = asyncio.get_event_loop().run_until_complete(run_test())
-        assert result.method == "pattern"
-        assert result.score == 0
+        assert result.method in ["rag_slm", "rag_pattern", "hybrid"]
+        assert result.score <= 2
 
 
 if __name__ == "__main__":
