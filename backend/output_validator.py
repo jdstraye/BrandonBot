@@ -246,6 +246,7 @@ Format: PII: <description of PII> or NO PII FOUND"""
     ]
 
     # FEC prohibited content patterns
+    # 52 U.S.C. § 30121 - Prohibits foreign nationals from contributing
     FEC_PROHIBITED_PATTERNS = [
         (r'\b(i guarantee|guaranteed|promise you will)\b', 'Unauthorized guarantee'),
         (r'\b(definitely will|100% certain|absolutely will)\b', 'Absolute promise'),
@@ -254,6 +255,10 @@ Format: PII: <description of PII> or NO PII FOUND"""
         (r'\b(send money|wire transfer|credit card number|pay directly)\b', 'Direct payment solicitation'),
         (r'(opponent|they|he|she) (is |are )?(a )?(corrupt|criminal|fraud|liar)', 'Defamatory statement'),
         (r'\b(you should sue|legally you must)\b', 'Legal advice'),
+        # Foreign national contribution prohibition (52 U.S.C. § 30121)
+        (r'\b(foreign|overseas|international)\s+(donation|contribution|donor|money|funds|account|bank)\b', 'Foreign national contribution'),
+        (r'\b(donate|contribution|give)\s+(from|via|through)\s+(abroad|overseas|another country|foreign)\b', 'Foreign source contribution'),
+        (r'\b(non-?us|non-?citizen|foreign national)\s+(can|may|should)\s+(donate|contribute|give)\b', 'Foreign national solicitation'),
     ]
 
     # Dismissive phrases that inflame frustrated users
