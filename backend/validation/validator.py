@@ -429,9 +429,24 @@ class BrandonBotValidator:
         return results
     
     async def run_vague_loop_test(self) -> List[TestResult]:
-        """Run the vague loop multi-turn test."""
+        """
+        Run the vague loop multi-turn test.
+        
+        Tests the clarification loop where:
+        1. User sends vague initial message
+        2. Bot asks clarifying questions  
+        3. User (LLM agent) provides progressively specific responses
+        4. Bot eventually provides substantive answer
+        
+        Requires Ollama with Llama 3.1 8B for LLM user agent.
+        Falls back to canned responses if Ollama unavailable.
+        """
         results = []
         vague_prompts = ["Hi Brandon", "Hi Brandon, I'm Jayson.", "Hi Brandon, How are you today?"]
+        
+        judge_available = self.judge and await self.judge.check_availability()
+        if not judge_available:
+            logger.warning("Ollama judge not available - using canned user responses for vague loop")
         
         for i, initial_prompt in enumerate(vague_prompts):
             test_id = f"VAGUE-{i:03d}"
@@ -468,7 +483,7 @@ class BrandonBotValidator:
                     if turns >= 3 and pq_result.vagueness_decision == VaguenessDecision.CLEAR:
                         break
                     
-                    if self.judge and await self.judge.check_availability():
+                    if judge_available:
                         user_response = await self.judge.generate_user_response(
                             bot_response=mock_bot_response,
                             conversation_history=conversation,
@@ -478,6 +493,7 @@ class BrandonBotValidator:
                         )
                         current_input = user_response.message
                         user_clarifications.append(current_input)
+                        logger.debug(f"LLM user agent response: {current_input[:100]}")
                     else:
                         clarifications = [
                             "I'm interested in water rights.",
@@ -493,8 +509,9 @@ class BrandonBotValidator:
                 passed = clarifying_questions >= 2 and turns >= 3
                 
                 result.pass_fail = "PASS" if passed else "FAIL"
-                result.reasoning = f"Turns: {turns}, Clarifying questions: {clarifying_questions}"
+                result.reasoning = f"Turns: {turns}, Clarifying: {clarifying_questions}, LLM agent: {judge_available}"
                 result.bot_response = " | ".join(bot_responses)
+                result.genai = "llama3.1:8b" if judge_available else "canned"
                 
             except Exception as e:
                 result.pass_fail = "ERROR"
