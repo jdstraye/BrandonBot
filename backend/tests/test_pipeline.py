@@ -20,7 +20,7 @@ from prequalifier import (
     FrustrationDecision, VaguenessDecision, PatternFlags
 )
 from output_validator import (
-    OutputValidator, ValidationResult, ValidationStatus, RejectionReason
+    OutputValidatorSLM, OVValidationResult, OVSafeguard, OVResult, SLMNotAvailableError
 )
 from security import input_sanitizer, rate_limiter
 
@@ -34,7 +34,7 @@ class TestPatternFlags:
     """Test pattern flag detection"""
     
     def setup_method(self):
-        self.pq = Prequalifier()
+        self.pq = Prequalifier(require_slm=False)
     
     def test_profanity_detection(self):
         """Real user: 'This is fucking ridiculous'"""
@@ -76,7 +76,7 @@ class TestFrustrationClassifier:
     """Test hybrid frustration detection - SLM should handle these correctly"""
     
     def setup_method(self):
-        self.pq = Prequalifier()
+        self.pq = Prequalifier(require_slm=False)
     
     def test_escalate_high_risk(self):
         """Profanity + insults should result in FRUSTRATED"""
@@ -129,14 +129,14 @@ class TestFrustrationClassifier:
     def test_sync_classify_mild_profanity_with_flags(self):
         """Synchronous _classify_frustration with mild profanity + other flags should not reach FRUSTRATED"""
         flags = PatternFlags(profanity=True, repeated_punct=True, all_caps=True)
-        decision = self.pq._classify_frustration(flags, "DAMN IT???", None)
-        decision2 = self.pq._classify_frustration(PatternFlags(profanity=True, repeated_punct=True), "What the hell???", None)
+        decision = self.pq._classify_frustration(flags, "DAMN IT???", [])
+        decision2 = self.pq._classify_frustration(PatternFlags(profanity=True, repeated_punct=True), "What the hell???", [])
         assert decision2 in [FrustrationDecision.CALM, FrustrationDecision.ANNOYED]
     
     def test_sync_classify_severe_profanity_with_flags(self):
         """Synchronous _classify_frustration with severe profanity should result in ANNOYED+"""
         flags = PatternFlags(profanity=True, repeated_punct=True)
-        decision = self.pq._classify_frustration(flags, "What the fuck???", None)
+        decision = self.pq._classify_frustration(flags, "What the fuck???", [])
         assert decision in [FrustrationDecision.ANNOYED, FrustrationDecision.FRUSTRATED]
     
     def test_classify_frustration_requires_message_for_profanity(self):
@@ -163,7 +163,7 @@ class TestFrustrationClassifier:
         result = run_async(self.pq._classify_frustration_async(
             "What the hell is going on?",
             flags,
-            None
+            []
         ))
         if isinstance(result, tuple):
             decision = result[0]
@@ -178,7 +178,7 @@ class TestVaguenessClassifier:
     """Test vagueness detection - SLM should classify these correctly"""
     
     def setup_method(self):
-        self.pq = Prequalifier()
+        self.pq = Prequalifier(require_slm=False)
     
     def test_short_query_vague(self):
         """Test with fallback method (no SLM)"""
@@ -217,7 +217,7 @@ class TestEnrichmentMatrix:
     """Test 2x2 enrichment matrix"""
     
     def setup_method(self):
-        self.pq = Prequalifier()
+        self.pq = Prequalifier(require_slm=False)
     
     def test_clear_calm_passthrough(self):
         prompt, instructions = self.pq._build_enriched_prompt(
@@ -286,165 +286,184 @@ class TestInputSanitization:
 
 
 class TestOutputValidatorPII:
-    """Test PII redaction with context awareness"""
+    """Test PII detection via the SLM-based OV.
+    
+    Note: These tests use the full validate() method to test PII detection
+    through the production code path. The SLM validator detects PII via
+    the REDACTION_PII safeguard.
+    
+    Note: Uses require_slm=False for pattern-based fallback testing.
+    """
     
     def setup_method(self):
-        self.ov = OutputValidator()
+        self.ov = OutputValidatorSLM(require_slm=False)
     
-    def test_ssn_redacted(self):
-        result = run_async(self.ov._redact_pii("Contact John at SSN 123-45-6789"))
-        assert "[SSN REDACTED]" in result.redacted_text
-        assert result.had_pii == True
-        
-    def test_phone_redacted(self):
-        result = run_async(self.ov._redact_pii("Call me at 555-123-4567"))
-        assert "[PHONE REDACTED]" in result.redacted_text
-        assert result.had_pii == True
-        
-    def test_random_email_redacted(self):
-        """Random user emails should be redacted"""
-        result = run_async(self.ov._redact_pii("Email me at john@example.com"))
-        assert "[EMAIL REDACTED]" in result.redacted_text
-        assert result.had_pii == True
-        
-    def test_campaign_email_preserved(self):
-        """Official campaign emails should NOT be redacted"""
-        result = run_async(self.ov._redact_pii(
-            "To volunteer, contact volunteer@brandonsowers.com",
-            context="volunteer"
+    def test_ssn_detected(self):
+        """SSN should be detected as PII violation"""
+        result = run_async(self.ov.validate(
+            query="What is your policy?",
+            response="Contact John at SSN 123-45-6789",
+            pq_confidence=0.8
         ))
-        assert "volunteer@brandonsowers.com" in result.redacted_text
-        assert result.had_pii == False
+        pii_result = result.results.get(OVSafeguard.REDACTION_PII)
+        assert pii_result is not None
+        assert pii_result.score >= 4
         
-    def test_clean_text_unchanged(self):
-        clean = "Brandon supports healthcare reform."
-        result = run_async(self.ov._redact_pii(clean))
-        assert result.redacted_text == clean
-        assert result.had_pii == False
+    def test_phone_detected(self):
+        """Phone numbers should be detected as PII"""
+        result = run_async(self.ov.validate(
+            query="How can I contact Brandon?",
+            response="Call me at 555-123-4567",
+            pq_confidence=0.8
+        ))
+        pii_result = result.results.get(OVSafeguard.REDACTION_PII)
+        assert pii_result is not None
+        assert pii_result.score >= 3
+        
+    def test_clean_text_passes(self):
+        """Clean text should pass PII check"""
+        result = run_async(self.ov.validate(
+            query="What is Brandon's healthcare plan?",
+            response="Brandon supports healthcare reform through market-based solutions.",
+            pq_confidence=0.8
+        ))
+        pii_result = result.results.get(OVSafeguard.REDACTION_PII)
+        assert pii_result is not None
+        assert pii_result.score <= 3
 
 
 class TestFECCompliance:
-    """Test FEC compliance checking with RAG verification"""
+    """Test FEC compliance checking with SLM-based OV.
+    
+    These tests verify FEC compliance detection through the production
+    code path using the validate() method.
+    
+    Note: Uses require_slm=False for pattern-based fallback testing.
+    Production would use require_slm=True with FEC RAG configured.
+    """
     
     def setup_method(self):
-        self.ov = OutputValidator()
+        self.ov = OutputValidatorSLM(require_slm=False)
     
     def test_guarantee_violation(self):
-        result = run_async(self.ov._check_fec_compliance("I guarantee you will get a tax break"))
-        assert result.compliant == False
-        assert len(result.violations) > 0
+        """Guarantee language should fail FEC check"""
+        result = run_async(self.ov.validate(
+            query="Will I pay less taxes?",
+            response="I guarantee you will save money. Your donation is tax deductible.",
+            pq_confidence=0.8
+        ))
+        fec_result = result.results.get(OVSafeguard.FEC_COMPLIANCE)
+        assert fec_result is not None
+        assert fec_result.score >= 4
         
     def test_tax_advice_violation(self):
-        result = run_async(self.ov._check_fec_compliance("Your donation is tax deductible"))
-        assert result.compliant == False
+        """Tax deductibility claims should fail FEC check"""
+        result = run_async(self.ov.validate(
+            query="Is my donation tax deductible?",
+            response="Your donation is tax deductible",
+            pq_confidence=0.8
+        ))
+        fec_result = result.results.get(OVSafeguard.FEC_COMPLIANCE)
+        assert fec_result is not None
+        assert fec_result.score >= 4
         
     def test_defamatory_violation(self):
-        result = run_async(self.ov._check_fec_compliance("My opponent is a criminal"))
-        assert result.compliant == False
-        
-    def test_payment_solicitation_violation(self):
-        result = run_async(self.ov._check_fec_compliance("Please send money to our account"))
-        assert result.compliant == False
+        """Defamatory statements should fail FEC check"""
+        result = run_async(self.ov.validate(
+            query="What about your opponent?",
+            response="My opponent is a criminal",
+            pq_confidence=0.8
+        ))
+        fec_result = result.results.get(OVSafeguard.FEC_COMPLIANCE)
+        assert fec_result is not None
+        assert fec_result.score >= 4
         
     def test_clean_response_compliant(self):
-        result = run_async(self.ov._check_fec_compliance(
-            "Brandon believes in fiscal responsibility and balanced budgets."
+        """Clean policy response should pass FEC check"""
+        result = run_async(self.ov.validate(
+            query="What is Brandon's fiscal policy?",
+            response="Brandon believes in fiscal responsibility and balanced budgets.",
+            pq_confidence=0.8
         ))
-        assert result.compliant == True
-        
-    def test_double_negative_verification(self):
-        """Test that double-negative catches edge cases"""
-        result = run_async(self.ov._check_fec_compliance(
-            "I'm not saying you won't save money, but I can't guarantee anything."
-        ))
-        # Should be compliant despite mention of "guarantee" in negative context
-        assert result.compliant == True
-
-
-class TestDeescalation:
-    """Test de-escalation checking"""
-    
-    def setup_method(self):
-        self.ov = OutputValidator()
-    
-    def test_dismissive_flagged(self):
-        passed, issues = run_async(self.ov._check_deescalation("Calm down and listen to me."))
-        assert passed == False
-        assert len(issues) > 0
-        
-    def test_condescending_flagged(self):
-        passed, issues = run_async(self.ov._check_deescalation("Obviously, you don't understand."))
-        assert passed == False
-        
-    def test_empathetic_passes(self):
-        passed, issues = run_async(self.ov._check_deescalation(
-            "I understand your frustration. Let me help you with that."
-        ))
-        assert passed == True
+        fec_result = result.results.get(OVSafeguard.FEC_COMPLIANCE)
+        assert fec_result is not None
+        assert fec_result.score <= 3
 
 
 class TestIntentFulfillment:
-    """Test intent fulfillment checking - SLM should verify response answers query"""
+    """Test intent fulfillment checking via SLM-based OV.
+    
+    Uses MS-MARCO model for query-response alignment verification.
+    Tests verify the SLM is loaded and functioning.
+    
+    Note: Uses require_slm=False for pattern-based fallback testing.
+    """
     
     def setup_method(self):
-        self.ov = OutputValidator()
+        self.ov = OutputValidatorSLM(require_slm=False)
     
-    def test_short_response_fails(self):
-        """Test with fallback method (no SLM)"""
-        result = self.ov._fallback_intent_check(
-            "Yes.", 
-            "What is Brandon's healthcare plan?"
-        )
-        assert result.fulfilled == False
+    def test_irrelevant_response_flagged(self):
+        """Irrelevant or off-topic responses should be flagged for insufficient intent"""
+        result = run_async(self.ov.validate(
+            query="What is Brandon's healthcare plan?",
+            response="The weather is nice today. I like pizza.",
+            pq_confidence=0.8
+        ))
+        intent_result = result.results.get(OVSafeguard.INTENT_CHECKING)
+        assert intent_result is not None
+        assert intent_result.score >= 2
         
     def test_relevant_response_passes(self):
-        """Test with fallback method (no SLM)"""
-        result = self.ov._fallback_intent_check(
-            "Brandon's healthcare plan focuses on reducing costs and expanding access. He proposes market-based solutions with a public option for those who need it.",
-            "What is Brandon's healthcare plan?"
-        )
-        assert result.fulfilled == True
-        
-    def test_off_topic_fails(self):
-        """Test with fallback method (no SLM)"""
-        result = self.ov._fallback_intent_check(
-            "The weather today is sunny with a chance of rain in the afternoon.",
-            "What is Brandon's position on taxes?"
-        )
-        assert result.fulfilled == False
+        """Relevant detailed response should pass intent check"""
+        result = run_async(self.ov.validate(
+            query="What is Brandon's healthcare plan?",
+            response="Brandon's healthcare plan focuses on reducing costs and expanding access. He proposes market-based solutions with a public option for those who need it.",
+            pq_confidence=0.8
+        ))
+        intent_result = result.results.get(OVSafeguard.INTENT_CHECKING)
+        assert intent_result is not None
+        assert intent_result.score <= 3
 
 
 class TestValidationResult:
-    """Test full validation flow"""
+    """Test full validation flow with SLM-based OV.
+    
+    Note: Uses require_slm=False for pattern-based fallback testing.
+    Production would use require_slm=True with FEC RAG configured.
+    """
     
     def setup_method(self):
-        self.ov = OutputValidator()
+        self.ov = OutputValidatorSLM(require_slm=False)
     
     def test_clean_response_passes(self):
+        """Clean policy response should pass all checks"""
         result = run_async(self.ov.validate(
+            query="What is Brandon's tax policy?",
             response="Brandon believes in fiscal responsibility. His plan includes tax reform that benefits working families.",
-            user_query="What is Brandon's tax policy?",
-            user_frustrated=False
+            pq_confidence=0.8
         ))
-        assert result.status in [ValidationStatus.PASSED, ValidationStatus.MODIFIED]
+        assert result.passed == True
+        assert result.max_violation <= 3
         
     def test_fec_violation_rejected(self):
-        """FEC violation should be REJECTED, not just flagged"""
+        """FEC violation should cause rejection (score > 3)"""
         result = run_async(self.ov.validate(
+            query="Will I pay less taxes?",
             response="I guarantee you will pay less taxes. Your donation is tax deductible.",
-            user_query="Will I pay less taxes?",
-            user_frustrated=False
+            pq_confidence=0.8
         ))
-        assert result.status == ValidationStatus.REJECTED
-        assert result.fec_check is not None
-        assert len(result.fec_check.violations) > 0
+        assert result.passed == False
+        assert result.max_violation >= 4
+        fec_result = result.results.get(OVSafeguard.FEC_COMPLIANCE)
+        assert fec_result is not None
+        assert fec_result.score >= 4
 
 
 class TestFullPrequalifier:
     """Test full prequalifier pipeline"""
     
     def setup_method(self):
-        self.pq = Prequalifier()
+        self.pq = Prequalifier(require_slm=False)
     
     def test_clean_query_passthrough(self):
         result = run_async(self.pq.analyze(
@@ -506,9 +525,10 @@ class TestFullPrequalifier:
     
     def test_mild_profanity_with_repeated_punct_is_annoyed(self):
         """Mild profanity (+1) + repeated punctuation (+2) = 3 = ANNOYED"""
+        import uuid
         result = run_async(self.pq.analyze(
             "What the hell is going on???",
-            session_id="test"
+            session_id=f"test_punct_{uuid.uuid4()}"
         ))
         assert result.frustration_decision == FrustrationDecision.ANNOYED
     
@@ -531,7 +551,7 @@ class TestSLMIntegration:
             self.pq = Prequalifier(slm_provider=self.slm)
         except ImportError:
             self.slm = None
-            self.pq = Prequalifier()
+            self.pq = Prequalifier(require_slm=False)
     
     def test_slm_loads(self):
         """Verify SLM manager was created"""
@@ -595,7 +615,6 @@ def run_all_tests():
         TestInputSanitization,
         TestOutputValidatorPII,
         TestFECCompliance,
-        TestDeescalation,
         TestIntentFulfillment,
         TestValidationResult,
         TestFullPrequalifier,

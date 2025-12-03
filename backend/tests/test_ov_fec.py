@@ -57,7 +57,7 @@ class TestFECChecker:
         Note: For full FEC compliance testing with RAG, set require_slm=True 
         and call set_fec_rag() with a WeaviateManager instance.
         """
-        from output_validator_slm import OutputValidatorSLM
+        from output_validator import OutputValidatorSLM
         return OutputValidatorSLM(require_slm=False)
     
     @pytest.mark.parametrize("query,response,expected_max_score", FEC_PASS_CASES)
@@ -197,7 +197,7 @@ class TestFECEdgeCases:
     @pytest.fixture
     def validator(self):
         """Pattern-only validator for edge case testing."""
-        from output_validator_slm import OutputValidatorSLM
+        from output_validator import OutputValidatorSLM
         return OutputValidatorSLM(require_slm=False)
     
     def test_empty_response(self, validator):
@@ -236,7 +236,7 @@ class TestFECRAGRequirement:
     
     def test_fec_requires_rag_when_slm_required(self):
         """Verify that _check_fec raises SLMNotAvailableError when require_slm=True and no RAG configured."""
-        from output_validator_slm import OutputValidatorSLM, SLMNotAvailableError
+        from output_validator import OutputValidatorSLM, SLMNotAvailableError
         
         validator = OutputValidatorSLM(require_slm=True)
         
@@ -251,7 +251,7 @@ class TestFECRAGRequirement:
     
     def test_fec_works_with_require_slm_false(self):
         """Verify that _check_fec works with require_slm=False (pattern-only mode)."""
-        from output_validator_slm import OutputValidatorSLM
+        from output_validator import OutputValidatorSLM
         
         validator = OutputValidatorSLM(require_slm=False)
         

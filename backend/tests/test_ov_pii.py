@@ -47,7 +47,7 @@ class TestPIIChecker:
     @pytest.fixture
     def validator(self):
         """Get the output validator."""
-        from output_validator_slm import OutputValidatorSLM
+        from output_validator import OutputValidatorSLM
         return OutputValidatorSLM()
     
     @pytest.mark.parametrize("query,response,expected_max_score", PII_PASS_CASES)
@@ -212,7 +212,7 @@ class TestPIIEdgeCases:
     
     @pytest.fixture
     def validator(self):
-        from output_validator_slm import OutputValidatorSLM
+        from output_validator import OutputValidatorSLM
         return OutputValidatorSLM()
     
     def test_empty_response(self, validator):

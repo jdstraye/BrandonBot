@@ -65,7 +65,7 @@ def citation_verifier(citation_store):
 @pytest.fixture
 def validator_with_store(citation_store):
     """Create output validator with citation store."""
-    from output_validator_slm import OutputValidatorSLM
+    from output_validator import OutputValidatorSLM
     validator = OutputValidatorSLM()
     validator.set_citation_store({
         "CITE-BP-001": {"document_id": "platform_doc_1", "page": 3, "line": 15},
@@ -247,7 +247,7 @@ class TestCitationEdgeCases:
     
     @pytest.fixture
     def validator(self):
-        from output_validator_slm import OutputValidatorSLM
+        from output_validator import OutputValidatorSLM
         return OutputValidatorSLM()
     
     def test_empty_response(self, validator):

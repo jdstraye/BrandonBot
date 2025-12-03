@@ -54,7 +54,7 @@ class TestPrequalifier:
     def pq(self):
         """Get the prequalifier instance."""
         from prequalifier import Prequalifier
-        return Prequalifier()
+        return Prequalifier(require_slm=False)
     
     @pytest.mark.parametrize("query,expected", VAGUENESS_CLEAR_CASES)
     def test_vagueness_clear_cases(self, pq, query, expected):
@@ -111,7 +111,7 @@ class TestPatternFlags:
     @pytest.fixture
     def pq(self):
         from prequalifier import Prequalifier
-        return Prequalifier()
+        return Prequalifier(require_slm=False)
     
     def test_all_caps_detection(self, pq):
         """Test detection of all-caps as frustration indicator."""
@@ -155,7 +155,7 @@ class TestRAGConfidence:
     @pytest.fixture
     def pq(self):
         from prequalifier import Prequalifier
-        return Prequalifier()
+        return Prequalifier(require_slm=False)
     
     def test_result_has_confidence(self, pq):
         """Test that result includes confidence score."""
@@ -178,7 +178,7 @@ class TestPrequalifierResult:
     @pytest.fixture
     def pq(self):
         from prequalifier import Prequalifier
-        return Prequalifier()
+        return Prequalifier(require_slm=False)
     
     def test_result_structure(self, pq):
         """Test that result has all required fields."""
@@ -218,7 +218,7 @@ class TestPQEdgeCases:
     @pytest.fixture
     def pq(self):
         from prequalifier import Prequalifier
-        return Prequalifier()
+        return Prequalifier(require_slm=False)
     
     def test_empty_query(self, pq):
         """Test handling of empty query."""

@@ -29,7 +29,7 @@ from query_expansion import detect_question_type, get_topic_from_query
 from llm_providers import LLMProviderManager
 from intent_detector import intent_detector, UserIntent, escalation_detector
 from prequalifier import prequalifier, PrequalifierResult, FrustrationDecision, VaguenessDecision
-from output_validator import output_validator, ValidationResult, ValidationStatus, RejectionReason
+from output_validator import output_validator, OVValidationResult, ValidationStatus, RejectionReason, OVSafeguard
 
 logger = logging.getLogger(__name__)
 
@@ -996,63 +996,52 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
                 final_response = "I apologize, but I'm having trouble completing this request. Would you like someone from the team to call you back to discuss this?"
             
             # ===== STAGE 3: OUTPUT VALIDATOR WITH REGENERATION LOOP =====
-            # Set up OV with dependencies
-            output_validator.set_weaviate_manager(self.tool_executor.weaviate)
-            if self.slm_manager:
-                output_validator.set_slm_provider(self.slm_manager)
+            # Set up FEC RAG for compliance checking
+            if self.tool_executor and self.tool_executor.weaviate:
+                output_validator.set_fec_rag(self.tool_executor.weaviate)
             
             regeneration_attempt = 0
             max_regenerations = 3
+            pq_confidence = pq_result.rag_confidence if pq_result.rag_results else 0.5
             
             while regeneration_attempt <= max_regenerations:
                 validation_result = await output_validator.validate(
+                    query=sanitized_message,
                     response=final_response,
-                    user_query=sanitized_message,
-                    user_frustrated=user_frustrated,
-                    regeneration_attempt=regeneration_attempt,
-                    pq_context={
-                        "frustration": pq_result.frustration_decision.value,
-                        "vagueness": pq_result.vagueness_decision.value,
-                        "rag_results": [r.to_dict() for r in pq_result.rag_results],
-                    }
+                    pq_confidence=pq_confidence
                 )
                 
-                metadata["validation_status"] = validation_result.status.value
+                metadata["validation_status"] = "passed" if validation_result.passed else "rejected"
                 
-                if validation_result.status == ValidationStatus.PASSED:
-                    # All checks passed
+                if validation_result.passed:
+                    # All checks passed (score <= 3)
                     logger.info(f"[{request_id}] OV passed on attempt {regeneration_attempt}")
                     break
-                    
-                elif validation_result.status == ValidationStatus.MODIFIED:
-                    # Minor modifications (e.g., PII redaction)
-                    final_response = validation_result.validated_response
-                    metadata["ov_modifications"].extend(validation_result.modifications)
-                    logger.info(f"[{request_id}] OV modified response: {validation_result.modifications}")
-                    break
-                    
-                elif validation_result.status == ValidationStatus.REJECTED:
-                    # Need to regenerate
+                else:
+                    # Need to regenerate (score > 3)
                     regeneration_attempt += 1
                     metadata["regeneration_attempts"] = regeneration_attempt
                     metadata["validation_rejections"].append({
                         "attempt": regeneration_attempt,
-                        "reason": validation_result.rejection_reason.value if validation_result.rejection_reason else "unknown",
-                        "explanation": validation_result.rejection_explanation
+                        "reason": validation_result.rejection_reason or "unknown",
+                        "max_violation": validation_result.max_violation,
+                        "failed_checks": [
+                            {"safeguard": s.value, "score": r.score, "explanation": r.explanation}
+                            for s, r in validation_result.results.items() if r.score > 3
+                        ]
                     })
                     
                     logger.warning(f"[{request_id}] OV rejected (attempt {regeneration_attempt}): {validation_result.rejection_reason}")
                     
                     if regeneration_attempt <= max_regenerations:
-                        # Build regeneration prompt and re-query LLM
-                        regen_prompt = output_validator.build_regeneration_prompt(
-                            final_response, validation_result
-                        )
+                        # Get feedback for regeneration
+                        regen_prompt = validation_result.get_feedback_for_retry()
                         
-                        messages.append({
-                            "role": "system",
-                            "content": regen_prompt
-                        })
+                        if regen_prompt:
+                            messages.append({
+                                "role": "system",
+                                "content": regen_prompt
+                            })
                         
                         # Regenerate with LLM
                         regen_response = await self.llm_manager.generate_with_tools(
@@ -1069,13 +1058,13 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
                         final_response = "I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?"
                         logger.warning(f"[{request_id}] Max regenerations exceeded, using fallback")
                         break
-                        
-                elif validation_result.status == ValidationStatus.BLOCKED:
-                    # Critical violation - cannot regenerate
-                    final_response = "I'm not able to provide that information. Would you like someone from the team to call you back?"
-                    metadata["blocked_by_ov"] = True
-                    logger.error(f"[{request_id}] OV blocked response: {validation_result.rejection_explanation}")
-                    break
+                    
+                    # Check for critical violations (score = 5)
+                    if validation_result.max_violation >= 5:
+                        final_response = "I'm not able to provide that information. Would you like someone from the team to call you back?"
+                        metadata["blocked_by_ov"] = True
+                        logger.error(f"[{request_id}] OV blocked response: {validation_result.rejection_reason}")
+                        break
             
             session.add_turn(ConversationRole.ASSISTANT, final_response)
             

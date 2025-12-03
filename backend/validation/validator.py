@@ -32,7 +32,7 @@ from enum import Enum
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from prequalifier import Prequalifier, FrustrationDecision, VaguenessDecision, PatternFlags
-from output_validator_slm import OutputValidatorSLM, OVSafeguard, SLMNotAvailableError
+from output_validator import OutputValidatorSLM, OVSafeguard, SLMNotAvailableError
 from security import rate_limiter, input_sanitizer
 from ollama_judge import OllamaJudge, JudgeScore, Persona, EngagementStyle
 

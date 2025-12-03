@@ -49,7 +49,7 @@ class TestEthicsChecker:
     @pytest.fixture
     def validator(self):
         """Get the output validator."""
-        from output_validator_slm import OutputValidatorSLM
+        from output_validator import OutputValidatorSLM
         return OutputValidatorSLM()
     
     @pytest.mark.parametrize("query,response,expected_max_score", ETHICS_PASS_CASES)
@@ -150,7 +150,7 @@ class TestEthicsEdgeCases:
     
     @pytest.fixture
     def validator(self):
-        from output_validator_slm import OutputValidatorSLM
+        from output_validator import OutputValidatorSLM
         return OutputValidatorSLM()
     
     def test_empty_response(self, validator):

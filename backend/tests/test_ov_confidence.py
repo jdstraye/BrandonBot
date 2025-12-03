@@ -53,7 +53,7 @@ class TestConfidenceChecker:
     @pytest.fixture
     def validator(self):
         """Get the output validator."""
-        from output_validator_slm import OutputValidatorSLM
+        from output_validator import OutputValidatorSLM
         return OutputValidatorSLM()
     
     @pytest.mark.parametrize("query,response,pq_confidence,expected_max_score", CONFIDENCE_PASS_CASES_LOW_PQ)
@@ -164,7 +164,7 @@ class TestConfidenceEdgeCases:
     
     @pytest.fixture
     def validator(self):
-        from output_validator_slm import OutputValidatorSLM
+        from output_validator import OutputValidatorSLM
         return OutputValidatorSLM()
     
     def test_empty_response(self, validator):

@@ -26,6 +26,11 @@ from security import input_sanitizer, rate_limiter, SanitizationResult
 logger = logging.getLogger(__name__)
 
 
+class SLMNotAvailableError(Exception):
+    """Raised when SLM is required but not available for hybrid classification."""
+    pass
+
+
 class FrustrationDecision(Enum):
     """SLM decision on user frustration/escalation - 3-bucket classification"""
     CALM = "calm"
@@ -319,16 +324,20 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
         ("clear", "calm"): None,
     }
 
-    def __init__(self, slm_provider=None, weaviate_manager=None):
+    def __init__(self, slm_provider=None, weaviate_manager=None, require_slm: bool = True):
         """
         Initialize prequalifier.
         
         Args:
             slm_provider: Small LLM for classification (uses main LLM if None)
             weaviate_manager: Vector DB for RAG retrieval
+            require_slm: If True (default), raise SLMNotAvailableError when SLM 
+                        is required but not available. Enforces hybrid mode
+                        (patterns + SLM) rather than allowing pattern-only fallback.
         """
         self.slm = slm_provider
         self.weaviate = weaviate_manager
+        self._require_slm = require_slm
     
     def set_slm_provider(self, provider):
         """Set SLM provider after initialization"""
@@ -511,8 +520,16 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
         Returns:
             Tuple of (FrustrationDecision, detected_emotion)
             detected_emotion is one of: anger, disgust, fear, joy, neutral, sadness, surprise
+            
+        Raises:
+            SLMNotAvailableError: If require_slm=True and SLM is not available.
         """
         if self.slm is None:
+            if self._require_slm:
+                raise SLMNotAvailableError(
+                    "Frustration SLM not available. Prequalifier requires hybrid mode (patterns + SLM). "
+                    "Set require_slm=False to use pattern-only fallback."
+                )
             decision = self._fallback_frustration_classification(flags, message, history)
             return (decision, "neutral")
         
@@ -526,6 +543,12 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
                 return (FrustrationDecision.CONTINUE, detected_emotion)
                 
         except Exception as e:
+            if self._require_slm:
+                raise SLMNotAvailableError(
+                    f"SLM frustration classification failed: {e}. "
+                    "Prequalifier requires hybrid mode (patterns + SLM). "
+                    "Set require_slm=False to use pattern-only fallback."
+                )
             logger.warning(f"SLM frustration classification failed: {e}, using fallback")
             decision = self._fallback_frustration_classification(flags, message, history)
             return (decision, "neutral")
@@ -664,8 +687,16 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
         The SLM receives the user query along with RAG results and similarity
         scores, allowing it to make an informed decision about whether the
         knowledge base can answer the query.
+        
+        Raises:
+            SLMNotAvailableError: If require_slm=True and SLM is not available.
         """
         if self.slm is None:
+            if self._require_slm:
+                raise SLMNotAvailableError(
+                    "Vagueness SLM not available. Prequalifier requires hybrid mode (patterns + SLM). "
+                    "Set require_slm=False to use pattern-only fallback."
+                )
             return self._fallback_vagueness_classification(message, avg_confidence)
         
         try:
@@ -685,6 +716,12 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
                 return VaguenessDecision.CLEAR
                 
         except Exception as e:
+            if self._require_slm:
+                raise SLMNotAvailableError(
+                    f"SLM vagueness classification failed: {e}. "
+                    "Prequalifier requires hybrid mode (patterns + SLM). "
+                    "Set require_slm=False to use pattern-only fallback."
+                )
             logger.warning(f"RAG+SLM vagueness classification failed: {e}, using fallback")
             return self._fallback_vagueness_classification(message, avg_confidence)
     
@@ -790,5 +827,5 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
         return enriched, pq_instructions
 
 
-# Singleton instance
-prequalifier = Prequalifier()
+# Singleton instance - uses require_slm=True by default to enforce hybrid mode
+prequalifier = Prequalifier(require_slm=True)
