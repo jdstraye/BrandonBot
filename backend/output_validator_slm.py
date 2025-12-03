@@ -159,6 +159,11 @@ class OutputValidatorSLM:
             (re.compile(r'\bguaranteed?\s+to\s+(?:win|pass|happen)\b', re.I), 'false_promise', 4),
             (re.compile(r'\bvote\s+for\s+(?:us|him|brandon)\s+or\s+(?:else|bad\s+things)\b', re.I), 'coercion', 5),
             (re.compile(r'\byou\s+must\s+donate\b', re.I), 'coercion', 4),
+            (re.compile(r'\b(?:offshore|foreign|hidden)\s+(?:account|bank|funds?)\b', re.I), 'money_laundering', 5),
+            (re.compile(r'\bhide\s+(?:money|funds|donations?|contributions?)\b', re.I), 'money_laundering', 5),
+            (re.compile(r'\b(?:launder|laundering|wash)\s+(?:money|funds)\b', re.I), 'money_laundering', 5),
+            (re.compile(r'\bavoid\s+(?:fec|reporting|disclosure|limits?)\b', re.I), 'fec_evasion', 5),
+            (re.compile(r'\b(?:anonymous|untraceable)\s+(?:donation|contribution)\b', re.I), 'fec_evasion', 5),
         ]
         
         self.hedging_patterns = [
@@ -690,7 +695,7 @@ class OutputValidatorSLM:
             if has_overconfidence and not has_hedging:
                 score = 4
                 explanation = f"Overconfident without hedging (PQ={pq_confidence:.2f})"
-            elif not has_hedging and len(response.split()) > 20:
+            elif not has_hedging:
                 score = 2
                 explanation = f"No hedging for low confidence topic (PQ={pq_confidence:.2f})"
             else:

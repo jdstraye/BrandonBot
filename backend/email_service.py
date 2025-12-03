@@ -1,7 +1,10 @@
 """
 Email Service for BrandonBot
 Uses Replit's OpenInt mail service for sending notifications.
-Sends volunteer registrations and donation interest to brandon@shilohfinance.com
+
+Email Routing:
+- Testing (TESTING_MODE=true): jdstrayer@netzero.net
+- Production: campaign@brandonsowers.com
 """
 
 import os
@@ -14,7 +17,10 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-BRANDON_EMAIL = "brandon@shilohfinance.com"
+TESTING_MODE = os.environ.get("TESTING_MODE", "false").lower() == "true"
+TEST_EMAIL = "jdstrayer@netzero.net"
+PRODUCTION_EMAIL = "campaign@brandonsowers.com"
+BRANDON_EMAIL = TEST_EMAIL if TESTING_MODE else PRODUCTION_EMAIL
 
 @dataclass
 class EmailResult:

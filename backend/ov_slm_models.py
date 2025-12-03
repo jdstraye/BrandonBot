@@ -692,15 +692,12 @@ class BertTinyConfidenceChecker:
             if overconfidence_found and not hedging_found:
                 score = 4
                 explanation = f"Overconfident without hedging (PQ={pq_confidence:.2f})"
-            elif not hedging_found and len(response.split()) > 20:
+            elif not hedging_found:
                 score = 2
                 explanation = f"No hedging language for low confidence topic (PQ={pq_confidence:.2f})"
-            elif hedging_found:
-                score = 0
-                explanation = f"Appropriate hedging for PQ={pq_confidence:.2f}"
             else:
                 score = 0
-                explanation = f"Short response, confidence OK for PQ={pq_confidence:.2f}"
+                explanation = f"Appropriate hedging for PQ={pq_confidence:.2f}"
         else:
             if inability_found and not overconfidence_found:
                 score = 3
