@@ -165,7 +165,7 @@ class OutputValidatorSLM:
             (re.compile(r'\bavoid\s+(?:fec|reporting|disclosure|limits?)\b', re.I), 'fec_evasion', 5),
             (re.compile(r'\b(?:anonymous|untraceable)\s+(?:donation|contribution)\b', re.I), 'fec_evasion', 5),
             # Foreign national contributions (52 U.S.C. § 30121)
-            (re.compile(r'\b(?:foreign|overseas|international)\s+(?:donation|contribution|donor|money)\b', re.I), 'foreign_contribution', 5),
+            (re.compile(r'\b(?:foreign|overseas|international)\s+(?:donation|contribution|donor|money|funds|account|bank)\b', re.I), 'foreign_contribution', 5),
             (re.compile(r'\b(?:donate|contribution|give)\s+(?:from|via|through)\s+(?:abroad|overseas|another country|foreign)\b', re.I), 'foreign_contribution', 5),
             (re.compile(r'\b(?:non-?us|non-?citizen|foreign national)\s+(?:can|may|should)\s+(?:donate|contribute|give)\b', re.I), 'foreign_solicitation', 5),
         ]

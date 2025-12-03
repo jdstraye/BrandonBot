@@ -36,6 +36,13 @@ from output_validator_slm import OutputValidatorSLM, OVSafeguard
 from security import rate_limiter, input_sanitizer
 from ollama_judge import OllamaJudge, JudgeScore, Persona, EngagementStyle
 
+try:
+    from agent_orchestrator import AgentOrchestrator
+    AGENT_AVAILABLE = True
+except ImportError:
+    AGENT_AVAILABLE = False
+    AgentOrchestrator = None
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -129,10 +136,13 @@ class BrandonBotValidator:
     Implements the 5-step adversarial evaluator loop.
     """
     
-    def __init__(self, use_judge: bool = True):
+    def __init__(self, use_judge: bool = True, use_agent: bool = False):
         self.pq = Prequalifier()
         self.ov = OutputValidatorSLM()
         self.judge = OllamaJudge() if use_judge else None
+        self.agent = None
+        self._agent_initialized = False
+        self._use_agent = use_agent and AGENT_AVAILABLE
         
         self.test_data = self._load_test_prompts()
         self.session: Optional[ValidationSession] = None
@@ -166,6 +176,27 @@ class BrandonBotValidator:
             with open(prompts_path) as f:
                 return json.load(f)
         return {"categories": {}}
+    
+    async def _ensure_agent_ready(self) -> bool:
+        """Initialize the AgentOrchestrator if needed and available."""
+        if not self._use_agent or not AGENT_AVAILABLE:
+            return False
+        
+        if self._agent_initialized:
+            return self.agent is not None
+        
+        try:
+            logger.info("Initializing AgentOrchestrator for vague loop testing...")
+            self.agent = AgentOrchestrator()
+            await self.agent.initialize()
+            self._agent_initialized = True
+            logger.info("AgentOrchestrator initialized successfully")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to initialize AgentOrchestrator: {e}")
+            self._agent_initialized = True
+            self.agent = None
+            return False
     
     def _select_persona(self, bias: str = None) -> Persona:
         """Select a persona with optional bias weighting."""
@@ -434,19 +465,26 @@ class BrandonBotValidator:
         
         Tests the clarification loop where:
         1. User sends vague initial message
-        2. Bot asks clarifying questions  
+        2. Bot asks clarifying questions (real agent if available, mock otherwise)
         3. User (LLM agent) provides progressively specific responses
         4. Bot eventually provides substantive answer
         
-        Requires Ollama with Llama 3.1 8B for LLM user agent.
-        Falls back to canned responses if Ollama unavailable.
+        Requires:
+        - AgentOrchestrator for real bot responses (optional)
+        - Ollama with Llama 3.1 8B for LLM user agent (optional)
+        
+        Falls back to mock/canned responses when dependencies unavailable.
         """
         results = []
         vague_prompts = ["Hi Brandon", "Hi Brandon, I'm Jayson.", "Hi Brandon, How are you today?"]
         
         judge_available = self.judge and await self.judge.check_availability()
+        agent_available = await self._ensure_agent_ready()
+        
         if not judge_available:
             logger.warning("Ollama judge not available - using canned user responses for vague loop")
+        if not agent_available:
+            logger.warning("AgentOrchestrator not available - using mock bot responses for vague loop")
         
         for i, initial_prompt in enumerate(vague_prompts):
             test_id = f"VAGUE-{i:03d}"
@@ -464,20 +502,32 @@ class BrandonBotValidator:
             bot_responses = []
             user_clarifications = []
             turns = 0
+            session_id = f"vague_test_{i}_{int(time.time())}"
             
             try:
                 current_input = initial_prompt
                 
                 while turns < 5:
-                    pq_result = await self.pq.analyze(current_input, session_id="vague_test")
+                    pq_result = await self.pq.analyze(current_input, session_id=session_id)
                     
-                    mock_bot_response = "I'd be happy to help! Could you tell me more about what you're interested in?"
-                    if turns >= 2 and pq_result.vagueness_decision == VaguenessDecision.CLEAR:
-                        mock_bot_response = "Based on Brandon's platform, here's information about that topic..."
+                    if agent_available and self.agent:
+                        try:
+                            bot_response, metadata = await self.agent.process_message(
+                                user_message=current_input,
+                                session_id=session_id
+                            )
+                            logger.debug(f"Real agent response: {bot_response[:100]}")
+                        except Exception as e:
+                            logger.warning(f"Agent call failed, falling back to mock: {e}")
+                            bot_response = "I'd be happy to help! Could you tell me more about what you're interested in?"
+                    else:
+                        bot_response = "I'd be happy to help! Could you tell me more about what you're interested in?"
+                        if turns >= 2 and pq_result.vagueness_decision == VaguenessDecision.CLEAR:
+                            bot_response = "Based on Brandon's platform, here's information about that topic..."
                     
-                    bot_responses.append(mock_bot_response)
+                    bot_responses.append(bot_response)
                     conversation.append({"role": "user", "content": current_input})
-                    conversation.append({"role": "bot", "content": mock_bot_response})
+                    conversation.append({"role": "bot", "content": bot_response})
                     turns += 1
                     
                     if turns >= 3 and pq_result.vagueness_decision == VaguenessDecision.CLEAR:
@@ -485,7 +535,7 @@ class BrandonBotValidator:
                     
                     if judge_available:
                         user_response = await self.judge.generate_user_response(
-                            bot_response=mock_bot_response,
+                            bot_response=bot_response,
                             conversation_history=conversation,
                             persona=Persona.DOCILE,
                             style=EngagementStyle.SPECIFIC,
@@ -509,9 +559,9 @@ class BrandonBotValidator:
                 passed = clarifying_questions >= 2 and turns >= 3
                 
                 result.pass_fail = "PASS" if passed else "FAIL"
-                result.reasoning = f"Turns: {turns}, Clarifying: {clarifying_questions}, LLM agent: {judge_available}"
+                result.reasoning = f"Turns: {turns}, Clarifying: {clarifying_questions}, Agent: {agent_available}, LLM user: {judge_available}"
                 result.bot_response = " | ".join(bot_responses)
-                result.genai = "llama3.1:8b" if judge_available else "canned"
+                result.genai = f"agent:{agent_available}|user:{judge_available}"
                 
             except Exception as e:
                 result.pass_fail = "ERROR"
