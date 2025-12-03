@@ -167,7 +167,7 @@ class BrandonBotValidator:
                             over local Ollama. API judge uses existing multi-provider infrastructure
                             with automatic failover and no local memory requirements.
         """
-        self.pq = Prequalifier()
+        self.pq = Prequalifier(require_slm=require_slm)
         self.ov = OutputValidatorSLM(require_slm=require_slm)
         
         self.judge = None
