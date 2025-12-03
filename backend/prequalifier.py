@@ -27,14 +27,18 @@ logger = logging.getLogger(__name__)
 
 
 class FrustrationDecision(Enum):
-    """SLM decision on user frustration/escalation"""
-    ESCALATE = "escalate"
-    CONTINUE = "continue"
+    """SLM decision on user frustration/escalation - 3-bucket classification"""
+    CALM = "calm"
+    ANNOYED = "annoyed"
+    FRUSTRATED = "frustrated"
+    ESCALATE = "escalate"  # Alias for FRUSTRATED (backward compat)
+    CONTINUE = "continue"  # Alias for CALM (backward compat)
 
 
 class VaguenessDecision(Enum):
-    """SLM decision on query clarity"""
+    """SLM decision on query clarity - 3-bucket classification"""
     CLEAR = "clear"
+    NEEDS_CLARIFICATION = "needs_clarification"
     VAGUE = "vague"
 
 
@@ -48,8 +52,19 @@ class PatternFlags:
     demands_human: bool = False
     insults: bool = False
     frustration_phrases: bool = False
+    frustration_count: int = 0  # Number of frustration patterns matched
     sqli_attempt: bool = False
     prompt_injection: bool = False
+    
+    @property
+    def excessive_caps(self) -> bool:
+        """Alias for all_caps (for test compatibility)"""
+        return self.all_caps
+    
+    @property
+    def excessive_punctuation(self) -> bool:
+        """Alias for repeated_punct (for test compatibility)"""
+        return self.repeated_punct
     
     def to_dict(self) -> Dict[str, bool]:
         return {
@@ -62,6 +77,8 @@ class PatternFlags:
             "frustration_phrases": self.frustration_phrases,
             "sqli_attempt": self.sqli_attempt,
             "prompt_injection": self.prompt_injection,
+            "excessive_caps": self.all_caps,
+            "excessive_punctuation": self.repeated_punct,
         }
     
     def any_high_risk(self) -> bool:
@@ -96,6 +113,9 @@ class RAGResult:
 @dataclass
 class PrequalifierResult:
     """Result from prequalifier analysis"""
+    # Original query
+    query: str = ""
+    
     # Security checks
     rate_limited: bool = False
     rate_limit_wait_seconds: Optional[int] = None
@@ -106,7 +126,7 @@ class PrequalifierResult:
     block_reason: Optional[str] = None
     
     # Hybrid detection decisions
-    frustration_decision: FrustrationDecision = FrustrationDecision.CONTINUE
+    frustration_decision: FrustrationDecision = FrustrationDecision.CALM
     vagueness_decision: VaguenessDecision = VaguenessDecision.CLEAR
     pattern_flags: Optional[PatternFlags] = None
     
@@ -117,12 +137,38 @@ class PrequalifierResult:
     rag_results: List[RAGResult] = field(default_factory=list)
     avg_rag_confidence: float = 0.0
     
+    # Confidence score (0.0-1.0) based on RAG results
+    confidence: float = 0.0
+    
     # Enriched prompt for main LLM
     enriched_prompt: Optional[str] = None
     pq_instructions: Optional[str] = None
     
-    # Pass-through flag (CLEAR + CONTINUE = no enrichment needed)
+    # Pass-through flag (CLEAR + CALM = no enrichment needed)
     passthrough: bool = False
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert result to dictionary for serialization."""
+        return {
+            "query": self.query,
+            "rate_limited": self.rate_limited,
+            "rate_limit_wait_seconds": self.rate_limit_wait_seconds,
+            "sanitized_message": self.sanitized_message,
+            "sanitization_applied": self.sanitization_applied,
+            "sanitization_issues": self.sanitization_issues,
+            "blocked": self.blocked,
+            "block_reason": self.block_reason,
+            "frustration_decision": self.frustration_decision.value,
+            "vagueness_decision": self.vagueness_decision.value,
+            "pattern_flags": self.pattern_flags.to_dict() if self.pattern_flags else None,
+            "detected_emotion": self.detected_emotion,
+            "rag_results": [r.to_dict() for r in self.rag_results],
+            "avg_rag_confidence": self.avg_rag_confidence,
+            "confidence": self.confidence,
+            "enriched_prompt": self.enriched_prompt,
+            "pq_instructions": self.pq_instructions,
+            "passthrough": self.passthrough,
+        }
 
 
 class Prequalifier:
@@ -149,7 +195,7 @@ class Prequalifier:
     
     # Mild profanity - less weight in frustration scoring
     MILD_PROFANITY_PATTERNS = [
-        r"\b(damn(ed)?|crap(py)?|hell|heck)\b",
+        r"\b(damn(ed)?|crap(py)?|hell|heck|bullshit|bs)\b",
         r"\bwhat the (hell|heck)\b",
     ]
     
@@ -181,10 +227,17 @@ class Prequalifier:
         r"(still )?(haven't|hasn't|don't|doesn't) (addressed|answered|helped)",
         r"(waste|wasting) (of |my )?time",
         r"(not|isn't|aren't) (helping|working|useful)",
-        r"(i('m| am)|this is) (confused|frustrated|annoyed|angry)",
+        r"(i('m| am)|this is) (confused|frustrated|annoyed|angry|ridiculous)",
         r"forget it|never ?mind",
         r"(ugh|argh|omg|ffs|wtf)",
         r"this (doesn't|won't|isn't) (work|help)",
+        r"(asked|asking|ask).*(times|again)",
+        r"(keep|keeps) (ignoring|avoiding|missing)",
+        r"useless|pointless|unhelpful",
+        r"fed up|sick of|tired of|had enough",
+        r"you (never|won't|can't|don't) (answer|help|listen)",
+        r"ridiculous|absurd|unbelievable",
+        r"(why )?(won't|can't|don't) you (answer|help|listen)",
     ]
     
     # SLM prompts for hybrid detection
@@ -228,9 +281,8 @@ Consider:
 
 Respond with ONLY a single word: CLEAR or VAGUE"""
 
-    # Enrichment templates for 2x2 matrix
-    ENRICHMENT_TEMPLATES: Dict[Tuple[str, str], Optional[str]] = {
-        ("clear", "escalate"): """user query: {user_query}
+    # Enrichment templates for 2x2 matrix (supports both old and new frustration values)
+    _ESCALATION_TEMPLATE = """user query: {user_query}
 
 The user is agitated but we have relevant answers. Acknowledge the frustration and show you aim to help by stating 'would it be helpful if I explain...' followed by a plan based on the RAG content.
 
@@ -239,26 +291,34 @@ RAG retrieval:
 
 Data from BrandonPlatform and PreviousQA are authoritative based on Brandon's own words. Data from PartyPlatform is from party platforms - clearly distinguish between Brandon's positions and party positions.
 
-Important: Validate your response before delivering. Acknowledge frustration, then provide helpful information.""",
+Important: Validate your response before delivering. Acknowledge frustration, then provide helpful information."""
 
-        ("vague", "continue"): """user query: {user_query}
+    _VAGUE_CALM_TEMPLATE = """user query: {user_query}
 
 The query is vague. Take a couple turns to gently guide the user to a clearer question using relevant parts of Brandon's platform. Don't assume what they're asking - ask clarifying questions.
 
 Relevant positions from knowledge base that might help:
 {rag_data}
 
-Ask which specific aspect they'd like to know more about. Be warm and helpful, not dismissive.""",
+Ask which specific aspect they'd like to know more about. Be warm and helpful, not dismissive."""
 
-        ("vague", "escalate"): """user query: {user_query}
+    _VAGUE_ESCALATE_TEMPLATE = """user query: {user_query}
 
 The user is frustrated and their query is unclear. They need immediate de-escalation.
 
 Explain that you want to help but aren't sure exactly what matters most to them. Apologize for any confusion. Offer to have a member of Brandon's team call them back for personal assistance.
 
-Do NOT try to answer their unclear question. Focus on de-escalation and human escalation options.""",
+Do NOT try to answer their unclear question. Focus on de-escalation and human escalation options."""
 
-        ("clear", "continue"): None,  # Passthrough - no enrichment needed
+    ENRICHMENT_TEMPLATES: Dict[Tuple[str, str], Optional[str]] = {
+        ("clear", "escalate"): _ESCALATION_TEMPLATE,
+        ("clear", "frustrated"): _ESCALATION_TEMPLATE,
+        ("vague", "continue"): _VAGUE_CALM_TEMPLATE,
+        ("vague", "calm"): _VAGUE_CALM_TEMPLATE,
+        ("vague", "escalate"): _VAGUE_ESCALATE_TEMPLATE,
+        ("vague", "frustrated"): _VAGUE_ESCALATE_TEMPLATE,
+        ("clear", "continue"): None,
+        ("clear", "calm"): None,
     }
 
     def __init__(self, slm_provider=None, weaviate_manager=None):
@@ -299,6 +359,7 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
         7. Build enriched prompt
         """
         result = PrequalifierResult()
+        result.query = message  # Store original query
         
         # Step 1: Rate limiting
         is_allowed, wait_seconds = rate_limiter.check_rate_limit(session_id, "query")
@@ -339,6 +400,7 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
         rag_results, avg_confidence = await self._retrieve_rag_context(result.sanitized_message)
         result.rag_results = rag_results
         result.avg_rag_confidence = avg_confidence
+        result.confidence = avg_confidence  # Set confidence from RAG results
         
         # Step 6: SLM vagueness classification
         vagueness_decision = await self._classify_vagueness_async(
@@ -358,7 +420,7 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
         result.enriched_prompt = enriched_prompt
         result.pq_instructions = pq_instructions
         result.passthrough = (
-            frustration_decision == FrustrationDecision.CONTINUE and
+            frustration_decision in [FrustrationDecision.CALM, FrustrationDecision.CONTINUE] and
             vagueness_decision == VaguenessDecision.CLEAR
         )
         
@@ -396,11 +458,13 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
                 flags.demands_human = True
                 break
         
-        # Check frustration phrases
+        # Check frustration phrases (count all matches)
+        frustration_count = 0
         for pattern in self.FRUSTRATION_PATTERNS:
             if re.search(pattern, message_lower, re.IGNORECASE):
-                flags.frustration_phrases = True
-                break
+                frustration_count += 1
+        flags.frustration_phrases = frustration_count > 0
+        flags.frustration_count = frustration_count
         
         # Check for ALL CAPS (more than 50% uppercase, at least 10 chars)
         alpha_chars = [c for c in message if c.isalpha()]
@@ -477,6 +541,11 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
         """
         Fallback rule-based frustration classification when SLM unavailable.
         
+        3-bucket classification:
+        - CALM (score 0-1): No frustration indicators
+        - ANNOYED (score 2-3): Mild frustration, can continue
+        - FRUSTRATED (score 4+): High frustration, may need escalation
+        
         Args:
             flags: Pattern flags detected in message
             message: Original user message (REQUIRED for severity classification)
@@ -505,7 +574,9 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
         if flags.urgent_keywords:
             score += 1
         if flags.frustration_phrases:
-            score += 2
+            # Score based on number of frustration patterns matched
+            # 1 pattern = +2, 2+ patterns = +3 (strong frustration)
+            score += 2 if flags.frustration_count <= 1 else 3
         if flags.all_caps:
             score += 1
         if flags.repeated_punct:
@@ -517,8 +588,15 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
             if len(user_messages) >= 3:
                 score += 1  # Long conversation without resolution
         
-        # Escalate if score >= 3 (severe profanity or insults alone should trigger)
-        return FrustrationDecision.ESCALATE if score >= 3 else FrustrationDecision.CONTINUE
+        # 3-bucket classification based on score
+        # Score thresholds: CALM (0-2), ANNOYED (3), FRUSTRATED (4+)
+        # This allows mild profanity + punctuation to stay CALM
+        if score >= 4:
+            return FrustrationDecision.FRUSTRATED
+        elif score >= 3:
+            return FrustrationDecision.ANNOYED
+        else:
+            return FrustrationDecision.CALM
     
     async def _retrieve_rag_context(
         self,
@@ -635,13 +713,15 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
         
         # Clear question patterns (specific topic + question structure)
         clear_patterns = [
-            r"what is (brandon'?s?|his|the) (position|stance|view|plan|policy) on",
+            r"what is (brandon'?s?|his|the|your) (position|stance|view|plan|policy) on",
             r"where does (brandon|he) stand on",
             r"how (does|will|would|can) (brandon|he)",
             r"why (does|did|is|should) (brandon|he)",
             r"what (will|would|does|did) (brandon|he) (do|say|think|believe|propose)",
             r"(brandon'?s?|his) (position|stance|view|plan|policy) (on|about|regarding)",
             r"what are (brandon'?s?|his|the) (plans?|proposals?|ideas?|solutions?) (for|on|about|regarding)",
+            r"tell me about (brandon'?s?|his|your|the) .*(policy|plan|position|proposal|stance|view)",
+            r"(tell|explain|describe).*(brandon'?s?|his|your).*(on|about|for|regarding)",
         ]
         
         for pattern in clear_patterns:

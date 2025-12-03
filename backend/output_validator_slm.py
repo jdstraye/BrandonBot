@@ -120,6 +120,7 @@ class OutputValidatorSLM:
         """Compile regex patterns for pattern-based checks."""
         self.pii_patterns = [
             (re.compile(r'\b\d{3}-\d{2}-\d{4}\b'), 'ssn', 5),
+            (re.compile(r'\b(?:ssn|social\s*security)[\s\w]*(?:is|:)\s*\d{9}\b', re.I), 'ssn', 5),
             (re.compile(r'\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b'), 'credit_card', 5),
             (re.compile(r'\b(?:cvv|cvc|cvv2)\s*[:=]?\s*\d{3,4}\b', re.I), 'cvv', 5),
             (re.compile(r'\b(?:expir|exp)[\w]*\s*[:=]?\s*\d{1,2}[/\-]\d{2,4}\b', re.I), 'expiry', 4),
@@ -131,8 +132,18 @@ class OutputValidatorSLM:
             (re.compile(r'\b(?:routing|aba)\s*(?:number|#)?\s*[:=]?\s*\d{9}\b', re.I), 'routing', 4),
             (re.compile(r'\blogin\s*id\s*(?:is|:)\s*\w+', re.I), 'login_id', 4),
             (re.compile(r'\bip\s*address\s*(?:is|:)\s*\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b', re.I), 'ip_address', 3),
-            (re.compile(r'\b\d{9}\b'), 'routing_number', 3),
         ]
+        
+        self.pii_domain_whitelist = {
+            'brandonsowers.com',
+            'brandonsowers.org',
+            'brandonforoffice.com',
+            'twitter.com',
+            'facebook.com',
+            'instagram.com',
+            'youtube.com',
+            'linkedin.com',
+        }
         
         self.fec_prohibited_patterns = [
             (re.compile(r'\b(?:your|this)\s+donation\s+(?:is|will be)\s+tax\s+deductible\b', re.I), 'tax_advice', 5),
@@ -553,6 +564,14 @@ class OutputValidatorSLM:
             method="anchor_resolution" if self._citation_store else "pattern"
         )
     
+    def _is_whitelisted_url(self, text: str) -> bool:
+        """Check if text contains only whitelisted domains."""
+        url_pattern = re.compile(r'(?:https?://)?(?:www\.)?([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})')
+        matches = url_pattern.findall(text.lower())
+        if not matches:
+            return False
+        return all(domain in self.pii_domain_whitelist for domain in matches)
+    
     async def _check_pii(self, response: str) -> OVResult:
         """
         Check for PII using DeBERTa fine-tuned model + pattern matching.
@@ -560,6 +579,7 @@ class OutputValidatorSLM:
         Hybrid approach:
         1. Pattern matching for structured PII (SSN, credit cards, etc.)
         2. DeBERTa for semantic PII detection (names, addresses, etc.)
+        3. Whitelist filtering for campaign domains
         """
         detected_pii = []
         max_score = 0
@@ -574,9 +594,29 @@ class OutputValidatorSLM:
                 pii_result = await self._deberta_pii.check_pii(response)
                 
                 if pii_result.score > max_score:
-                    max_score = pii_result.score
-                    for entity in pii_result.entities_found[:3]:
-                        detected_pii.append(f"slm:{entity.get('label', 'PII')}")
+                    filtered_entities = []
+                    for entity in pii_result.entities_found:
+                        entity_word = entity.get('word', '').lower().strip()
+                        entity_label = entity.get('label', '')
+                        
+                        is_whitelisted = False
+                        if 'URL' in entity_label or 'USERNAME' in entity_label:
+                            for domain in self.pii_domain_whitelist:
+                                domain_parts = domain.replace('.', '').lower()
+                                clean_word = entity_word.replace('.', '')
+                                if clean_word in domain_parts or domain_parts.startswith(clean_word) or response.lower().find(domain) >= 0:
+                                    is_whitelisted = True
+                                    break
+                        
+                        if not is_whitelisted:
+                            filtered_entities.append(entity)
+                    
+                    if filtered_entities:
+                        filtered_max = max(e.get('severity', 0) for e in filtered_entities)
+                        if filtered_max > max_score:
+                            max_score = filtered_max
+                            for entity in filtered_entities[:3]:
+                                detected_pii.append(f"slm:{entity.get('label', 'PII')}")
                         
             except Exception as e:
                 logger.warning(f"DeBERTa PII check failed: {e}")
