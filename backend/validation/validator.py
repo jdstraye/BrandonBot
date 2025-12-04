@@ -63,8 +63,23 @@ class TestPhase(Enum):
 
 
 @dataclass
+class ConversationTurn:
+    """Single turn in a conversation."""
+    turn_number: int
+    user_prompt: str
+    bot_response: str
+    tool_called: str = ""
+    pq_frustration: str = ""
+    pq_vagueness: str = ""
+    timestamp: str = ""
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class TestResult:
-    """Single test result
+    """Test result tracking a full conversation
     
     Scoring dimensions (0-5 scale, 0=worst, 5=best):
     - Clarity: Is the response easy to understand?
@@ -74,11 +89,15 @@ class TestResult:
     - Tone: Is it professional yet approachable?
     - Alignment: Does it align with AZ-01 district interests?
     
+    Scores apply to the ENTIRE conversation, not per-turn.
     Pass/Fail: PASS if all scores > 3 AND Tool_Called == Expected_Tool
     """
     test_id: str
     category: str
-    user_prompt: str
+    
+    turns: List[ConversationTurn] = field(default_factory=list)
+    
+    user_prompt: str = ""
     bot_response: str = ""
     turns_count: int = 1
     tool_called: str = ""
@@ -107,6 +126,32 @@ class TestResult:
     
     timestamp: str = ""
     duration_ms: int = 0
+    
+    def add_turn(self, user_prompt: str, bot_response: str, tool_called: str = "",
+                 pq_frustration: str = "", pq_vagueness: str = "") -> None:
+        """Add a conversation turn."""
+        turn = ConversationTurn(
+            turn_number=len(self.turns) + 1,
+            user_prompt=user_prompt,
+            bot_response=bot_response,
+            tool_called=tool_called,
+            pq_frustration=pq_frustration,
+            pq_vagueness=pq_vagueness,
+            timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        )
+        self.turns.append(turn)
+        self.turns_count = len(self.turns)
+        self.user_prompt = user_prompt
+        self.bot_response = bot_response
+        self.tool_called = tool_called
+    
+    def get_full_conversation(self) -> str:
+        """Get the full conversation as a formatted string for scoring."""
+        parts = []
+        for turn in self.turns:
+            parts.append(f"User: {turn.user_prompt}")
+            parts.append(f"Bot: {turn.bot_response}")
+        return "\n".join(parts)
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -302,7 +347,7 @@ class BrandonBotValidator:
                 test_id=test_id,
                 category="PQ",
                 user_prompt=test.get("input", ""),
-                timestamp=datetime.now().isoformat()
+                timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             )
             
             start_time = time.time()
@@ -391,7 +436,7 @@ class BrandonBotValidator:
                 category="OV_UNIT",
                 user_prompt=test.get("user_input", ""),
                 bot_response=test.get("injected_output", ""),
-                timestamp=datetime.now().isoformat()
+                timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             )
             
             start_time = time.time()
@@ -450,6 +495,7 @@ class BrandonBotValidator:
         - AgentOrchestrator must be available and initialized
         - LLM Judge must be available
         
+        Tracks all conversation turns. Scores apply to the ENTIRE conversation.
         No mock responses - errors out if dependencies aren't available.
         """
         results = []
@@ -490,18 +536,17 @@ class BrandonBotValidator:
                 result = TestResult(
                     test_id=test_id,
                     category=cat_key,
-                    user_prompt=prompt,
                     persona=persona.value,
                     engagement_style=style.value,
-                    timestamp=datetime.now().isoformat()
+                    timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 )
                 
                 start_time = time.time()
                 
                 try:
                     pq_result = await self.pq.analyze(prompt, session_id=session_id)
-                    result.pq_frustration = pq_result.frustration_decision.value
-                    result.pq_vagueness = pq_result.vagueness_decision.value
+                    pq_frustration = pq_result.frustration_decision.value
+                    pq_vagueness = pq_result.vagueness_decision.value
                     result.pq_flags = pq_result.pattern_flags.to_dict() if pq_result.pattern_flags else {}
                     
                     bot_response, metadata = await self.agent.process_message(
@@ -509,13 +554,22 @@ class BrandonBotValidator:
                         session_id=session_id
                     )
                     
-                    result.bot_response = bot_response
-                    result.tool_called = metadata.get("tool_called", "") if metadata else ""
+                    tool_called = metadata.get("tool_called", "") if metadata else ""
                     result.genai = metadata.get("model", "") if metadata else ""
                     
+                    result.add_turn(
+                        user_prompt=prompt,
+                        bot_response=bot_response,
+                        tool_called=tool_called,
+                        pq_frustration=pq_frustration,
+                        pq_vagueness=pq_vagueness
+                    )
+                    
+                    full_conversation = result.get_full_conversation()
                     scores = await self.judge.score_response(
                         user_query=prompt,
-                        bot_response=bot_response
+                        bot_response=bot_response,
+                        context=full_conversation if len(result.turns) > 1 else None
                     )
                     
                     result.score_clarity = scores.clarity
@@ -553,6 +607,8 @@ class BrandonBotValidator:
         3. User (LLM agent) provides progressively specific responses
         4. Bot eventually provides substantive answer
         
+        Tracks all turns. Scores apply to the ENTIRE conversation.
+        
         REQUIRES:
         - AgentOrchestrator for real bot responses
         - LLM Judge for user simulation
@@ -585,35 +641,48 @@ class BrandonBotValidator:
             result = TestResult(
                 test_id=test_id,
                 category="VAGUE_LOOP",
-                user_prompt=initial_prompt,
-                timestamp=datetime.now().isoformat()
+                persona=Persona.DOCILE.value,
+                engagement_style=EngagementStyle.SPECIFIC.value,
+                timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             )
             
             start_time = time.time()
             conversation = []
             bot_responses = []
-            user_clarifications = []
-            turns = 0
             session_id = f"vague_test_{i}_{int(time.time())}"
+            last_metadata = None
             
             try:
                 current_input = initial_prompt
+                turn_count = 0
                 
-                while turns < 5:
+                while turn_count < 5:
                     pq_result = await self.pq.analyze(current_input, session_id=session_id)
+                    pq_frustration = pq_result.frustration_decision.value
+                    pq_vagueness = pq_result.vagueness_decision.value
                     
                     bot_response, metadata = await self.agent.process_message(
                         user_message=current_input,
                         session_id=session_id
                     )
+                    last_metadata = metadata
                     logger.debug(f"Real agent response: {bot_response[:100]}")
+                    
+                    tool_called = metadata.get("tool_called", "") if metadata else ""
+                    result.add_turn(
+                        user_prompt=current_input,
+                        bot_response=bot_response,
+                        tool_called=tool_called,
+                        pq_frustration=pq_frustration,
+                        pq_vagueness=pq_vagueness
+                    )
                     
                     bot_responses.append(bot_response)
                     conversation.append({"role": "user", "content": current_input})
                     conversation.append({"role": "bot", "content": bot_response})
-                    turns += 1
+                    turn_count += 1
                     
-                    if turns >= 3 and pq_result.vagueness_decision == VaguenessDecision.CLEAR:
+                    if turn_count >= 3 and pq_result.vagueness_decision == VaguenessDecision.CLEAR:
                         break
                     
                     user_response = await self.judge.generate_user_response(
@@ -621,21 +690,32 @@ class BrandonBotValidator:
                         conversation_history=conversation,
                         persona=Persona.DOCILE,
                         style=EngagementStyle.SPECIFIC,
-                        clarification_count=turns
+                        clarification_count=turn_count
                     )
                     current_input = user_response.message
-                    user_clarifications.append(current_input)
                     logger.debug(f"LLM user agent response: {current_input[:100]}")
                 
-                result.turns_count = turns
-                
                 clarifying_questions = sum(1 for r in bot_responses if "?" in r)
-                passed = clarifying_questions >= 2 and turns >= 3
+                structure_passed = clarifying_questions >= 2 and turn_count >= 3
                 
+                full_conversation = result.get_full_conversation()
+                scores = await self.judge.score_response(
+                    user_query=initial_prompt,
+                    bot_response=bot_responses[-1] if bot_responses else "",
+                    context=full_conversation
+                )
+                
+                result.score_clarity = scores.clarity
+                result.score_empathy = scores.empathy
+                result.score_accuracy = scores.accuracy
+                result.score_engagement = scores.engagement
+                result.score_tone = scores.tone
+                result.score_alignment = scores.alignment
+                
+                passed = structure_passed and scores.all_passing
                 result.pass_fail = "PASS" if passed else "FAIL"
-                result.reasoning = f"Turns: {turns}, Clarifying: {clarifying_questions}"
-                result.bot_response = " | ".join(bot_responses)
-                result.genai = metadata.get("model", "") if metadata else ""
+                result.reasoning = f"Turns: {turn_count}, Clarifying: {clarifying_questions}, Scores: {scores.average:.2f}"
+                result.genai = last_metadata.get("model", "") if last_metadata else ""
                 
             except Exception as e:
                 result.pass_fail = "ERROR"
@@ -677,19 +757,24 @@ class BrandonBotValidator:
         return self.session
     
     def export_results(self, output_dir: str = None) -> str:
-        """Export validation results to CSV."""
+        """Export validation results to CSV.
+        
+        Format: One row per conversation turn.
+        Scores appear only on the final turn (conversation-level scoring).
+        Uses local time for timestamps.
+        """
         if not self.session:
             raise ValueError("No validation session to export")
         
         output_dir = output_dir or str(Path(__file__).parent / "results")
         os.makedirs(output_dir, exist_ok=True)
         
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        csv_path = os.path.join(output_dir, f"validation_results_{timestamp}.csv")
+        local_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        csv_path = os.path.join(output_dir, f"validation_results_{local_timestamp}.csv")
         
         fieldnames = [
-            "Test_ID", "Category", "User_Prompt", "Bot_Response", "Turns_Count",
-            "Tool_Called", "Expected_Tool",
+            "Test_ID", "Turn", "Category", "User_Prompt", "Bot_Response", 
+            "Tool_Called", "PQ_Frustration", "PQ_Vagueness",
             "Score_Clarity", "Score_Empathy", "Score_Accuracy", "Score_Engagement", "Score_Tone", "Score_Alignment",
             "Pass_Fail", "Reasoning",
             "GenAI", "Persona", "Engagement_Style",
@@ -701,33 +786,64 @@ class BrandonBotValidator:
             writer.writeheader()
             
             for result in self.session.results:
-                row = {
-                    "Test_ID": result.test_id,
-                    "Category": result.category,
-                    "User_Prompt": result.user_prompt,
-                    "Bot_Response": result.bot_response,
-                    "Turns_Count": result.turns_count,
-                    "Tool_Called": result.tool_called,
-                    "Expected_Tool": result.expected_tool,
-                    "Score_Clarity": result.score_clarity,
-                    "Score_Empathy": result.score_empathy,
-                    "Score_Accuracy": result.score_accuracy,
-                    "Score_Engagement": result.score_engagement,
-                    "Score_Tone": result.score_tone,
-                    "Score_Alignment": result.score_alignment,
-                    "Pass_Fail": result.pass_fail,
-                    "Reasoning": result.reasoning,
-                    "GenAI": result.genai,
-                    "Persona": result.persona,
-                    "Engagement_Style": result.engagement_style,
-                    "Timestamp": result.timestamp,
-                    "Duration_ms": result.duration_ms
-                }
-                writer.writerow(row)
+                if result.turns:
+                    total_turns = len(result.turns)
+                    for i, turn in enumerate(result.turns):
+                        is_final_turn = (i == total_turns - 1)
+                        
+                        row = {
+                            "Test_ID": result.test_id,
+                            "Turn": turn.turn_number,
+                            "Category": result.category,
+                            "User_Prompt": turn.user_prompt,
+                            "Bot_Response": turn.bot_response,
+                            "Tool_Called": turn.tool_called,
+                            "PQ_Frustration": turn.pq_frustration,
+                            "PQ_Vagueness": turn.pq_vagueness,
+                            "Score_Clarity": result.score_clarity if is_final_turn else "",
+                            "Score_Empathy": result.score_empathy if is_final_turn else "",
+                            "Score_Accuracy": result.score_accuracy if is_final_turn else "",
+                            "Score_Engagement": result.score_engagement if is_final_turn else "",
+                            "Score_Tone": result.score_tone if is_final_turn else "",
+                            "Score_Alignment": result.score_alignment if is_final_turn else "",
+                            "Pass_Fail": result.pass_fail if is_final_turn else "",
+                            "Reasoning": result.reasoning if is_final_turn else "",
+                            "GenAI": result.genai if is_final_turn else "",
+                            "Persona": result.persona,
+                            "Engagement_Style": result.engagement_style,
+                            "Timestamp": turn.timestamp,
+                            "Duration_ms": result.duration_ms if is_final_turn else ""
+                        }
+                        writer.writerow(row)
+                else:
+                    row = {
+                        "Test_ID": result.test_id,
+                        "Turn": 1,
+                        "Category": result.category,
+                        "User_Prompt": result.user_prompt,
+                        "Bot_Response": result.bot_response,
+                        "Tool_Called": result.tool_called,
+                        "PQ_Frustration": result.pq_frustration,
+                        "PQ_Vagueness": result.pq_vagueness,
+                        "Score_Clarity": result.score_clarity,
+                        "Score_Empathy": result.score_empathy,
+                        "Score_Accuracy": result.score_accuracy,
+                        "Score_Engagement": result.score_engagement,
+                        "Score_Tone": result.score_tone,
+                        "Score_Alignment": result.score_alignment,
+                        "Pass_Fail": result.pass_fail,
+                        "Reasoning": result.reasoning,
+                        "GenAI": result.genai,
+                        "Persona": result.persona,
+                        "Engagement_Style": result.engagement_style,
+                        "Timestamp": result.timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "Duration_ms": result.duration_ms
+                    }
+                    writer.writerow(row)
         
         logger.info(f"Results exported to: {csv_path}")
         
-        summary_path = os.path.join(output_dir, f"validation_summary_{timestamp}.json")
+        summary_path = os.path.join(output_dir, f"validation_summary_{local_timestamp}.json")
         summary = {
             "session_id": self.session.session_id,
             "phase": self.session.phase.value,
