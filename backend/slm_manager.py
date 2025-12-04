@@ -410,11 +410,11 @@ class SLMManager:
                         detected_emotion="fear"
                     )
             
-            if sadness_score > 0.4:
+            if sadness_score > 0.4 and (has_severe_flags or has_frustration_signals or has_repetition_frustration):
                 return SLMResponse(
                     decision="ESCALATE",
                     confidence=sadness_score,
-                    explanation=f"High sadness detected: sadness={sadness_score:.2f}",
+                    explanation=f"High sadness with frustration signals: sadness={sadness_score:.2f}",
                     raw_output=str(emotion_scores),
                     detected_emotion="sadness"
                 )
