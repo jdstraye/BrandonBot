@@ -732,11 +732,20 @@ SUPPLEMENTARY SOURCES (Trust 0.6):
    - Use ONLY for explicit comparison questions
 
 OTHER TOOLS:
-4. perform_web_search: Search the internet for current events, competitor info
+4. perform_web_search: Search the internet for current events, competitor info, Brandon's schedule
+   - MUST USE for any claims about Brandon's CURRENT activities, appearances, or schedule
+   - MUST USE before saying what Brandon is "doing today" or "this week"
+   - Use for competitor research, recent news, external claims to verify
 5. retrieve_answer_style: Get copywriting guidance (use after gathering facts)
 6. register_volunteer: Sign up volunteers
 7. make_donation: Process donation requests
 8. check_fec_rules: Verify FEC compliance for donations
+
+GREETINGS AND SMALL TALK:
+- For greetings like "Hi" or "How are you?", respond warmly and ask how you can help
+- Do NOT fabricate Brandon's current activities or whereabouts
+- If you want to share what Brandon is doing, USE perform_web_search first to find real information
+- Prefer asking clarifying questions over inventing details
 
 SENSITIVE TOPICS (offer callback):
 - Abortion, gun rights, immigration enforcement
@@ -1071,14 +1080,8 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
                     else:
                         # Max regenerations exceeded - use safe fallback
                         final_response = "I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?"
-                        logger.warning(f"[{request_id}] Max regenerations exceeded, using fallback")
-                        break
-                    
-                    # Check for critical violations (score = 5)
-                    if validation_result.max_violation >= 5:
-                        final_response = "I'm not able to provide that information. Would you like someone from the team to call you back?"
                         metadata["blocked_by_ov"] = True
-                        logger.error(f"[{request_id}] OV blocked response: {validation_result.rejection_reason}")
+                        logger.warning(f"[{request_id}] Max regenerations ({max_regenerations}) exceeded, using fallback. Last rejection: {validation_result.rejection_reason}")
                         break
             
             session.add_turn(ConversationRole.ASSISTANT, final_response)
