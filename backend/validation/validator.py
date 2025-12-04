@@ -688,12 +688,12 @@ class BrandonBotValidator:
         csv_path = os.path.join(output_dir, f"validation_results_{timestamp}.csv")
         
         fieldnames = [
-            "test_id", "category", "user_prompt", "bot_response", "turns_count",
-            "tool_called", "expected_tool",
-            "score_clarity", "score_empathy", "score_accuracy", "score_engagement", "score_tone", "score_alignment",
-            "pass_fail", "reasoning",
-            "genai", "persona", "engagement_style",
-            "timestamp", "duration_ms"
+            "Test_ID", "Category", "User_Prompt", "Bot_Response", "Turns_Count",
+            "Tool_Called", "Expected_Tool",
+            "Score_Clarity", "Score_Empathy", "Score_Accuracy", "Score_Engagement", "Score_Tone", "Score_Alignment",
+            "Pass_Fail", "Reasoning",
+            "GenAI", "Persona", "Engagement_Style",
+            "Timestamp", "Duration_ms"
         ]
         
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
@@ -701,7 +701,28 @@ class BrandonBotValidator:
             writer.writeheader()
             
             for result in self.session.results:
-                row = result.to_dict()
+                row = {
+                    "Test_ID": result.test_id,
+                    "Category": result.category,
+                    "User_Prompt": result.user_prompt,
+                    "Bot_Response": result.bot_response,
+                    "Turns_Count": result.turns_count,
+                    "Tool_Called": result.tool_called,
+                    "Expected_Tool": result.expected_tool,
+                    "Score_Clarity": result.score_clarity,
+                    "Score_Empathy": result.score_empathy,
+                    "Score_Accuracy": result.score_accuracy,
+                    "Score_Engagement": result.score_engagement,
+                    "Score_Tone": result.score_tone,
+                    "Score_Alignment": result.score_alignment,
+                    "Pass_Fail": result.pass_fail,
+                    "Reasoning": result.reasoning,
+                    "GenAI": result.genai,
+                    "Persona": result.persona,
+                    "Engagement_Style": result.engagement_style,
+                    "Timestamp": result.timestamp,
+                    "Duration_ms": result.duration_ms
+                }
                 writer.writerow(row)
         
         logger.info(f"Results exported to: {csv_path}")
