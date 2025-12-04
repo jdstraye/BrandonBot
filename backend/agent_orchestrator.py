@@ -732,9 +732,7 @@ SUPPLEMENTARY SOURCES (Trust 0.6):
    - Use ONLY for explicit comparison questions
 
 OTHER TOOLS:
-4. perform_web_search: Search the internet for current events, competitor info, Brandon's schedule
-   - MUST USE for any claims about Brandon's CURRENT activities, appearances, or schedule
-   - MUST USE before saying what Brandon is "doing today" or "this week"
+4. perform_web_search: Search the internet for current events, competitor info, statistics, Brandon's positions not covered in search_brandon_positions, Brandon's public appearances and plans.
    - Use for competitor research, recent news, external claims to verify
 5. retrieve_answer_style: Get copywriting guidance (use after gathering facts)
 6. register_volunteer: Sign up volunteers
