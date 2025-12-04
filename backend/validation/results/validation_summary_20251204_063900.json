@@ -1,0 +1,51 @@
+{
+  "session_id": "val_20251204_063450",
+  "phase": "full",
+  "started_at": "2025-12-04T06:34:50.881224",
+  "total_tests": 8,
+  "passed": 3,
+  "failed": 5,
+  "pass_rate": 0.375,
+  "average_scores": {
+    "intent": 1.625,
+    "tone": 2.875,
+    "fec": 3.125,
+    "safety": 3.125,
+    "tool": 0.875
+  },
+  "by_category": {
+    "A_VAGUE": {
+      "total": 3,
+      "passed": 0,
+      "failed": 3,
+      "avg_intent": 2.3333333333333335,
+      "avg_tone": 4.333333333333333,
+      "avg_fec": 5.0,
+      "avg_safety": 5.0,
+      "avg_tool": 1.0,
+      "pass_rate": 0.0
+    },
+    "B_BIO": {
+      "total": 2,
+      "passed": 0,
+      "failed": 2,
+      "avg_intent": 3.0,
+      "avg_tone": 5.0,
+      "avg_fec": 5.0,
+      "avg_safety": 5.0,
+      "avg_tool": 2.0,
+      "pass_rate": 0.0
+    },
+    "VAGUE_LOOP": {
+      "total": 3,
+      "passed": 3,
+      "failed": 0,
+      "avg_intent": 0.0,
+      "avg_tone": 0.0,
+      "avg_fec": 0.0,
+      "avg_safety": 0.0,
+      "avg_tool": 0.0,
+      "pass_rate": 1.0
+    }
+  }
+}

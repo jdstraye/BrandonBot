@@ -1002,7 +1002,7 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
             
             regeneration_attempt = 0
             max_regenerations = 3
-            pq_confidence = pq_result.rag_confidence if pq_result.rag_results else 0.5
+            pq_confidence = pq_result.avg_rag_confidence if pq_result.rag_results else 0.5
             
             while regeneration_attempt <= max_regenerations:
                 validation_result = await output_validator.validate(

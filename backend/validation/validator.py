@@ -38,10 +38,14 @@ from ollama_judge import OllamaJudge, JudgeScore, Persona, EngagementStyle
 
 try:
     from agent_orchestrator import AgentOrchestrator
+    from weaviate_manager import WeaviateManager
+    from slm_manager import SLMManager
     AGENT_AVAILABLE = True
 except ImportError:
     AGENT_AVAILABLE = False
     AgentOrchestrator = None
+    WeaviateManager = None
+    SLMManager = None
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -150,6 +154,8 @@ class BrandonBotValidator:
         self.ov = OutputValidatorSLM(require_slm=require_slm)
         self.judge = OllamaJudge() if use_judge else None
         self.agent = None
+        self._weaviate = None
+        self._slm_manager = None
         self._agent_initialized = False
         self._use_agent = use_agent and AGENT_AVAILABLE
         
@@ -200,7 +206,7 @@ class BrandonBotValidator:
         logger.info("FEC RAG configured for validation harness")
     
     async def _ensure_agent_ready(self) -> bool:
-        """Initialize the AgentOrchestrator if needed and available."""
+        """Initialize the AgentOrchestrator with all required dependencies."""
         if not self._use_agent or not AGENT_AVAILABLE:
             return False
         
@@ -208,14 +214,34 @@ class BrandonBotValidator:
             return self.agent is not None
         
         try:
-            logger.info("Initializing AgentOrchestrator for vague loop testing...")
-            self.agent = AgentOrchestrator()
-            await self.agent.initialize()
+            logger.info("Initializing SLMManager for validation...")
+            self._slm_manager = SLMManager()
+            logger.info("SLMManager created (lazy loading)")
+            
+            logger.info("Wiring SLM provider to Prequalifier...")
+            self.pq.set_slm_provider(self._slm_manager)
+            logger.info("Prequalifier SLM provider configured")
+            
+            logger.info("Initializing WeaviateManager for AgentOrchestrator...")
+            self._weaviate = WeaviateManager()
+            await self._weaviate.initialize()
+            logger.info("WeaviateManager initialized successfully")
+            
+            logger.info("Wiring Weaviate to Prequalifier...")
+            self.pq.set_weaviate_manager(self._weaviate)
+            
+            logger.info("Initializing AgentOrchestrator...")
+            self.agent = AgentOrchestrator(
+                weaviate_manager=self._weaviate, 
+                slm_manager=self._slm_manager
+            )
             self._agent_initialized = True
             logger.info("AgentOrchestrator initialized successfully")
             return True
         except Exception as e:
-            logger.warning(f"Failed to initialize AgentOrchestrator: {e}")
+            logger.error(f"Failed to initialize AgentOrchestrator: {e}")
+            import traceback
+            traceback.print_exc()
             self._agent_initialized = True
             self.agent = None
             return False
@@ -405,13 +431,31 @@ class BrandonBotValidator:
         return results
     
     async def run_full_validation(self, max_prompts: int = None) -> List[TestResult]:
-        """Run Phase 4: Full conversational validation with Judge."""
+        """Run Phase 4: Full conversational validation with Judge.
+        
+        REQUIRES: 
+        - AgentOrchestrator must be available and initialized
+        - LLM Judge must be available
+        
+        No mock responses - errors out if dependencies aren't available.
+        """
         results = []
         
-        if self.judge:
-            available = await self.judge.check_availability()
-            if not available:
-                logger.warning("Ollama Judge not available - scores will be 0")
+        if not AGENT_AVAILABLE:
+            raise RuntimeError("AgentOrchestrator not available - cannot run full validation without real agent")
+        
+        agent_ready = await self._ensure_agent_ready()
+        if not agent_ready or self.agent is None:
+            raise RuntimeError("AgentOrchestrator failed to initialize - cannot run full validation without real agent")
+        
+        if not self.judge:
+            raise RuntimeError("LLM Judge not configured - cannot run full validation without judge")
+        
+        judge_available = await self.judge.check_availability()
+        if not judge_available:
+            raise RuntimeError("LLM Judge not available - cannot run full validation without judge")
+        
+        logger.info("Full validation: Agent and Judge both available - using real responses")
         
         categories = self.test_data.get("categories", {})
         prompt_count = 0
@@ -428,6 +472,7 @@ class BrandonBotValidator:
                 
                 persona = self._select_persona()
                 style = self._select_style()
+                session_id = f"full_val_{test_id}_{int(time.time())}"
                 
                 result = TestResult(
                     test_id=test_id,
@@ -441,31 +486,33 @@ class BrandonBotValidator:
                 start_time = time.time()
                 
                 try:
-                    pq_result = await self.pq.analyze(prompt, session_id="validation")
+                    pq_result = await self.pq.analyze(prompt, session_id=session_id)
                     result.pq_frustration = pq_result.frustration_decision.value
                     result.pq_vagueness = pq_result.vagueness_decision.value
                     result.pq_flags = pq_result.pattern_flags.to_dict() if pq_result.pattern_flags else {}
                     
-                    if self.judge and await self.judge.check_availability():
-                        mock_response = f"Thank you for your question about: {prompt[:50]}... This is a placeholder response."
-                        
-                        scores = await self.judge.score_response(
-                            user_query=prompt,
-                            bot_response=mock_response
-                        )
-                        
-                        result.score_intent = scores.intent_accuracy
-                        result.score_tone = scores.tone
-                        result.score_fec = scores.fec_compliance
-                        result.score_safety = scores.safety
-                        result.score_tool = scores.tool_usage
-                        result.reasoning = scores.reasoning
-                        result.bot_response = mock_response
-                        
-                        result.pass_fail = "PASS" if scores.all_passing else "FAIL"
-                    else:
-                        result.pass_fail = "SKIP"
-                        result.reasoning = "Judge not available"
+                    bot_response, metadata = await self.agent.process_message(
+                        user_message=prompt,
+                        session_id=session_id
+                    )
+                    
+                    result.bot_response = bot_response
+                    result.tool_called = metadata.get("tool_called", "") if metadata else ""
+                    result.genai = metadata.get("model", "") if metadata else ""
+                    
+                    scores = await self.judge.score_response(
+                        user_query=prompt,
+                        bot_response=bot_response
+                    )
+                    
+                    result.score_intent = scores.intent_accuracy
+                    result.score_tone = scores.tone
+                    result.score_fec = scores.fec_compliance
+                    result.score_safety = scores.safety
+                    result.score_tool = scores.tool_usage
+                    result.reasoning = scores.reasoning
+                    
+                    result.pass_fail = "PASS" if scores.all_passing else "FAIL"
                 
                 except Exception as e:
                     result.pass_fail = "ERROR"
@@ -487,26 +534,34 @@ class BrandonBotValidator:
         
         Tests the clarification loop where:
         1. User sends vague initial message
-        2. Bot asks clarifying questions (real agent if available, mock otherwise)
+        2. Bot asks clarifying questions (real agent required)
         3. User (LLM agent) provides progressively specific responses
         4. Bot eventually provides substantive answer
         
-        Requires:
-        - AgentOrchestrator for real bot responses (optional)
-        - Ollama with Llama 3.1 8B for LLM user agent (optional)
+        REQUIRES:
+        - AgentOrchestrator for real bot responses
+        - LLM Judge for user simulation
         
-        Falls back to mock/canned responses when dependencies unavailable.
+        No mock responses - errors out if dependencies aren't available.
         """
+        if not AGENT_AVAILABLE:
+            raise RuntimeError("AgentOrchestrator not available - cannot run vague loop test without real agent")
+        
+        agent_ready = await self._ensure_agent_ready()
+        if not agent_ready or self.agent is None:
+            raise RuntimeError("AgentOrchestrator failed to initialize - cannot run vague loop test without real agent")
+        
+        if not self.judge:
+            raise RuntimeError("LLM Judge not configured - cannot run vague loop test without judge")
+        
+        judge_available = await self.judge.check_availability()
+        if not judge_available:
+            raise RuntimeError("LLM Judge not available - cannot run vague loop test without judge")
+        
+        logger.info("Vague loop test: Agent and Judge both available - using real responses")
+        
         results = []
         vague_prompts = ["Hi Brandon", "Hi Brandon, I'm Jayson.", "Hi Brandon, How are you today?"]
-        
-        judge_available = self.judge and await self.judge.check_availability()
-        agent_available = await self._ensure_agent_ready()
-        
-        if not judge_available:
-            logger.warning("Ollama judge not available - using canned user responses for vague loop")
-        if not agent_available:
-            logger.warning("AgentOrchestrator not available - using mock bot responses for vague loop")
         
         for i, initial_prompt in enumerate(vague_prompts):
             test_id = f"VAGUE-{i:03d}"
@@ -532,20 +587,11 @@ class BrandonBotValidator:
                 while turns < 5:
                     pq_result = await self.pq.analyze(current_input, session_id=session_id)
                     
-                    if agent_available and self.agent:
-                        try:
-                            bot_response, metadata = await self.agent.process_message(
-                                user_message=current_input,
-                                session_id=session_id
-                            )
-                            logger.debug(f"Real agent response: {bot_response[:100]}")
-                        except Exception as e:
-                            logger.warning(f"Agent call failed, falling back to mock: {e}")
-                            bot_response = "I'd be happy to help! Could you tell me more about what you're interested in?"
-                    else:
-                        bot_response = "I'd be happy to help! Could you tell me more about what you're interested in?"
-                        if turns >= 2 and pq_result.vagueness_decision == VaguenessDecision.CLEAR:
-                            bot_response = "Based on Brandon's platform, here's information about that topic..."
+                    bot_response, metadata = await self.agent.process_message(
+                        user_message=current_input,
+                        session_id=session_id
+                    )
+                    logger.debug(f"Real agent response: {bot_response[:100]}")
                     
                     bot_responses.append(bot_response)
                     conversation.append({"role": "user", "content": current_input})
@@ -555,25 +601,16 @@ class BrandonBotValidator:
                     if turns >= 3 and pq_result.vagueness_decision == VaguenessDecision.CLEAR:
                         break
                     
-                    if judge_available:
-                        user_response = await self.judge.generate_user_response(
-                            bot_response=bot_response,
-                            conversation_history=conversation,
-                            persona=Persona.DOCILE,
-                            style=EngagementStyle.SPECIFIC,
-                            clarification_count=turns
-                        )
-                        current_input = user_response.message
-                        user_clarifications.append(current_input)
-                        logger.debug(f"LLM user agent response: {current_input[:100]}")
-                    else:
-                        clarifications = [
-                            "I'm interested in water rights.",
-                            "Tell me about your tax policy.",
-                            "I want to know about healthcare."
-                        ]
-                        current_input = clarifications[min(turns, len(clarifications)-1)]
-                        user_clarifications.append(current_input)
+                    user_response = await self.judge.generate_user_response(
+                        bot_response=bot_response,
+                        conversation_history=conversation,
+                        persona=Persona.DOCILE,
+                        style=EngagementStyle.SPECIFIC,
+                        clarification_count=turns
+                    )
+                    current_input = user_response.message
+                    user_clarifications.append(current_input)
+                    logger.debug(f"LLM user agent response: {current_input[:100]}")
                 
                 result.turns_count = turns
                 
@@ -581,9 +618,9 @@ class BrandonBotValidator:
                 passed = clarifying_questions >= 2 and turns >= 3
                 
                 result.pass_fail = "PASS" if passed else "FAIL"
-                result.reasoning = f"Turns: {turns}, Clarifying: {clarifying_questions}, Agent: {agent_available}, LLM user: {judge_available}"
+                result.reasoning = f"Turns: {turns}, Clarifying: {clarifying_questions}"
                 result.bot_response = " | ".join(bot_responses)
-                result.genai = f"agent:{agent_available}|user:{judge_available}"
+                result.genai = metadata.get("model", "") if metadata else ""
                 
             except Exception as e:
                 result.pass_fail = "ERROR"
@@ -776,7 +813,8 @@ async def main():
     print(f"\nStarting BrandonBot Validation - Phase: {phase.value}")
     print(f"Testing mode: {TESTING_MODE}")
     
-    validator = BrandonBotValidator(use_judge=not args.no_judge)
+    use_agent = phase in [TestPhase.FULL, TestPhase.ALL]
+    validator = BrandonBotValidator(use_judge=not args.no_judge, use_agent=use_agent)
     
     session = await validator.run_validation(phase, args.max_prompts)
     

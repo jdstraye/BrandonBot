@@ -15,13 +15,19 @@ class WeaviateManager:
         
     async def initialize(self):
         try:
-            logger.info("Starting Weaviate in embedded mode (no Docker required)...")
-            self.client = weaviate.connect_to_embedded(
-                persistence_data_path=self.persist_directory,
-                binary_path="./weaviate_binary"
-            )
+            try:
+                logger.info("Attempting to connect to existing Weaviate instance...")
+                self.client = weaviate.connect_to_local(port=8079, grpc_port=50050)
+                logger.info("Connected to existing Weaviate instance successfully")
+            except Exception as connect_err:
+                logger.info(f"No existing Weaviate instance found, starting embedded mode...")
+                self.client = weaviate.connect_to_embedded(
+                    persistence_data_path=self.persist_directory,
+                    binary_path="./weaviate_binary"
+                )
+                logger.info("Weaviate initialized successfully in embedded mode")
+            
             await self._create_collections()
-            logger.info("Weaviate initialized successfully in embedded mode")
         except Exception as e:
             logger.error(f"Failed to initialize Weaviate: {str(e)}")
             raise
