@@ -30,6 +30,7 @@ from llm_providers import LLMProviderManager
 from intent_detector import intent_detector, UserIntent, escalation_detector
 from prequalifier import prequalifier, PrequalifierResult, FrustrationDecision, VaguenessDecision
 from output_validator import output_validator, OVValidationResult, ValidationStatus, RejectionReason, OVSafeguard
+from validation_debug import get_debug_db
 
 logger = logging.getLogger(__name__)
 
@@ -1032,6 +1033,20 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
                     })
                     
                     logger.warning(f"[{request_id}] OV rejected (attempt {regeneration_attempt}): {validation_result.rejection_reason}")
+                    
+                    # Log to debug DB for investigation
+                    try:
+                        debug_db = get_debug_db()
+                        debug_db.log_all_ov_failures(
+                            query=sanitized_message,
+                            original_response=final_response,
+                            validation_result=validation_result,
+                            test_id=metadata.get("test_id"),
+                            session_id=session_id,
+                            request_id=request_id
+                        )
+                    except Exception as db_err:
+                        logger.warning(f"[{request_id}] Failed to log OV rejection to debug DB: {db_err}")
                     
                     if regeneration_attempt <= max_regenerations:
                         # Get feedback for regeneration
