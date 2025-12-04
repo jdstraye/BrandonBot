@@ -129,23 +129,9 @@ class OutputValidatorSLM:
         self._berttiny = None
         self._citation_store = None
         self._fec_rag = None
-        self._slm_client = None
         self._require_slm = require_slm
         
         self._compile_patterns()
-    
-    def set_slm_client(self, slm_client):
-        """
-        Set the SLM client for API-based classification (Nvidia in Replit mode).
-        
-        When set, this client is used for intent alignment, ethics checks, and 
-        FEC compliance instead of local SLM models.
-        
-        Args:
-            slm_client: SLMClient instance configured for Nvidia or Ollama
-        """
-        self._slm_client = slm_client
-        logger.info(f"OutputValidator: SLM client set (mode: {slm_client.mode})")
     
     def _compile_patterns(self):
         """Compile regex patterns for pattern-based checks."""
@@ -371,33 +357,13 @@ class OutputValidatorSLM:
     
     async def _check_intent(self, query: str, response: str) -> OVResult:
         """
-        Check if response addresses the user's intent using SLM client or MS-MARCO.
+        Check if response addresses the user's intent using MS-MARCO cross-encoder.
         
-        Priority:
-        1. SLM client (Nvidia API or Ollama)
-        2. MS-MARCO cross-encoder (local model)
-        3. Pattern fallback (if require_slm=False)
+        MS-MARCO is trained on QA pairs, optimal for detecting query-response alignment.
         
         Raises:
-            SLMNotAvailableError: If require_slm=True and no SLM is available.
+            SLMNotAvailableError: If require_slm=True and MS-MARCO cannot be loaded.
         """
-        if self._slm_client is not None:
-            try:
-                aligned, confidence, reasoning = await self._slm_client.classify_intent_alignment(
-                    user_query=query,
-                    bot_response=response
-                )
-                score = 0 if aligned else 4
-                return OVResult(
-                    safeguard=OVSafeguard.INTENT_CHECKING,
-                    score=score,
-                    confidence=confidence,
-                    explanation=reasoning or ("Response aligns with intent" if aligned else "Response does not address query"),
-                    method=f"slm_client_{self._slm_client.mode}"
-                )
-            except Exception as e:
-                logger.warning(f"SLM client intent check failed: {e}")
-        
         if await self._ensure_msmarco_ready():
             try:
                 intent_result = await self._msmarco.check_intent(query, response)
@@ -412,8 +378,8 @@ class OutputValidatorSLM:
                 if self._require_slm:
                     raise SLMNotAvailableError(f"MS-MARCO intent check failed: {e}")
                 logger.warning(f"MS-MARCO intent check failed, falling back to patterns: {e}")
-        elif self._require_slm and self._slm_client is None:
-            raise SLMNotAvailableError("No SLM available for intent checking. Set require_slm=False to use pattern fallback.")
+        elif self._require_slm:
+            raise SLMNotAvailableError("MS-MARCO intent model not available. Set require_slm=False to use pattern fallback.")
         
         return await self._check_intent_fallback(query, response)
     
@@ -462,30 +428,15 @@ class OutputValidatorSLM:
     
     async def _check_ethics(self, response: str) -> OVResult:
         """
-        Check for ethics violations using SLM client or ME2-BERT.
+        Check for ethics violations using ME2-BERT (Moral Foundations Theory).
         
-        Priority:
-        1. SLM client (Nvidia API or Ollama)
-        2. ME2-BERT (local model with Moral Foundations Theory)
-        3. Pattern fallback (if require_slm=False)
+        ME2-BERT detects 10 moral dimensions aligned with Judeo-Christian ethics:
+        - Harm, Cheating, Betrayal, Subversion, Degradation (violations)
+        - Care, Fairness, Loyalty, Authority, Purity (virtues)
         
         Raises:
-            SLMNotAvailableError: If require_slm=True and no SLM is available.
+            SLMNotAvailableError: If require_slm=True and ME2-BERT cannot be loaded.
         """
-        if self._slm_client is not None:
-            try:
-                is_safe, confidence, issue = await self._slm_client.classify_ethics(response)
-                score = 0 if is_safe else 5
-                return OVResult(
-                    safeguard=OVSafeguard.ETHICS_MORALITY,
-                    score=score,
-                    confidence=confidence,
-                    explanation=issue if issue else ("No ethics issues detected" if is_safe else "Ethics violation detected"),
-                    method=f"slm_client_{self._slm_client.mode}"
-                )
-            except Exception as e:
-                logger.warning(f"SLM client ethics check failed: {e}")
-        
         if await self._ensure_me2bert_ready():
             try:
                 ethics_result = await self._me2bert.check_ethics(response)
@@ -500,8 +451,8 @@ class OutputValidatorSLM:
                 if self._require_slm:
                     raise SLMNotAvailableError(f"ME2-BERT ethics check failed: {e}")
                 logger.warning(f"ME2-BERT ethics check failed, falling back to patterns: {e}")
-        elif self._require_slm and self._slm_client is None:
-            raise SLMNotAvailableError("No SLM available for ethics checking. Set require_slm=False to use pattern fallback.")
+        elif self._require_slm:
+            raise SLMNotAvailableError("ME2-BERT ethics model not available. Set require_slm=False to use pattern fallback.")
         
         return await self._check_ethics_fallback(response)
     
@@ -530,57 +481,25 @@ class OutputValidatorSLM:
     
     async def _check_fec(self, response: str) -> OVResult:
         """
-        Check FEC compliance using SLM client, RAG lookup, and pattern matching.
+        Check FEC compliance using RAG lookup + pattern matching.
         
-        Priority:
-        1. SLM client (Nvidia API or Ollama) for classification
+        Per specification:
+        1. Pattern match for obvious violations
         2. RAG query prohibited statements collection (FECProhibited collection)
-        3. Pattern matching for obvious violations
+        3. Binary violation classification
         
         When require_slm=True:
-        - Either SLM client OR FEC RAG must be available
+        - RAG MUST be available for comprehensive FEC checking
         - Pattern matching alone is not sufficient for FEC compliance
-        - Raises SLMNotAvailableError if neither is configured
+        - Raises SLMNotAvailableError if FEC RAG not configured
         
         Raises:
-            SLMNotAvailableError: If require_slm=True and no SLM/RAG is available.
+            SLMNotAvailableError: If require_slm=True and FEC RAG not configured.
         """
-        if self._slm_client is not None:
-            try:
-                fec_context = None
-                if self._fec_rag:
-                    try:
-                        rag_results = await self._fec_rag.search(
-                            collection_name="FECProhibited",
-                            query=response[:200],
-                            limit=3
-                        )
-                        if rag_results:
-                            fec_context = "\n".join([r.get("content", "")[:200] for r in rag_results])
-                    except Exception as e:
-                        logger.warning(f"FEC RAG pre-fetch failed: {e}")
-                
-                is_compliant, confidence, issue = await self._slm_client.classify_fec_compliance(
-                    response=response,
-                    fec_context=fec_context
-                )
-                score = 0 if is_compliant else 5
-                return OVResult(
-                    safeguard=OVSafeguard.FEC_COMPLIANCE,
-                    score=score,
-                    confidence=confidence,
-                    explanation=issue if issue else ("FEC compliant" if is_compliant else "FEC violation detected"),
-                    method=f"slm_client_{self._slm_client.mode}"
-                )
-            except Exception as e:
-                if self._require_slm:
-                    raise SLMNotAvailableError(f"SLM FEC classification failed: {e}")
-                logger.warning(f"SLM client FEC check failed, falling back to patterns: {e}")
-        
-        if self._require_slm and self._slm_client is None:
+        if self._require_slm and not self._fec_rag:
             raise SLMNotAvailableError(
-                "FEC compliance check requires SLM client when require_slm=True. "
-                "Call set_slm_client() or set require_slm=False for pattern-only fallback."
+                "FEC RAG not configured. FEC compliance requires RAG retrieval from FECProhibited collection. "
+                "Call set_fec_rag() with WeaviateManager or set require_slm=False for pattern-only fallback."
             )
         
         detected_violations = []

@@ -183,10 +183,10 @@ Respond with ONLY the message the voter would say, nothing else."""
         EngagementStyle.FLATTERING: "uses excessive praise, calls the bot genius, agrees with everything",
     }
     
-    def __init__(self, host: Optional[str] = None, model: Optional[str] = None):
+    def __init__(self, host: str = None, model: str = None):
         self.host = host or OLLAMA_HOST
         self.model = model or JUDGE_MODEL
-        self._available: Optional[bool] = None
+        self._available = None
     
     async def check_availability(self) -> bool:
         """Check if Ollama is available and the model is loaded."""
@@ -207,7 +207,7 @@ Respond with ONLY the message the voter would say, nothing else."""
             self._available = False
             return False
     
-    async def _generate(self, prompt: str, system: Optional[str] = None) -> str:
+    async def _generate(self, prompt: str, system: str = None) -> str:
         """Generate a response from Ollama."""
         if self._available is None:
             await self.check_availability()
@@ -246,9 +246,9 @@ Respond with ONLY the message the voter would say, nothing else."""
         self,
         user_query: str,
         bot_response: str,
-        tool_called: Optional[str] = None,
-        expected_tool: Optional[str] = None,
-        context: Optional[str] = None
+        tool_called: str = None,
+        expected_tool: str = None,
+        context: str = None
     ) -> JudgeScore:
         """
         Score a BrandonBot response using the LLM Judge.

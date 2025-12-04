@@ -34,40 +34,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from prequalifier import Prequalifier, FrustrationDecision, VaguenessDecision, PatternFlags
 from output_validator import OutputValidatorSLM, OVSafeguard, SLMNotAvailableError
 from security import rate_limiter, input_sanitizer
-
-try:
-    from judge import UnifiedJudge, detect_deployment_mode
-    from nvidia_judge import JudgeScore, Persona, EngagementStyle
-    UNIFIED_JUDGE_AVAILABLE = True
-except ImportError:
-    UNIFIED_JUDGE_AVAILABLE = False
-    UnifiedJudge = None
-    detect_deployment_mode = None
-
-try:
-    from slm_client import SLMClient
-    SLM_CLIENT_AVAILABLE = True
-except ImportError:
-    SLM_CLIENT_AVAILABLE = False
-    SLMClient = None
-
-try:
-    from ollama_judge import OllamaJudge, JudgeScore as OllamaJudgeScore, Persona as OllamaPersona, EngagementStyle as OllamaEngagementStyle
-    OLLAMA_JUDGE_AVAILABLE = True
-    if not UNIFIED_JUDGE_AVAILABLE:
-        JudgeScore = OllamaJudgeScore
-        Persona = OllamaPersona
-        EngagementStyle = OllamaEngagementStyle
-except ImportError:
-    OLLAMA_JUDGE_AVAILABLE = False
-    OllamaJudge = None
-
-try:
-    from api_judge import APIJudge
-    API_JUDGE_AVAILABLE = True
-except ImportError:
-    API_JUDGE_AVAILABLE = False
-    APIJudge = None
+from ollama_judge import OllamaJudge, JudgeScore, Persona, EngagementStyle
 
 try:
     from agent_orchestrator import AgentOrchestrator
@@ -169,51 +136,19 @@ class BrandonBotValidator:
     Implements the 5-step adversarial evaluator loop.
     """
     
-    def __init__(self, use_judge: bool = True, use_agent: bool = False, require_slm: bool = True,
-                 force_judge_mode: Optional[str] = None):
+    def __init__(self, use_judge: bool = True, use_agent: bool = False, require_slm: bool = False):
         """
         Initialize the BrandonBot validation engine.
         
         Args:
-            use_judge: Enable LLM judge for scoring
+            use_judge: Enable Ollama LLM judge for scoring
             use_agent: Enable full agent orchestrator for vague loop testing
-            require_slm: If True (default), require SLM models for validation.
-                        NO pattern-only fallbacks allowed.
-            force_judge_mode: Override automatic judge selection.
-                            Options: "ollama" (local), "nvidia" (fixed Nvidia API), None (auto)
-                            Auto-detection: Uses Ollama if SELF_HOSTED=true or 16GB+ RAM,
-                            otherwise uses Nvidia API with a fixed model (no rotation).
+            require_slm: If True, require SLM models and FEC RAG for validation.
+                        If False (default), use pattern fallbacks when SLM/RAG not available.
         """
-        self.slm_client = None
-        if require_slm and SLM_CLIENT_AVAILABLE and SLMClient is not None:
-            self.slm_client = SLMClient()
-            logger.info(f"SLMClient initialized (mode: {self.slm_client.mode})")
-        
-        self.pq = Prequalifier(
-            slm_provider=self.slm_client,
-            require_slm=require_slm
-        )
+        self.pq = Prequalifier()
         self.ov = OutputValidatorSLM(require_slm=require_slm)
-        if self.slm_client:
-            self.ov.set_slm_client(self.slm_client)
-        
-        self.judge = None
-        self.judge_type = "none"
-        self._force_judge_mode = force_judge_mode
-        
-        if use_judge:
-            if UNIFIED_JUDGE_AVAILABLE and UnifiedJudge is not None:
-                self.judge = UnifiedJudge(force_mode=force_judge_mode)
-                deployment_mode = detect_deployment_mode() if detect_deployment_mode else "unknown"
-                self.judge_type = "unified"
-                logger.info(f"Using UnifiedJudge (deployment mode: {deployment_mode}, force: {force_judge_mode})")
-            elif OLLAMA_JUDGE_AVAILABLE and OllamaJudge is not None:
-                self.judge = OllamaJudge()
-                self.judge_type = "ollama"
-                logger.info("Using Ollama-based judge (fallback)")
-            else:
-                logger.warning("No judge available")
-        
+        self.judge = OllamaJudge() if use_judge else None
         self.agent = None
         self._agent_initialized = False
         self._use_agent = use_agent and AGENT_AVAILABLE
