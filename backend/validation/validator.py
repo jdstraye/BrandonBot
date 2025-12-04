@@ -64,7 +64,18 @@ class TestPhase(Enum):
 
 @dataclass
 class TestResult:
-    """Single test result"""
+    """Single test result
+    
+    Scoring dimensions (0-5 scale, 0=worst, 5=best):
+    - Clarity: Is the response easy to understand?
+    - Empathy: Does it acknowledge the user's perspective?
+    - Accuracy: Are the facts and policies correct?
+    - Engagement: Does it encourage further interaction or action?
+    - Tone: Is it professional yet approachable?
+    - Alignment: Does it align with AZ-01 district interests?
+    
+    Pass/Fail: PASS if all scores > 3 AND Tool_Called == Expected_Tool
+    """
     test_id: str
     category: str
     user_prompt: str
@@ -73,11 +84,12 @@ class TestResult:
     tool_called: str = ""
     expected_tool: str = ""
     
-    score_intent: float = 0.0
+    score_clarity: float = 0.0
+    score_empathy: float = 0.0
+    score_accuracy: float = 0.0
+    score_engagement: float = 0.0
     score_tone: float = 0.0
-    score_fec: float = 0.0
-    score_safety: float = 0.0
-    score_tool: float = 0.0
+    score_alignment: float = 0.0
     
     pq_frustration: str = ""
     pq_vagueness: str = ""
@@ -125,11 +137,12 @@ class ValidationSession:
         if not self.results:
             return {}
         return {
-            "intent": sum(r.score_intent for r in self.results) / len(self.results),
+            "clarity": sum(r.score_clarity for r in self.results) / len(self.results),
+            "empathy": sum(r.score_empathy for r in self.results) / len(self.results),
+            "accuracy": sum(r.score_accuracy for r in self.results) / len(self.results),
+            "engagement": sum(r.score_engagement for r in self.results) / len(self.results),
             "tone": sum(r.score_tone for r in self.results) / len(self.results),
-            "fec": sum(r.score_fec for r in self.results) / len(self.results),
-            "safety": sum(r.score_safety for r in self.results) / len(self.results),
-            "tool": sum(r.score_tool for r in self.results) / len(self.results),
+            "alignment": sum(r.score_alignment for r in self.results) / len(self.results),
         }
 
 
@@ -505,14 +518,16 @@ class BrandonBotValidator:
                         bot_response=bot_response
                     )
                     
-                    result.score_intent = scores.intent_accuracy
+                    result.score_clarity = scores.clarity
+                    result.score_empathy = scores.empathy
+                    result.score_accuracy = scores.accuracy
+                    result.score_engagement = scores.engagement
                     result.score_tone = scores.tone
-                    result.score_fec = scores.fec_compliance
-                    result.score_safety = scores.safety
-                    result.score_tool = scores.tool_usage
+                    result.score_alignment = scores.alignment
                     result.reasoning = scores.reasoning
                     
-                    result.pass_fail = "PASS" if scores.all_passing else "FAIL"
+                    tool_match = (result.tool_called == result.expected_tool) if result.expected_tool else True
+                    result.pass_fail = "PASS" if (scores.all_passing and tool_match) else "FAIL"
                 
                 except Exception as e:
                     result.pass_fail = "ERROR"
@@ -675,9 +690,7 @@ class BrandonBotValidator:
         fieldnames = [
             "test_id", "category", "user_prompt", "bot_response", "turns_count",
             "tool_called", "expected_tool",
-            "score_intent", "score_tone", "score_fec", "score_safety", "score_tool",
-            "pq_frustration", "pq_vagueness",
-            "ov_passed", "ov_issues",
+            "score_clarity", "score_empathy", "score_accuracy", "score_engagement", "score_tone", "score_alignment",
             "pass_fail", "reasoning",
             "genai", "persona", "engagement_style",
             "timestamp", "duration_ms"
@@ -689,8 +702,6 @@ class BrandonBotValidator:
             
             for result in self.session.results:
                 row = result.to_dict()
-                row["ov_issues"] = "; ".join(row.get("ov_issues", []))
-                row["pq_flags"] = ""
                 writer.writerow(row)
         
         logger.info(f"Results exported to: {csv_path}")
@@ -726,11 +737,12 @@ class BrandonBotValidator:
                     "total": 0,
                     "passed": 0,
                     "failed": 0,
-                    "avg_intent": 0,
+                    "avg_clarity": 0,
+                    "avg_empathy": 0,
+                    "avg_accuracy": 0,
+                    "avg_engagement": 0,
                     "avg_tone": 0,
-                    "avg_fec": 0,
-                    "avg_safety": 0,
-                    "avg_tool": 0,
+                    "avg_alignment": 0,
                 }
             
             categories[cat]["total"] += 1
@@ -739,20 +751,22 @@ class BrandonBotValidator:
             elif result.pass_fail == "FAIL":
                 categories[cat]["failed"] += 1
             
-            categories[cat]["avg_intent"] += result.score_intent
+            categories[cat]["avg_clarity"] += result.score_clarity
+            categories[cat]["avg_empathy"] += result.score_empathy
+            categories[cat]["avg_accuracy"] += result.score_accuracy
+            categories[cat]["avg_engagement"] += result.score_engagement
             categories[cat]["avg_tone"] += result.score_tone
-            categories[cat]["avg_fec"] += result.score_fec
-            categories[cat]["avg_safety"] += result.score_safety
-            categories[cat]["avg_tool"] += result.score_tool
+            categories[cat]["avg_alignment"] += result.score_alignment
         
         for cat in categories:
             total = categories[cat]["total"]
             if total > 0:
-                categories[cat]["avg_intent"] /= total
+                categories[cat]["avg_clarity"] /= total
+                categories[cat]["avg_empathy"] /= total
+                categories[cat]["avg_accuracy"] /= total
+                categories[cat]["avg_engagement"] /= total
                 categories[cat]["avg_tone"] /= total
-                categories[cat]["avg_fec"] /= total
-                categories[cat]["avg_safety"] /= total
-                categories[cat]["avg_tool"] /= total
+                categories[cat]["avg_alignment"] /= total
                 categories[cat]["pass_rate"] = categories[cat]["passed"] / total
         
         return categories
@@ -779,11 +793,12 @@ class BrandonBotValidator:
         avg = self.session.average_scores
         if avg:
             print("Average Scores (0-5):")
-            print(f"  Intent Accuracy: {avg.get('intent', 0):.2f}")
+            print(f"  Clarity: {avg.get('clarity', 0):.2f}")
+            print(f"  Empathy: {avg.get('empathy', 0):.2f}")
+            print(f"  Accuracy: {avg.get('accuracy', 0):.2f}")
+            print(f"  Engagement: {avg.get('engagement', 0):.2f}")
             print(f"  Tone: {avg.get('tone', 0):.2f}")
-            print(f"  FEC Compliance: {avg.get('fec', 0):.2f}")
-            print(f"  Safety: {avg.get('safety', 0):.2f}")
-            print(f"  Tool Usage: {avg.get('tool', 0):.2f}")
+            print(f"  Alignment: {avg.get('alignment', 0):.2f}")
         
         print("-"*60)
         print("Results by Category:")
