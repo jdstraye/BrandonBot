@@ -146,7 +146,7 @@ class BrandonBotValidator:
             require_slm: If True, require SLM models and FEC RAG for validation.
                         If False (default), use pattern fallbacks when SLM/RAG not available.
         """
-        self.pq = Prequalifier()
+        self.pq = Prequalifier(require_slm=require_slm)
         self.ov = OutputValidatorSLM(require_slm=require_slm)
         self.judge = OllamaJudge() if use_judge else None
         self.agent = None

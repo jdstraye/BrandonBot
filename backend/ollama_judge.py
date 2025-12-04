@@ -1,12 +1,18 @@
 """
-Ollama LLM Judge for BrandonBot Validation
+LLM Judge for BrandonBot Validation
 
-Uses Llama 3.1 8B (Q5_K_M quantization) running locally via Ollama for:
+Supports two backends:
+1. Ollama (self-hosting): Uses Llama 3.1 8B locally via Ollama
+2. Nvidia API (Replit): Uses Llama 3.3 70B via Nvidia NIM API
+
+Environment Detection:
+- If REPLIT_DOMAINS env var is set, we're on Replit -> use Nvidia API
+- Otherwise, we're self-hosting -> use Ollama
+
+Features:
 - Scoring response quality (0-5 scale)
 - Acting as User Actor for multi-turn conversations
 - Evaluating against Safety/Quality rubric
-
-Supports both local execution and Replit environment.
 """
 
 import os
@@ -22,6 +28,15 @@ logger = logging.getLogger(__name__)
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "llama3.1:8b")
+
+NVIDIA_API_KEY_ENV = "NVIDIA_LLAMA33_API_KEY"
+NVIDIA_MODEL = "meta/llama-3.3-70b-instruct"
+NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+
+
+def is_replit_environment() -> bool:
+    """Detect if we're running on Replit."""
+    return bool(os.environ.get("REPLIT_DOMAINS"))
 
 
 class EngagementStyle(Enum):
@@ -102,7 +117,10 @@ class UserActorResponse:
 
 class OllamaJudge:
     """
-    LLM Judge using Ollama with Llama 3.1 8B.
+    LLM Judge with dual-backend support.
+    
+    Self-hosting: Uses Ollama with Llama 3.1 8B
+    Replit: Uses Nvidia API with Llama 3.3 70B
     
     Provides two main capabilities:
     1. Judge: Scores BrandonBot responses (0-5 scale)
@@ -183,12 +201,77 @@ Respond with ONLY the message the voter would say, nothing else."""
         EngagementStyle.FLATTERING: "uses excessive praise, calls the bot genius, agrees with everything",
     }
     
-    def __init__(self, host: str = None, model: str = None):
+    def __init__(self, host: str = None, model: str = None, force_backend: str = None):
+        """
+        Initialize the Judge.
+        
+        Args:
+            host: Ollama host URL (only used for Ollama backend)
+            model: Model name to use (only used for Ollama backend)
+            force_backend: Force a specific backend ("ollama" or "nvidia")
+        """
         self.host = host or OLLAMA_HOST
         self.model = model or JUDGE_MODEL
         self._available = None
+        self._backend = None
+        self._force_backend = force_backend
+        
+        if force_backend:
+            self._backend = force_backend
+            logger.info(f"LLM Judge forced to use {force_backend} backend")
+        elif is_replit_environment():
+            self._backend = "nvidia"
+            logger.info("LLM Judge detected Replit environment - using Nvidia API backend")
+        else:
+            self._backend = "ollama"
+            logger.info("LLM Judge detected self-hosting environment - using Ollama backend")
+    
+    @property
+    def backend(self) -> str:
+        """Get the current backend being used."""
+        return self._backend
     
     async def check_availability(self) -> bool:
+        """Check if the current backend is available."""
+        if self._backend == "nvidia":
+            return await self._check_nvidia_availability()
+        else:
+            return await self._check_ollama_availability()
+    
+    async def _check_nvidia_availability(self) -> bool:
+        """Check if Nvidia API is available."""
+        api_key = os.environ.get(NVIDIA_API_KEY_ENV)
+        if not api_key:
+            logger.warning(f"Nvidia API key ({NVIDIA_API_KEY_ENV}) not set")
+            self._available = False
+            return False
+        
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    NVIDIA_API_URL,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": NVIDIA_MODEL,
+                        "messages": [{"role": "user", "content": "test"}],
+                        "max_tokens": 5
+                    }
+                )
+                self._available = response.status_code == 200
+                if not self._available:
+                    logger.warning(f"Nvidia API check failed: {response.status_code}")
+                else:
+                    logger.info(f"Nvidia API available with model {NVIDIA_MODEL}")
+                return self._available
+        except Exception as e:
+            logger.warning(f"Nvidia API not available: {e}")
+            self._available = False
+            return False
+    
+    async def _check_ollama_availability(self) -> bool:
         """Check if Ollama is available and the model is loaded."""
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -199,7 +282,9 @@ Respond with ONLY the message the voter would say, nothing else."""
                     model_base = self.model.split(":")[0]
                     self._available = any(model_base in m for m in models)
                     if not self._available:
-                        logger.warning(f"Model {self.model} not found. Available: {models}")
+                        logger.warning(f"Ollama model {self.model} not found. Available: {models}")
+                    else:
+                        logger.info(f"Ollama available with model {self.model}")
                     return self._available
                 return False
         except Exception as e:
@@ -208,13 +293,57 @@ Respond with ONLY the message the voter would say, nothing else."""
             return False
     
     async def _generate(self, prompt: str, system: str = None) -> str:
-        """Generate a response from Ollama."""
+        """Generate a response using the current backend."""
         if self._available is None:
             await self.check_availability()
         
         if not self._available:
-            raise RuntimeError("Ollama is not available or model not loaded")
+            raise RuntimeError(f"{self._backend} backend is not available")
         
+        if self._backend == "nvidia":
+            return await self._generate_nvidia(prompt, system)
+        else:
+            return await self._generate_ollama(prompt, system)
+    
+    async def _generate_nvidia(self, prompt: str, system: str = None) -> str:
+        """Generate a response from Nvidia API."""
+        api_key = os.environ.get(NVIDIA_API_KEY_ENV)
+        if not api_key:
+            raise RuntimeError("Nvidia API key not set")
+        
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        
+        payload = {
+            "model": NVIDIA_MODEL,
+            "messages": messages,
+            "max_tokens": 1024,
+            "temperature": 0.3
+        }
+        
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                response = await client.post(
+                    NVIDIA_API_URL,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json=payload
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                else:
+                    error_text = response.text[:500]
+                    raise RuntimeError(f"Nvidia API error: {response.status_code} - {error_text}")
+        except httpx.TimeoutException:
+            raise RuntimeError("Nvidia API request timed out")
+    
+    async def _generate_ollama(self, prompt: str, system: str = None) -> str:
+        """Generate a response from Ollama."""
         payload = {
             "model": self.model,
             "prompt": prompt,
