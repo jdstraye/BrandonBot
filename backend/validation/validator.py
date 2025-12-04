@@ -542,34 +542,72 @@ class BrandonBotValidator:
                 )
                 
                 start_time = time.time()
+                conversation = []
+                bot_responses = []
+                last_metadata = None
+                max_turns = 5
                 
                 try:
-                    pq_result = await self.pq.analyze(prompt, session_id=session_id)
-                    pq_frustration = pq_result.frustration_decision.value
-                    pq_vagueness = pq_result.vagueness_decision.value
-                    result.pq_flags = pq_result.pattern_flags.to_dict() if pq_result.pattern_flags else {}
+                    current_input = prompt
+                    turn_count = 0
                     
-                    bot_response, metadata = await self.agent.process_message(
-                        user_message=prompt,
-                        session_id=session_id
-                    )
-                    
-                    tool_called = metadata.get("tool_called", "") if metadata else ""
-                    result.genai = metadata.get("model", "") if metadata else ""
-                    
-                    result.add_turn(
-                        user_prompt=prompt,
-                        bot_response=bot_response,
-                        tool_called=tool_called,
-                        pq_frustration=pq_frustration,
-                        pq_vagueness=pq_vagueness
-                    )
+                    while turn_count < max_turns:
+                        pq_result = await self.pq.analyze(current_input, session_id=session_id)
+                        pq_frustration = pq_result.frustration_decision.value
+                        pq_vagueness = pq_result.vagueness_decision.value
+                        
+                        if turn_count == 0:
+                            result.pq_flags = pq_result.pattern_flags.to_dict() if pq_result.pattern_flags else {}
+                        
+                        bot_response, metadata = await self.agent.process_message(
+                            user_message=current_input,
+                            session_id=session_id
+                        )
+                        last_metadata = metadata
+                        
+                        tool_called = metadata.get("tool_called", "") if metadata else ""
+                        result.genai = metadata.get("model", "") if metadata else ""
+                        
+                        result.add_turn(
+                            user_prompt=current_input,
+                            bot_response=bot_response,
+                            tool_called=tool_called,
+                            pq_frustration=pq_frustration,
+                            pq_vagueness=pq_vagueness
+                        )
+                        
+                        bot_responses.append(bot_response)
+                        conversation.append({"role": "user", "content": current_input})
+                        conversation.append({"role": "bot", "content": bot_response})
+                        turn_count += 1
+                        
+                        is_clarifying = bot_response.strip().endswith("?")
+                        
+                        if not is_clarifying:
+                            logger.debug(f"Bot provided substantive answer at turn {turn_count}")
+                            break
+                        
+                        if turn_count >= max_turns:
+                            logger.debug(f"Max turns ({max_turns}) reached")
+                            break
+                        
+                        user_response = await self.judge.generate_user_response(
+                            bot_response=bot_response,
+                            conversation_history=conversation,
+                            persona=persona,
+                            style=style,
+                            clarification_count=turn_count
+                        )
+                        current_input = user_response.message
+                        logger.debug(f"LLM user actor follow-up: {current_input[:100]}")
                     
                     full_conversation = result.get_full_conversation()
+                    final_response = bot_responses[-1] if bot_responses else ""
+                    
                     scores = await self.judge.score_response(
                         user_query=prompt,
-                        bot_response=bot_response,
-                        context=full_conversation if len(result.turns) > 1 else None
+                        bot_response=final_response,
+                        context=full_conversation
                     )
                     
                     result.score_clarity = scores.clarity
@@ -578,7 +616,7 @@ class BrandonBotValidator:
                     result.score_engagement = scores.engagement
                     result.score_tone = scores.tone
                     result.score_alignment = scores.alignment
-                    result.reasoning = scores.reasoning
+                    result.reasoning = f"Turns: {turn_count}. {scores.reasoning}"
                     
                     tool_match = (result.tool_called == result.expected_tool) if result.expected_tool else True
                     result.pass_fail = "PASS" if (scores.all_passing and tool_match) else "FAIL"
