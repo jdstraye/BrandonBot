@@ -534,10 +534,24 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
             return (decision, "neutral")
         
         try:
-            response = await self.slm.classify_frustration(message, flags.to_dict())
-            detected_emotion = getattr(response, 'detected_emotion', 'neutral') or 'neutral'
+            history_text = None
+            if history:
+                history_text = "\n".join([
+                    f"{'User' if h.get('role') == 'user' else 'Bot'}: {h.get('content', '')}"
+                    for h in history[-6:]
+                ])
             
-            if response.decision == "ESCALATE":
+            decision_str, detected_emotion = await self.slm.classify_frustration(
+                message=message,
+                has_profanity=flags.profanity,
+                has_urgency=flags.urgent_keywords,
+                frustration_count=flags.frustration_count,
+                conversation_history=history_text
+            )
+            
+            if decision_str == "escalate":
+                if detected_emotion in ("angry", "frustrated"):
+                    return (FrustrationDecision.FRUSTRATED, detected_emotion)
                 return (FrustrationDecision.ESCALATE, detected_emotion)
             else:
                 return (FrustrationDecision.CONTINUE, detected_emotion)
@@ -682,7 +696,7 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
         avg_confidence: float
     ) -> VaguenessDecision:
         """
-        RAG-informed vagueness classification using Qwen.
+        RAG-informed vagueness classification using SLM.
         
         The SLM receives the user query along with RAG results and similarity
         scores, allowing it to make an informed decision about whether the
@@ -700,17 +714,21 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
             return self._fallback_vagueness_classification(message, avg_confidence)
         
         try:
-            rag_dicts = [r.to_dict() for r in rag_results] if rag_results else []
+            rag_text = None
+            if rag_results:
+                rag_text = "\n".join([
+                    f"- [{r.collection}] (confidence: {r.confidence:.2f}): {r.content[:200]}"
+                    for r in rag_results[:5]
+                ])
             
-            response = await self.slm.classify_vagueness_with_rag(
+            decision_str, confidence = await self.slm.classify_vagueness(
                 message=message,
-                rag_results=rag_dicts,
-                avg_confidence=avg_confidence
+                rag_results=rag_text
             )
             
-            logger.info(f"RAG+SLM vagueness: query='{message[:50]}...', decision={response.decision}, {response.explanation}")
+            logger.info(f"SLM vagueness: query='{message[:50]}...', decision={decision_str}, confidence={confidence:.2f}")
             
-            if response.decision == "VAGUE":
+            if decision_str == "vague":
                 return VaguenessDecision.VAGUE
             else:
                 return VaguenessDecision.CLEAR
@@ -722,7 +740,7 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
                     "Prequalifier requires hybrid mode (patterns + SLM). "
                     "Set require_slm=False to use pattern-only fallback."
                 )
-            logger.warning(f"RAG+SLM vagueness classification failed: {e}, using fallback")
+            logger.warning(f"SLM vagueness classification failed: {e}, using fallback")
             return self._fallback_vagueness_classification(message, avg_confidence)
     
     def _fallback_vagueness_classification(
