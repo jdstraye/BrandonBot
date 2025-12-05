@@ -1,0 +1,46 @@
+~/workspace/backend$ python3.11 ingest_all.py 
+/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pypdf/_crypt_providers/_cryptography.py:32: CryptographyDeprecationWarning: ARC4 has been moved to cryptography.hazmat.decrepit.ciphers.algorithms.ARC4 and will be removed from cryptography.hazmat.primitives.ciphers.algorithms in 48.0.0.
+  from cryptography.hazmat.primitives.ciphers.algorithms import AES, ARC4
+======================================================================
+BrandonBot Unified Document Ingestion
+======================================================================
+Source: ./documents
+Chunk size: 1000 | Overlap: 200
+
+Loading sentence-transformers model (CPU-optimized)...
+Load pretrained SentenceTransformer: all-MiniLM-L6-v2
+Embedding model loaded successfully
+Connecting to existing Weaviate instance...
+HTTP Request: GET http://localhost:8079/v1/.well-known/openid-configuration "HTTP/1.1 404 Not Found"
+HTTP Request: GET http://localhost:8079/v1/meta "HTTP/1.1 200 OK"
+HTTP Request: GET https://pypi.org/pypi/weaviate-client/json "HTTP/1.1 200 OK"
+/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/weaviate/warnings.py:130: DeprecationWarning: Dep005: You are using weaviate-client version 4.4.0. The latest version is 4.18.3.
+            Please consider upgrading to the latest version. See https://weaviate.io/developers/weaviate/client-libraries/python for details.
+  warnings.warn(
+Connected to existing Weaviate instance
+PHASE 1: Standard Collections
+----------------------------------------
+  Skipping Brandon's Platform: Directory not found
+  Skipping Party Platforms: Directory not found
+  Skipping Previous Q&A: Directory not found
+
+PHASE 2: Marketing Gurus (Smart Parsing)
+----------------------------------------
+  Skipping MarketGurus: Directory not found
+
+======================================================================
+INGESTION COMPLETE
+======================================================================
+Standard docs: 0 files, 0 chunks
+MarketGurus:   0 files, 0 chunks
+TOTAL:         0 files, 0 chunks
+
+Collection Summary:
+HTTP Request: POST http://localhost:8079/v1/graphql "HTTP/1.1 200 OK"
+  BrandonPlatform: 2040 chunks
+HTTP Request: POST http://localhost:8079/v1/graphql "HTTP/1.1 200 OK"
+  PartyPlatform: 5075 chunks
+HTTP Request: POST http://localhost:8079/v1/graphql "HTTP/1.1 200 OK"
+  PreviousQA: 0 chunks
+HTTP Request: POST http://localhost:8079/v1/graphql "HTTP/1.1 200 OK"
+  MarketGurus: 11463 chunks
