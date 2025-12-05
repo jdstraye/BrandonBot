@@ -1,14 +1,21 @@
 """
 Validation Debug Database for BrandonBot
 
-Simple SQLite-based telemetry for debugging Output Validator rejections.
-Keeps the validation CSV clean as a scorecard while storing detailed
-rejection info for investigation.
+SQLite-based telemetry for debugging validation runs.
+Keeps the validation CSV clean as a user-facing scorecard while storing:
+- OV rejection events
+- Tool calls and results
+- PQ (Prequalifier) decisions
+- Raw LLM responses and internal reasoning
+
+The CSV should only contain clean user-facing dialog.
+All internal agent/orchestrator communication goes here.
 """
 
 import sqlite3
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, List
@@ -32,6 +39,45 @@ class OVRejectionRecord:
     score: int
     explanation: str
     all_results: str  # JSON of all safeguard results
+
+
+@dataclass
+class ToolCallRecord:
+    """A tool call event."""
+    timestamp: str
+    test_id: str
+    session_id: str
+    tool_name: str
+    arguments: str  # JSON
+    result: str
+    success: bool
+    duration_ms: int
+
+
+@dataclass
+class PQDecisionRecord:
+    """A Prequalifier decision event."""
+    timestamp: str
+    test_id: str
+    session_id: str
+    query: str
+    frustration_decision: str
+    vagueness_decision: str
+    pattern_flags: str  # JSON
+    explanation: str
+
+
+@dataclass
+class RawLLMRecord:
+    """A raw LLM response (before sanitization)."""
+    timestamp: str
+    test_id: str
+    session_id: str
+    query: str
+    raw_response: str
+    sanitized_response: str
+    model: str
+    tokens_used: int
 
 
 class ValidationDebugDB:
@@ -93,6 +139,63 @@ class ValidationDebugDB:
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_ov_rejections_score 
                 ON ov_rejections(score)
+            """)
+            
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS tool_calls (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    test_id TEXT,
+                    session_id TEXT,
+                    tool_name TEXT NOT NULL,
+                    arguments TEXT,
+                    result TEXT,
+                    success BOOLEAN NOT NULL,
+                    duration_ms INTEGER
+                )
+            """)
+            
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_tool_calls_test_id 
+                ON tool_calls(test_id)
+            """)
+            
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS pq_decisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    test_id TEXT,
+                    session_id TEXT,
+                    query TEXT NOT NULL,
+                    frustration_decision TEXT NOT NULL,
+                    vagueness_decision TEXT NOT NULL,
+                    pattern_flags TEXT,
+                    explanation TEXT
+                )
+            """)
+            
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_pq_decisions_test_id 
+                ON pq_decisions(test_id)
+            """)
+            
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS raw_llm_responses (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    test_id TEXT,
+                    session_id TEXT,
+                    query TEXT NOT NULL,
+                    raw_response TEXT NOT NULL,
+                    sanitized_response TEXT,
+                    model TEXT,
+                    tokens_used INTEGER
+                )
+            """)
+            
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_raw_llm_test_id 
+                ON raw_llm_responses(test_id)
             """)
             
             conn.commit()
@@ -271,8 +374,76 @@ class ValidationDebugDB:
         """Clear all rejection records (for testing)."""
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("DELETE FROM ov_rejections")
+            conn.execute("DELETE FROM tool_calls")
+            conn.execute("DELETE FROM pq_decisions")
+            conn.execute("DELETE FROM raw_llm_responses")
             conn.commit()
-        logger.info("Cleared all OV rejection records")
+        logger.info("Cleared all debug records")
+    
+    def log_tool_call(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        result: str,
+        success: bool,
+        duration_ms: int = 0,
+        test_id: Optional[str] = None,
+        session_id: Optional[str] = None
+    ):
+        """Log a tool call event."""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        arguments_json = json.dumps(arguments) if arguments else None
+        
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                INSERT INTO tool_calls 
+                (timestamp, test_id, session_id, tool_name, arguments, result, success, duration_ms)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (timestamp, test_id, session_id, tool_name, arguments_json, result, success, duration_ms))
+            conn.commit()
+    
+    def log_pq_decision(
+        self,
+        query: str,
+        frustration_decision: str,
+        vagueness_decision: str,
+        pattern_flags: Optional[Dict[str, Any]] = None,
+        explanation: str = "",
+        test_id: Optional[str] = None,
+        session_id: Optional[str] = None
+    ):
+        """Log a Prequalifier decision."""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        flags_json = json.dumps(pattern_flags) if pattern_flags else None
+        
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                INSERT INTO pq_decisions 
+                (timestamp, test_id, session_id, query, frustration_decision, vagueness_decision, pattern_flags, explanation)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (timestamp, test_id, session_id, query, frustration_decision, vagueness_decision, flags_json, explanation))
+            conn.commit()
+    
+    def log_raw_llm_response(
+        self,
+        query: str,
+        raw_response: str,
+        sanitized_response: str,
+        model: str = "",
+        tokens_used: int = 0,
+        test_id: Optional[str] = None,
+        session_id: Optional[str] = None
+    ):
+        """Log a raw LLM response before sanitization."""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                INSERT INTO raw_llm_responses 
+                (timestamp, test_id, session_id, query, raw_response, sanitized_response, model, tokens_used)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (timestamp, test_id, session_id, query, raw_response, sanitized_response, model, tokens_used))
+            conn.commit()
 
 
 # Global singleton instance
@@ -285,3 +456,77 @@ def get_debug_db() -> ValidationDebugDB:
     if _debug_db is None:
         _debug_db = ValidationDebugDB()
     return _debug_db
+
+
+def sanitize_bot_response(raw_response: str) -> str:
+    """
+    Sanitize bot response by removing internal LLM reasoning and tool mentions.
+    
+    The CSV should only contain clean, user-facing dialog.
+    Internal reasoning patterns to remove:
+    - "I apologize for the error in my previous response"
+    - "I should have used the search_brandon_positions tool"
+    - "Let me correct that..."
+    - "To verify my answer, I would use..."
+    - Self-corrections and meta-commentary
+    - Tool call references
+    - Code blocks with function calls
+    
+    Returns:
+        Clean, user-facing response text
+    """
+    if not raw_response:
+        return ""
+    
+    text = raw_response.strip()
+    
+    patterns_to_remove = [
+        r"I apologize for (?:the )?(?:error|technical issue|mistake)[^.]*\.",
+        r"I should have (?:used|stated|said)[^.]*\.",
+        r"Let me (?:correct|fix|try)[^.]*\.",
+        r"To (?:verify|correct|check)[^.]*(?:I would|I'll)[^.]*\.",
+        r"You're right,? I should have[^.]*\.",
+        r"Let's start fresh\.",
+        r"Since I'm a (?:large )?language model[^.]*\.",
+        r"The correct response would be[^.]*\.",
+        r"If I were to respond[^.]*\.",
+        r"```[^`]*```",
+        r"I'll make sure to use the \w+ (?:tool|function)[^.]*\.",
+        r"(?:search_brandon_positions|search_party_platform|web_search|rag_search|register_volunteer|request_callback)\([^)]*\)",
+        r"Unfortunately, I was unable to retrieve[^.]*\.",
+        r"It seems that I didn't provide[^.]*\.",
+    ]
+    
+    for pattern in patterns_to_remove:
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE | re.DOTALL)
+    
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = re.sub(r' {2,}', ' ', text)
+    text = text.strip()
+    
+    if len(text) < 20 or text.lower().startswith("i'm not aware") or "don't have enough information" in text.lower():
+        clean_sentences = []
+        sentences = raw_response.split('.')
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+            skip = False
+            skip_keywords = [
+                "should have", "apologize", "error in my", "let me correct",
+                "to verify", "search_", "function", "tool", "language model",
+                "correct response would be"
+            ]
+            for kw in skip_keywords:
+                if kw.lower() in sentence.lower():
+                    skip = True
+                    break
+            if not skip:
+                clean_sentences.append(sentence)
+        
+        if clean_sentences:
+            text = '. '.join(clean_sentences)
+            if not text.endswith(('.', '?', '!')):
+                text += '.'
+    
+    return text

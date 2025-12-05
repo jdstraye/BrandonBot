@@ -35,6 +35,7 @@ from prequalifier import Prequalifier, FrustrationDecision, VaguenessDecision, P
 from output_validator import OutputValidatorSLM, OVSafeguard, SLMNotAvailableError
 from security import rate_limiter, input_sanitizer
 from ollama_judge import OllamaJudge, JudgeScore, Persona, EngagementStyle
+from validation_debug import get_debug_db, sanitize_bot_response
 
 try:
     from agent_orchestrator import AgentOrchestrator
@@ -129,11 +130,27 @@ class TestResult:
     
     def add_turn(self, user_prompt: str, bot_response: str, tool_called: str = "",
                  pq_frustration: str = "", pq_vagueness: str = "") -> None:
-        """Add a conversation turn."""
+        """Add a conversation turn.
+        
+        The bot_response is sanitized to remove internal LLM reasoning.
+        Raw responses are logged to debug.db for investigation.
+        """
+        sanitized_response = sanitize_bot_response(bot_response)
+        
+        if bot_response != sanitized_response:
+            debug_db = get_debug_db()
+            debug_db.log_raw_llm_response(
+                query=user_prompt,
+                raw_response=bot_response,
+                sanitized_response=sanitized_response,
+                test_id=self.test_id,
+                session_id=""
+            )
+        
         turn = ConversationTurn(
             turn_number=len(self.turns) + 1,
             user_prompt=user_prompt,
-            bot_response=bot_response,
+            bot_response=sanitized_response,
             tool_called=tool_called,
             pq_frustration=pq_frustration,
             pq_vagueness=pq_vagueness,
@@ -142,7 +159,7 @@ class TestResult:
         self.turns.append(turn)
         self.turns_count = len(self.turns)
         self.user_prompt = user_prompt
-        self.bot_response = bot_response
+        self.bot_response = sanitized_response
         self.tool_called = tool_called
     
     def get_full_conversation(self) -> str:
