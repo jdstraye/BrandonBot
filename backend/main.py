@@ -262,6 +262,14 @@ async def request_callback(request: CallbackRequest):
                 detail=f"Too many callback requests. Please wait {wait_seconds} seconds."
             )
         
+        email_result = await email_service.send_callback_notification(
+            name=request.name,
+            phone=request.phone,
+            reason=request.question or "",
+            preferred_time="",
+            session_id=request.user_id
+        )
+        
         await db_manager.log_callback_request(
             user_id=request.user_id,
             name=request.name,
@@ -269,9 +277,13 @@ async def request_callback(request: CallbackRequest):
             email=request.email,
             question=request.question
         )
+        
+        logger.info(f"Callback request logged: {request.name} ({request.phone}), email sent: {email_result.success}")
+        
         return {
             "status": "success", 
-            "message": "Callback request received. Someone from the team will contact you soon."
+            "message": "Callback request received. Someone from the team will contact you soon.",
+            "email_sent": email_result.success
         }
     except Exception as e:
         logger.error(f"Error logging callback request: {str(e)}")

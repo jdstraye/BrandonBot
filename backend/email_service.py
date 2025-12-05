@@ -15,7 +15,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-TESTING_MODE = os.environ.get("TESTING_MODE", "true").lower() == "true"
+TESTING_MODE = os.environ.get("TESTING_MODE", "false").lower() == "true"
 TEST_EMAIL = "jdstrayer@netzero.net"
 PRODUCTION_EMAIL = "campaign@brandonsowers.com"
 BRANDON_EMAIL = TEST_EMAIL if TESTING_MODE else PRODUCTION_EMAIL
