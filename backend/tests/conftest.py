@@ -6,9 +6,15 @@ Provides fixtures for:
 - Output validator with FEC RAG configured
 - Prequalifier with SLM manager
 - SLM manager for frustration/vagueness classification
+- Email service and checker for delivery verification
 """
 
 import pytest
+
+
+def pytest_configure(config):
+    """Register custom markers."""
+    config.addinivalue_line("markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')")
 import asyncio
 import logging
 import os
