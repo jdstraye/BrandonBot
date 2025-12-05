@@ -302,20 +302,24 @@ class DuckDuckGoSearchService(WebSearchService):
         """Initialize DuckDuckGo search service"""
         super().__init__()
         self.search_available = True
-        # Domain trust scoring - boost results from official website
         self.trusted_domains = {
-            "brandonsowers.com": 2.0,  # 2x boost for official website
-            "brandonforarizona.com": 2.0,  # Alternative domain
+            "brandonsowers.com": 2.0,
+            "brandonforarizona.com": 2.0,
         }
         try:
-            from duckduckgo_search import DDGS
+            from ddgs import DDGS
             self.ddgs = DDGS()
             self.search_available = True
         except ImportError:
-            import logging
-            logging.warning("duckduckgo-search not installed. Web search disabled.")
-            self.search_available = False
-            self.ddgs = None
+            try:
+                from duckduckgo_search import DDGS
+                self.ddgs = DDGS()
+                self.search_available = True
+            except ImportError:
+                import logging
+                logging.warning("ddgs/duckduckgo-search not installed. Web search disabled.")
+                self.search_available = False
+                self.ddgs = None
     
     async def search(self, query: str, max_results: int = 3) -> SearchResponse:
         """
