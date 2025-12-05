@@ -30,14 +30,30 @@ class SearchResponse:
 
 class WebSearchService:
     """
-    Performs web searches and manages citations
-    NOTE: In this implementation, we're creating a stub that will be enhanced
-    when we integrate with actual web search APIs
+    Performs web searches and manages citations.
+    Uses DuckDuckGo for real search via the ddgs package.
     """
     
     def __init__(self):
         """Initialize web search service"""
-        self.search_available = False  # Will be True when web search is integrated
+        self.search_available = False
+        self.ddgs = None
+        self.trusted_domains = {
+            "brandonsowers.com": 2.0,
+            "brandonforarizona.com": 2.0,
+        }
+        try:
+            from ddgs import DDGS
+            self.ddgs = DDGS()
+            self.search_available = True
+        except ImportError:
+            try:
+                from duckduckgo_search import DDGS
+                self.ddgs = DDGS()
+                self.search_available = True
+            except ImportError:
+                import logging
+                logging.warning("ddgs/duckduckgo-search not installed. Web search disabled.")
     
     async def search(self, query: str, max_results: int = 3) -> SearchResponse:
         """
@@ -50,13 +66,55 @@ class WebSearchService:
         Returns:
             SearchResponse with summary, results, and formatted citations
         """
-        # Placeholder implementation - will be replaced with actual web search
-        # For now, return empty results to indicate search is needed
-        return SearchResponse(
-            summary="External search required but not yet available in this version.",
-            results=[],
-            citations=[]
-        )
+        import asyncio
+        
+        if not self.search_available or not self.ddgs:
+            return SearchResponse(
+                summary="External search not available",
+                results=[],
+                citations=[]
+            )
+        
+        try:
+            loop = asyncio.get_event_loop()
+            search_results = await loop.run_in_executor(
+                None,
+                lambda: list(self.ddgs.text(query, max_results=max_results))
+            )
+            
+            results = []
+            for result in search_results[:max_results]:
+                results.append(SearchResult(
+                    content=result.get('body', ''),
+                    source_name=result.get('title', 'Unknown Source'),
+                    url=result.get('href', ''),
+                    snippet=result.get('body', ''),
+                    date=None
+                ))
+            
+            if results:
+                snippets = [r.snippet[:200] for r in results[:3]]
+                summary = " ".join(snippets).replace('\n', ' ').strip()
+                if len(summary) > 500:
+                    summary = summary[:497] + "..."
+            else:
+                summary = "No search results found for this query."
+            
+            citations = self.format_citations(results)
+            
+            return SearchResponse(
+                summary=summary,
+                results=results,
+                citations=citations
+            )
+        except Exception as e:
+            import logging
+            logging.error(f"Web search failed: {str(e)}")
+            return SearchResponse(
+                summary=f"Search error: {str(e)}",
+                results=[],
+                citations=[]
+            )
     
     def format_citations(self, results: List[SearchResult]) -> List[str]:
         """

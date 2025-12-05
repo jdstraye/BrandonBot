@@ -495,6 +495,20 @@ def sanitize_bot_response(raw_response: str) -> str:
         r"(?:search_brandon_positions|search_party_platform|web_search|rag_search|register_volunteer|request_callback)\([^)]*\)",
         r"Unfortunately, I was unable to retrieve[^.]*\.",
         r"It seems that I didn't provide[^.]*\.",
+        r"Thought:.*?(?=\n(?:Action:|Observation:|$))",
+        r"Action:.*?(?=\n(?:Thought:|Observation:|$))",
+        r"Observation:.*?(?=\n(?:Thought:|Action:|$))",
+        r"\{\"tool\":\s*\"[^\"]+\",\s*\"args\":.*?\}",
+        r"\{\"function\":\s*\"[^\"]+\",\s*\"arguments\":.*?\}",
+        r"<tool_call>.*?</tool_call>",
+        r"<analysis>.*?</analysis>",
+        r"<internal>.*?</internal>",
+        r"<reasoning>.*?</reasoning>",
+        r"\[Internal\].*?(?=\n\n|\Z)",
+        r"\[TOOL RESULT\].*?(?=\n\n|\Z)",
+        r"I need to use the \w+ (?:tool|function)[^.]*\.",
+        r"Based on the tool results?,?\s*",
+        r"The \w+ tool (?:returned|shows|indicates)[^.]*\.",
     ]
     
     for pattern in patterns_to_remove:
