@@ -1,6 +1,6 @@
 """
 Email Service for BrandonBot
-Uses Replit's OpenInt mail service for sending notifications.
+Uses SendGrid for sending notifications.
 
 Email Routing:
 - Testing (TESTING_MODE=true): jdstrayer@netzero.net
@@ -9,18 +9,20 @@ Email Routing:
 
 import os
 import logging
-import subprocess
-import json
-from typing import Optional, List, Dict, Any
+from typing import Optional, List
 from dataclasses import dataclass
 import httpx
 
 logger = logging.getLogger(__name__)
 
-TESTING_MODE = os.environ.get("TESTING_MODE", "false").lower() == "true"
+TESTING_MODE = os.environ.get("TESTING_MODE", "true").lower() == "true"
 TEST_EMAIL = "jdstrayer@netzero.net"
 PRODUCTION_EMAIL = "campaign@brandonsowers.com"
 BRANDON_EMAIL = TEST_EMAIL if TESTING_MODE else PRODUCTION_EMAIL
+
+SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY", "")
+SENDGRID_FROM_EMAIL = os.environ.get("SENDGRID_FROM_EMAIL", "")
+SENDGRID_FROM_NAME = os.environ.get("SENDGRID_FROM_NAME", "BrandonBot")
 
 @dataclass
 class EmailResult:
@@ -39,46 +41,22 @@ class EmailResult:
 
 class EmailService:
     """
-    Email service using Replit's OpenInt mail API.
-    Falls back to logging if email service is unavailable.
+    Email service using SendGrid API.
+    Falls back to logging if SendGrid is not configured.
     """
     
     def __init__(self):
-        self.hostname = os.environ.get("REPLIT_CONNECTORS_HOSTNAME", "connectors.replit.com")
-        self.enabled = bool(os.environ.get("REPLIT_CONNECTORS_HOSTNAME"))
+        self.api_key = SENDGRID_API_KEY
+        self.from_email = SENDGRID_FROM_EMAIL
+        self.from_name = SENDGRID_FROM_NAME
+        self.enabled = bool(self.api_key and self.from_email)
         
-        if not self.enabled:
-            logger.warning("REPLIT_CONNECTORS_HOSTNAME not set - email service will log instead of sending")
-    
-    def _get_auth_token(self) -> Optional[str]:
-        """Get Replit identity token for authentication."""
-        try:
-            result = subprocess.run(
-                ["replit", "identity", "create", "--audience", f"https://{self.hostname}"],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            
-            if result.returncode != 0:
-                logger.error(f"Failed to get identity token: {result.stderr}")
-                return None
-            
-            token = result.stdout.strip()
-            if not token:
-                logger.error("Empty identity token returned")
-                return None
-            
-            return f"Bearer {token}"
-        except FileNotFoundError:
-            logger.warning("Replit CLI not found - email service unavailable")
-            return None
-        except subprocess.TimeoutExpired:
-            logger.error("Timeout getting identity token")
-            return None
-        except Exception as e:
-            logger.error(f"Error getting identity token: {e}")
-            return None
+        if not self.api_key:
+            logger.warning("SENDGRID_API_KEY not set - email service will log instead of sending")
+        elif not self.from_email:
+            logger.warning("SENDGRID_FROM_EMAIL not set - email service will log instead of sending")
+        else:
+            logger.info(f"SendGrid email service initialized (from: {self.from_email})")
     
     async def send_email(
         self,
@@ -89,7 +67,7 @@ class EmailService:
         cc: Optional[str] = None
     ) -> EmailResult:
         """
-        Send an email using Replit's mail service.
+        Send an email using SendGrid API.
         
         Args:
             to: Recipient email address
@@ -108,57 +86,63 @@ class EmailService:
                 success=True,
                 message_id="logged-only",
                 accepted=[to],
-                error=None
-            )
-        
-        auth_token = self._get_auth_token()
-        if not auth_token:
-            logger.warning(f"[EMAIL-FALLBACK] Could not authenticate, logging email instead")
-            logger.info(f"[EMAIL-LOG] To: {to}, Subject: {subject}")
-            logger.info(f"[EMAIL-LOG] Body: {text[:500] if text else 'No text body'}...")
-            return EmailResult(
-                success=True,
-                message_id="fallback-logged",
-                accepted=[to],
-                error="Authentication failed, email logged instead"
+                error="SendGrid not configured - email logged instead"
             )
         
         try:
-            payload = {
-                "to": to,
-                "subject": subject,
-            }
+            personalizations = [{
+                "to": [{"email": to}],
+                "subject": subject
+            }]
             
-            if text:
-                payload["text"] = text
-            if html:
-                payload["html"] = html
             if cc:
-                payload["cc"] = cc
+                personalizations[0]["cc"] = [{"email": cc}]
+            
+            content = []
+            if text:
+                content.append({"type": "text/plain", "value": text})
+            if html:
+                content.append({"type": "text/html", "value": html})
+            
+            if not content:
+                content.append({"type": "text/plain", "value": "(No content)"})
+            
+            payload = {
+                "personalizations": personalizations,
+                "from": {
+                    "email": self.from_email,
+                    "name": self.from_name
+                },
+                "content": content
+            }
             
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
-                    f"https://{self.hostname}/api/v2/mailer/send",
+                    "https://api.sendgrid.com/v3/mail/send",
                     headers={
-                        "Content-Type": "application/json",
-                        "Replit-Authentication": auth_token
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json"
                     },
                     json=payload
                 )
                 
-                if response.status_code == 200:
-                    data = response.json()
-                    logger.info(f"Email sent successfully to {to}: {data.get('messageId', 'unknown')}")
+                if response.status_code in (200, 202):
+                    message_id = response.headers.get("X-Message-Id", "sent")
+                    logger.info(f"Email sent successfully to {to} via SendGrid (ID: {message_id})")
                     return EmailResult(
                         success=True,
-                        message_id=data.get("messageId"),
-                        accepted=data.get("accepted", [to]),
-                        rejected=data.get("rejected", [])
+                        message_id=message_id,
+                        accepted=[to]
                     )
                 else:
-                    error_data = response.json() if response.content else {}
-                    error_msg = error_data.get("message", f"HTTP {response.status_code}")
-                    logger.error(f"Email send failed: {error_msg}")
+                    try:
+                        error_data = response.json()
+                        errors = error_data.get("errors", [])
+                        error_msg = "; ".join([e.get("message", str(e)) for e in errors]) if errors else f"HTTP {response.status_code}"
+                    except:
+                        error_msg = f"HTTP {response.status_code}: {response.text[:200]}"
+                    
+                    logger.error(f"SendGrid email failed: {error_msg}")
                     return EmailResult(
                         success=False,
                         error=error_msg,
@@ -167,13 +151,91 @@ class EmailService:
         
         except Exception as e:
             logger.error(f"Email send exception: {e}")
-            logger.info(f"[EMAIL-FALLBACK] Logging email due to error")
-            logger.info(f"[EMAIL-LOG] To: {to}, Subject: {subject}")
             return EmailResult(
                 success=False,
                 error=str(e),
                 rejected=[to]
             )
+    
+    async def send_callback_notification(
+        self,
+        name: str,
+        phone: str,
+        reason: str = "",
+        preferred_time: str = "",
+        session_id: str = ""
+    ) -> EmailResult:
+        """
+        Send callback request notification to Brandon.
+        
+        Args:
+            name: Requester's name
+            phone: Their phone number
+            reason: Why they want a callback
+            preferred_time: When they prefer to be called
+            session_id: Chat session ID for context
+        
+        Returns:
+            EmailResult
+        """
+        subject = f"[BrandonBot] Callback Request: {name}"
+        
+        text_body = f"""
+CALLBACK REQUEST
+================
+
+Name: {name}
+Phone: {phone}
+Preferred Time: {preferred_time or 'Not specified'}
+
+Reason: {reason or 'Not provided'}
+
+Session ID: {session_id or 'Unknown'}
+
+---
+This callback was requested through BrandonBot.
+The user may have had questions that required personal follow-up.
+"""
+        
+        html_body = f"""
+<html>
+<body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+    <div style="background: #c53030; color: white; padding: 20px; text-align: center;">
+        <h1 style="margin: 0;">Callback Request</h1>
+    </div>
+    <div style="padding: 20px; background: #f7fafc;">
+        <table style="width: 100%; border-collapse: collapse;">
+            <tr>
+                <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-weight: bold;">Name:</td>
+                <td style="padding: 10px; border-bottom: 1px solid #e2e8f0;">{name}</td>
+            </tr>
+            <tr>
+                <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-weight: bold;">Phone:</td>
+                <td style="padding: 10px; border-bottom: 1px solid #e2e8f0;"><a href="tel:{phone}">{phone}</a></td>
+            </tr>
+            <tr>
+                <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-weight: bold;">Preferred Time:</td>
+                <td style="padding: 10px; border-bottom: 1px solid #e2e8f0;">{preferred_time or 'Not specified'}</td>
+            </tr>
+        </table>
+        
+        {f'<div style="margin-top: 20px; padding: 15px; background: white; border-radius: 8px;"><strong>Reason:</strong><p>{reason}</p></div>' if reason else ''}
+        
+        <p style="margin-top: 15px; font-size: 12px; color: #666;">Session ID: {session_id or 'Unknown'}</p>
+    </div>
+    <div style="padding: 15px; background: #e2e8f0; font-size: 12px; color: #666; text-align: center;">
+        This callback was requested through BrandonBot.
+    </div>
+</body>
+</html>
+"""
+        
+        return await self.send_email(
+            to=BRANDON_EMAIL,
+            subject=subject,
+            text=text_body,
+            html=html_body
+        )
     
     async def send_volunteer_notification(
         self,
