@@ -1,368 +1,361 @@
 """
 Email Checker for BrandonBot Validation
-Verifies email receipt via NetZero POP3/IMAP for testing.
+Uses Guerrilla Mail disposable email API for testing email delivery.
 
-NetZero Settings:
-- POP3: pop.netzero.com:995 (SSL)
-- SMTP: smtp.netzero.com:465 (SSL)
-- IMAP: imap.netzero.com:993 (SSL)
+Guerrilla Mail API (no auth required):
+- Base URL: http://api.guerrillamail.com/ajax.php
+- Get email: f=get_email_address
+- Check inbox: f=check_email&sid_token=TOKEN
+- Read message: f=fetch_email&email_id=ID&sid_token=TOKEN
 
 This module is used by the validation system to verify that
 emails sent by BrandonBot (volunteer notifications, callbacks, etc.)
-are actually delivered to the test inbox.
+are actually delivered.
 """
 
-import os
-import ssl
-import email
-import email.message
-import email.header
-import imaplib
-import poplib
+import time
 import logging
-from datetime import datetime, timedelta
-from typing import List, Optional, Dict, Any
+import httpx
+from datetime import datetime
+from typing import List, Optional, Dict, Any, Tuple
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
-NETZERO_IMAP_HOST = "mail.netzero.com"
-NETZERO_IMAP_PORT = 993
-NETZERO_POP3_HOST = "pop.netzero.com"
-NETZERO_POP3_PORT = 995
+GUERRILLA_API = "https://www.guerrillamail.com/ajax.php"
 
 
 @dataclass
 class EmailMessage:
     """Represents a received email."""
+    id: str
     subject: str
     from_addr: str
     to_addr: str
     date: str
     body_text: str
     body_html: str
-    message_id: str
-    raw_headers: Dict[str, str]
+    attachments: List[Dict[str, Any]]
 
 
-class NetZeroEmailChecker:
+class GuerrillaMailChecker:
     """
-    Checks NetZero inbox for received emails.
-    Used in validation to verify email delivery.
+    Disposable email checker using Guerrilla Mail API.
+    No authentication required - perfect for automated testing.
     """
     
     def __init__(self):
-        self.username = os.environ.get("NETZERO_USER_NAME", "")
-        self.password = os.environ.get("NETZERO_PASSWORD", "")
-        self.enabled = bool(self.username and self.password)
+        self.email_addr: Optional[str] = None
+        self.sid_token: Optional[str] = None
+        self.email_timestamp: Optional[int] = None
+        self.alias: Optional[str] = None
+        self.enabled = True
+    
+    def _make_request(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Make a request to Guerrilla Mail API."""
+        params["ip"] = "127.0.0.1"
+        params["agent"] = "BrandonBot-Validator"
         
-        if not self.enabled:
-            logger.warning("NetZero credentials not configured. Email verification disabled.")
+        if self.sid_token:
+            params["sid_token"] = self.sid_token
+        
+        try:
+            with httpx.Client(timeout=15.0) as client:
+                response = client.get(GUERRILLA_API, params=params)
+                response.raise_for_status()
+                data = response.json()
+                
+                if "sid_token" in data:
+                    self.sid_token = data["sid_token"]
+                
+                return data
+        except Exception as e:
+            logger.error(f"Guerrilla API error: {e}")
+            raise
+    
+    def generate_email(self) -> str:
+        """
+        Generate a new random disposable email address.
+        
+        Returns:
+            Email address string (e.g., "abc123@guerrillamail.com")
+        """
+        data = self._make_request({"f": "get_email_address"})
+        
+        self.email_addr = data.get("email_addr")
+        self.alias = data.get("alias")
+        self.email_timestamp = data.get("email_timestamp")
+        
+        logger.info(f"Generated test email: {self.email_addr}")
+        return self.email_addr
+    
+    def set_email_user(self, username: str) -> str:
+        """
+        Set a custom username for the email.
+        
+        Args:
+            username: Desired username (e.g., "testuser")
+        
+        Returns:
+            Full email address
+        """
+        data = self._make_request({
+            "f": "set_email_user",
+            "email_user": username
+        })
+        
+        self.email_addr = data.get("email_addr")
+        self.alias = data.get("alias")
+        
+        logger.info(f"Set email to: {self.email_addr}")
+        return self.email_addr
+    
+    def check_inbox(self, seq: int = 0) -> List[Dict[str, Any]]:
+        """
+        Check inbox for messages.
+        
+        Args:
+            seq: Sequence number for checking new emails (0 for all)
+        
+        Returns:
+            List of message summaries
+        """
+        if not self.sid_token:
+            self.generate_email()
+        
+        data = self._make_request({
+            "f": "check_email",
+            "seq": seq
+        })
+        
+        messages = data.get("list", [])
+        logger.debug(f"Inbox has {len(messages)} messages")
+        return messages
+    
+    def get_email_list(self, offset: int = 0) -> List[Dict[str, Any]]:
+        """
+        Get list of all emails with offset.
+        
+        Args:
+            offset: Offset for pagination
+        
+        Returns:
+            List of message summaries
+        """
+        if not self.sid_token:
+            self.generate_email()
+        
+        data = self._make_request({
+            "f": "get_email_list",
+            "offset": offset
+        })
+        
+        return data.get("list", [])
+    
+    def read_message(self, email_id: str) -> Optional[EmailMessage]:
+        """
+        Read full message content.
+        
+        Args:
+            email_id: Message ID from check_inbox()
+        
+        Returns:
+            EmailMessage with full content, or None on error
+        """
+        if not self.sid_token:
+            raise ValueError("No session token. Call generate_email() first.")
+        
+        try:
+            data = self._make_request({
+                "f": "fetch_email",
+                "email_id": email_id
+            })
+            
+            return EmailMessage(
+                id=str(data.get("mail_id", email_id)),
+                subject=data.get("mail_subject", ""),
+                from_addr=data.get("mail_from", ""),
+                to_addr=self.email_addr or "",
+                date=data.get("mail_date", ""),
+                body_text=data.get("mail_excerpt", ""),
+                body_html=data.get("mail_body", ""),
+                attachments=[]
+            )
+        
+        except Exception as e:
+            logger.error(f"Failed to read message {email_id}: {e}")
+            return None
     
     def check_for_email(
         self,
         subject_contains: str,
         from_contains: Optional[str] = None,
-        since_minutes: int = 30,
-        delete_after_read: bool = False
+        since_minutes: int = 30
     ) -> Optional[EmailMessage]:
         """
-        Check inbox for an email matching the criteria.
+        Check inbox for an email matching criteria.
         
         Args:
-            subject_contains: Text that must appear in the subject line
-            from_contains: Text that must appear in the from address (optional)
-            since_minutes: Only check emails from the last N minutes (default 30)
-            delete_after_read: Whether to delete the email after reading (default False)
+            subject_contains: Text that must appear in subject
+            from_contains: Text that must appear in from address (optional)
+            since_minutes: Ignored (Guerrilla only keeps recent emails)
         
         Returns:
             EmailMessage if found, None otherwise
         """
-        if not self.enabled:
-            logger.warning("Email checker not enabled - credentials missing")
-            return None
+        messages = self.check_inbox()
         
-        try:
-            return self._check_via_pop3(
-                subject_contains=subject_contains,
-                from_contains=from_contains,
-                since_minutes=since_minutes
-            )
-        except Exception as e:
-            logger.error(f"POP3 check failed: {e}")
-            try:
-                return self._check_via_imap(
-                    subject_contains=subject_contains,
-                    from_contains=from_contains,
-                    since_minutes=since_minutes,
-                    delete_after_read=delete_after_read
-                )
-            except Exception as e2:
-                logger.error(f"IMAP fallback also failed: {e2}")
-                return None
-    
-    def _check_via_imap(
-        self,
-        subject_contains: str,
-        from_contains: Optional[str] = None,
-        since_minutes: int = 30,
-        delete_after_read: bool = False
-    ) -> Optional[EmailMessage]:
-        """Check email via IMAP (preferred method)."""
-        context = ssl.create_default_context()
+        for msg in messages:
+            subject = msg.get("mail_subject", "")
+            from_addr = msg.get("mail_from", "")
+            
+            if subject_contains.lower() not in subject.lower():
+                continue
+            
+            if from_contains and from_contains.lower() not in from_addr.lower():
+                continue
+            
+            full_message = self.read_message(str(msg.get("mail_id")))
+            if full_message:
+                logger.info(f"Found matching email: {subject}")
+                return full_message
         
-        with imaplib.IMAP4_SSL(NETZERO_IMAP_HOST, NETZERO_IMAP_PORT, ssl_context=context) as imap:
-            imap.login(self.username, self.password)
-            imap.select("INBOX")
-            
-            since_date = datetime.now() - timedelta(minutes=since_minutes)
-            date_str = since_date.strftime("%d-%b-%Y")
-            
-            search_criteria = f'(SINCE "{date_str}")'
-            if subject_contains:
-                search_criteria = f'(SINCE "{date_str}" SUBJECT "{subject_contains}")'
-            
-            _, message_numbers = imap.search(None, search_criteria)
-            
-            if not message_numbers[0]:
-                logger.info(f"No emails found matching criteria: {subject_contains}")
-                return None
-            
-            for num in message_numbers[0].split()[::-1]:
-                _, msg_data = imap.fetch(num, "(RFC822)")
-                
-                for response_part in msg_data:
-                    if isinstance(response_part, tuple):
-                        msg = email.message_from_bytes(response_part[1])
-                        
-                        subject = self._decode_header(msg.get("Subject", ""))
-                        from_addr = self._decode_header(msg.get("From", ""))
-                        
-                        if subject_contains.lower() not in subject.lower():
-                            continue
-                        
-                        if from_contains and from_contains.lower() not in from_addr.lower():
-                            continue
-                        
-                        body_text, body_html = self._extract_body(msg)
-                        
-                        result = EmailMessage(
-                            subject=subject,
-                            from_addr=from_addr,
-                            to_addr=self._decode_header(msg.get("To", "")),
-                            date=self._decode_header(msg.get("Date", "")),
-                            body_text=body_text,
-                            body_html=body_html,
-                            message_id=msg.get("Message-ID", ""),
-                            raw_headers={k: self._decode_header(v) for k, v in msg.items()}
-                        )
-                        
-                        if delete_after_read:
-                            imap.store(num, "+FLAGS", "\\Deleted")
-                            imap.expunge()
-                            logger.info(f"Deleted email: {subject}")
-                        
-                        logger.info(f"Found matching email: {subject}")
-                        return result
-            
-            return None
-    
-    def _check_via_pop3(
-        self,
-        subject_contains: str,
-        from_contains: Optional[str] = None,
-        since_minutes: int = 30
-    ) -> Optional[EmailMessage]:
-        """Check email via POP3 (fallback method)."""
-        context = ssl.create_default_context()
-        
-        with poplib.POP3_SSL(NETZERO_POP3_HOST, NETZERO_POP3_PORT, context=context) as pop:
-            pop.user(self.username)
-            pop.pass_(self.password)
-            
-            num_messages = len(pop.list()[1])
-            since_date = datetime.now() - timedelta(minutes=since_minutes)
-            
-            for i in range(num_messages, max(0, num_messages - 50), -1):
-                try:
-                    _, lines, _ = pop.retr(i)
-                    msg_content = b"\r\n".join(lines)
-                    msg = email.message_from_bytes(msg_content)
-                    
-                    subject = self._decode_header(msg.get("Subject", ""))
-                    from_addr = self._decode_header(msg.get("From", ""))
-                    date_str = msg.get("Date", "")
-                    
-                    if subject_contains.lower() not in subject.lower():
-                        continue
-                    
-                    if from_contains and from_contains.lower() not in from_addr.lower():
-                        continue
-                    
-                    body_text, body_html = self._extract_body(msg)
-                    
-                    result = EmailMessage(
-                        subject=subject,
-                        from_addr=from_addr,
-                        to_addr=self._decode_header(msg.get("To", "")),
-                        date=date_str,
-                        body_text=body_text,
-                        body_html=body_html,
-                        message_id=msg.get("Message-ID", ""),
-                        raw_headers={k: self._decode_header(v) for k, v in msg.items()}
-                    )
-                    
-                    logger.info(f"Found matching email via POP3: {subject}")
-                    return result
-                    
-                except Exception as e:
-                    logger.warning(f"Error processing message {i}: {e}")
-                    continue
-            
-            return None
-    
-    def _decode_header(self, header_value: str) -> str:
-        """Decode an email header value."""
-        if not header_value:
-            return ""
-        
-        try:
-            decoded_parts = email.header.decode_header(header_value)
-            result = []
-            for part, charset in decoded_parts:
-                if isinstance(part, bytes):
-                    result.append(part.decode(charset or "utf-8", errors="replace"))
-                else:
-                    result.append(str(part))
-            return " ".join(result)
-        except:
-            return str(header_value)
-    
-    def _extract_body(self, msg: email.message.Message) -> tuple:
-        """Extract text and HTML body from message."""
-        body_text = ""
-        body_html = ""
-        
-        if msg.is_multipart():
-            for part in msg.walk():
-                content_type = part.get_content_type()
-                content_disposition = str(part.get("Content-Disposition", ""))
-                
-                if "attachment" in content_disposition:
-                    continue
-                
-                try:
-                    payload = part.get_payload(decode=True)
-                    if payload:
-                        charset = part.get_content_charset() or "utf-8"
-                        text = payload.decode(charset, errors="replace")
-                        
-                        if content_type == "text/plain" and not body_text:
-                            body_text = text
-                        elif content_type == "text/html" and not body_html:
-                            body_html = text
-                except:
-                    pass
-        else:
-            try:
-                payload = msg.get_payload(decode=True)
-                if payload:
-                    charset = msg.get_content_charset() or "utf-8"
-                    text = payload.decode(charset, errors="replace")
-                    
-                    if msg.get_content_type() == "text/html":
-                        body_html = text
-                    else:
-                        body_text = text
-            except:
-                pass
-        
-        return body_text, body_html
+        return None
     
     def list_recent_emails(self, limit: int = 10) -> List[Dict[str, str]]:
         """
-        List recent emails in inbox for debugging.
+        List recent emails for debugging.
         
         Args:
-            limit: Maximum number of emails to list
+            limit: Maximum number to return
         
         Returns:
-            List of email summaries (subject, from, date)
+            List of email summaries
         """
-        if not self.enabled:
-            return []
-        
-        results = []
-        
+        messages = self.check_inbox()
+        return [
+            {
+                "id": str(msg.get("mail_id", "")),
+                "subject": msg.get("mail_subject", "")[:100],
+                "from": msg.get("mail_from", "")[:50],
+                "date": msg.get("mail_date", "")
+            }
+            for msg in messages[:limit]
+        ]
+    
+    def delete_email(self, email_id: str) -> bool:
+        """Delete an email by ID."""
         try:
-            context = ssl.create_default_context()
-            
-            with imaplib.IMAP4_SSL(NETZERO_IMAP_HOST, NETZERO_IMAP_PORT, ssl_context=context) as imap:
-                imap.login(self.username, self.password)
-                imap.select("INBOX", readonly=True)
-                
-                _, message_numbers = imap.search(None, "ALL")
-                
-                if message_numbers[0]:
-                    nums = message_numbers[0].split()[-limit:]
-                    
-                    for num in reversed(nums):
-                        _, msg_data = imap.fetch(num, "(RFC822.HEADER)")
-                        
-                        for response_part in msg_data:
-                            if isinstance(response_part, tuple):
-                                msg = email.message_from_bytes(response_part[1])
-                                
-                                results.append({
-                                    "subject": self._decode_header(msg.get("Subject", ""))[:100],
-                                    "from": self._decode_header(msg.get("From", ""))[:50],
-                                    "date": self._decode_header(msg.get("Date", ""))
-                                })
-        
-        except Exception as e:
-            logger.error(f"Error listing emails: {e}")
-        
-        return results
+            self._make_request({
+                "f": "del_email",
+                "email_ids[]": email_id
+            })
+            return True
+        except:
+            return False
+    
+    def forget_session(self) -> bool:
+        """Delete the current session and email address."""
+        try:
+            self._make_request({"f": "forget_me"})
+            self.email_addr = None
+            self.sid_token = None
+            return True
+        except:
+            return False
 
 
 def verify_email_delivery(
     subject_contains: str,
-    timeout_seconds: int = 60,
-    poll_interval: int = 5
+    timeout_seconds: int = 120,
+    poll_interval: int = 5,
+    checker: Optional[GuerrillaMailChecker] = None
 ) -> Optional[EmailMessage]:
     """
     Wait for and verify email delivery.
     
-    Polls the inbox at regular intervals until the email is found
-    or timeout is reached.
+    If no checker is provided, generates a new email address.
     
     Args:
         subject_contains: Text that must appear in subject
-        timeout_seconds: Maximum time to wait (default 60s)
+        timeout_seconds: Maximum time to wait (default 120s)
         poll_interval: Seconds between checks (default 5s)
+        checker: Optional pre-configured checker instance
     
     Returns:
         EmailMessage if found within timeout, None otherwise
     """
-    import time
+    if checker is None:
+        checker = GuerrillaMailChecker()
+        email = checker.generate_email()
+        logger.info(f"Waiting for email at: {email}")
     
-    checker = NetZeroEmailChecker()
     start_time = time.time()
     
     while time.time() - start_time < timeout_seconds:
-        result = checker.check_for_email(
-            subject_contains=subject_contains,
-            since_minutes=5
-        )
+        result = checker.check_for_email(subject_contains=subject_contains)
         
         if result:
+            elapsed = time.time() - start_time
+            logger.info(f"Email verified after {elapsed:.1f}s: {result.subject}")
             return result
         
-        logger.info(f"Email not yet received, waiting {poll_interval}s...")
+        elapsed = time.time() - start_time
+        remaining = timeout_seconds - elapsed
+        logger.info(f"Email not yet received ({elapsed:.0f}s elapsed, {remaining:.0f}s remaining)...")
         time.sleep(poll_interval)
     
     logger.warning(f"Email verification timed out after {timeout_seconds}s")
     return None
 
 
-email_checker = NetZeroEmailChecker()
+async def verify_email_delivery_async(
+    subject_contains: str,
+    timeout_seconds: int = 120,
+    poll_interval: int = 5,
+    checker: Optional[GuerrillaMailChecker] = None
+) -> Optional[EmailMessage]:
+    """
+    Async version of verify_email_delivery for use in async contexts.
+    """
+    import asyncio
+    
+    if checker is None:
+        checker = GuerrillaMailChecker()
+        email = checker.generate_email()
+        logger.info(f"Waiting for email at: {email}")
+    
+    start_time = time.time()
+    
+    while time.time() - start_time < timeout_seconds:
+        result = checker.check_for_email(subject_contains=subject_contains)
+        
+        if result:
+            elapsed = time.time() - start_time
+            logger.info(f"Email verified after {elapsed:.1f}s: {result.subject}")
+            return result
+        
+        elapsed = time.time() - start_time
+        remaining = timeout_seconds - elapsed
+        logger.info(f"Email not yet received ({elapsed:.0f}s elapsed, {remaining:.0f}s remaining)...")
+        await asyncio.sleep(poll_interval)
+    
+    logger.warning(f"Email verification timed out after {timeout_seconds}s")
+    return None
+
+
+def generate_test_email() -> Tuple[str, GuerrillaMailChecker]:
+    """
+    Generate a fresh test email and return both the address and checker.
+    
+    Convenience function for validation tests.
+    
+    Returns:
+        Tuple of (email_address, checker_instance)
+    """
+    checker = GuerrillaMailChecker()
+    email = checker.generate_email()
+    return email, checker
+
+
+email_checker = GuerrillaMailChecker()
