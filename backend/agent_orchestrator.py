@@ -31,6 +31,12 @@ from intent_detector import intent_detector, UserIntent, escalation_detector
 from prequalifier import prequalifier, PrequalifierResult, FrustrationDecision, VaguenessDecision
 from output_validator import output_validator, OVValidationResult, ValidationStatus, RejectionReason, OVSafeguard
 from validation_debug import get_debug_db
+from structured_response import (
+    parse_structured_response,
+    get_structured_output_instructions,
+    get_ov_regeneration_instructions,
+    ParsedResponse
+)
 
 logger = logging.getLogger(__name__)
 
@@ -758,7 +764,8 @@ CRITICAL RULES:
 - Always cite sources when using information from tools
 - For emotional/values questions, consider scripture inclusion
 
-Remember: You're here to inform voters and build support for Brandon's campaign."""
+Remember: You're here to inform voters and build support for Brandon's campaign.
+""" + get_structured_output_instructions()
 
     async def process_message(self, user_message: str, session_id: str) -> Tuple[str, Dict]:
         """
@@ -940,7 +947,27 @@ Remember: You're here to inform voters and build support for Brandon's campaign.
                 tool_calls = llm_response.tool_calls or []
                 
                 if not tool_calls:
-                    proposed_response = llm_response.text or "I'm sorry, I couldn't process your request."
+                    raw_response = llm_response.text or "I'm sorry, I couldn't process your request."
+                    
+                    # Parse structured response to separate reasoning from user-facing content
+                    parsed = parse_structured_response(raw_response)
+                    proposed_response = parsed.final_response or raw_response
+                    
+                    # Log reasoning to debug DB if present
+                    if parsed.reasoning:
+                        try:
+                            debug_db = get_debug_db()
+                            debug_db.log_reasoning(
+                                session_id=session_id,
+                                request_id=request_id,
+                                reasoning=parsed.reasoning,
+                                parse_method=parsed.parse_method,
+                                raw_response=parsed.raw_response[:2000]
+                            )
+                        except Exception as db_err:
+                            logger.debug(f"[{request_id}] Failed to log reasoning: {db_err}")
+                    
+                    metadata["response_parse_method"] = parsed.parse_method
                     
                     # Factual safeguard check
                     is_factual_policy = "policy" in question_types or topic not in ["general", "callback"]
@@ -1056,10 +1083,12 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
                         logger.warning(f"[{request_id}] Failed to log OV rejection to debug DB: {db_err}")
                     
                     if regeneration_attempt <= max_regenerations:
-                        # Get feedback for regeneration
+                        # Get feedback for regeneration with structured output instructions
                         regen_prompt = validation_result.get_feedback_for_retry()
                         
                         if regen_prompt:
+                            # Add structured output reminder to prevent chatter
+                            regen_prompt += get_ov_regeneration_instructions()
                             messages.append({
                                 "role": "system",
                                 "content": regen_prompt
@@ -1073,8 +1102,31 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
                             system_prompt=full_system_prompt
                         )
                         
-                        final_response = regen_response.text or final_response
+                        # Parse structured response from regeneration
+                        raw_regen = regen_response.text or ""
+                        parsed_regen = parse_structured_response(raw_regen)
+                        
+                        # Log OV regeneration reasoning to debug DB
+                        if parsed_regen.reasoning:
+                            try:
+                                debug_db = get_debug_db()
+                                debug_db.log_reasoning(
+                                    session_id=session_id,
+                                    request_id=request_id,
+                                    reasoning=f"[OV REGEN {regeneration_attempt}] {parsed_regen.reasoning}",
+                                    parse_method=parsed_regen.parse_method,
+                                    raw_response=parsed_regen.raw_response[:2000]
+                                )
+                            except Exception as db_err:
+                                logger.debug(f"[{request_id}] Failed to log OV regen reasoning: {db_err}")
+                        
+                        final_response = parsed_regen.final_response or raw_regen
                         metadata["total_tokens"] += regen_response.tokens_used
+                        metadata["ov_modifications"].append({
+                            "attempt": regeneration_attempt,
+                            "parse_method": parsed_regen.parse_method,
+                            "had_reasoning": bool(parsed_regen.reasoning)
+                        })
                     else:
                         # Max regenerations exceeded - use safe fallback
                         final_response = "I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?"

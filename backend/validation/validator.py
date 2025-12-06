@@ -36,6 +36,7 @@ from output_validator import OutputValidatorSLM, OVSafeguard, SLMNotAvailableErr
 from security import rate_limiter, input_sanitizer
 from ollama_judge import OllamaJudge, JudgeScore, Persona, EngagementStyle
 from validation_debug import get_debug_db, sanitize_bot_response
+from structured_response import parse_structured_response
 
 try:
     from agent_orchestrator import AgentOrchestrator
@@ -132,25 +133,48 @@ class TestResult:
                  pq_frustration: str = "", pq_vagueness: str = "") -> None:
         """Add a conversation turn.
         
-        The bot_response is sanitized to remove internal LLM reasoning.
-        Raw responses are logged to debug.db for investigation.
-        """
-        sanitized_response = sanitize_bot_response(bot_response)
+        The bot_response is processed to extract only user-facing content:
+        1. First tries structured JSON parsing (reasoning + final_response)
+        2. Falls back to delimiter parsing (<final_response>)
+        3. Finally uses regex sanitization for chatter removal
         
-        if bot_response != sanitized_response:
-            debug_db = get_debug_db()
-            debug_db.log_raw_llm_response(
-                query=user_prompt,
-                raw_response=bot_response,
-                sanitized_response=sanitized_response,
-                test_id=self.test_id,
-                session_id=""
-            )
+        Internal reasoning is logged to debug.db for investigation.
+        """
+        # Primary: Try structured response parsing (JSON or delimiters)
+        parsed = parse_structured_response(bot_response)
+        
+        if parsed.parse_method in ("json", "delimiter"):
+            # Successfully extracted structured response
+            clean_response = parsed.final_response
+            
+            # Log reasoning to debug DB
+            if parsed.reasoning:
+                debug_db = get_debug_db()
+                debug_db.log_reasoning(
+                    session_id="",
+                    request_id=self.test_id,
+                    reasoning=parsed.reasoning,
+                    parse_method=parsed.parse_method,
+                    raw_response=parsed.raw_response[:2000]
+                )
+        else:
+            # Fallback: Use regex sanitization for remaining chatter
+            clean_response = sanitize_bot_response(parsed.final_response)
+            
+            if bot_response != clean_response:
+                debug_db = get_debug_db()
+                debug_db.log_raw_llm_response(
+                    query=user_prompt,
+                    raw_response=bot_response,
+                    sanitized_response=clean_response,
+                    test_id=self.test_id,
+                    session_id=""
+                )
         
         turn = ConversationTurn(
             turn_number=len(self.turns) + 1,
             user_prompt=user_prompt,
-            bot_response=sanitized_response,
+            bot_response=clean_response,
             tool_called=tool_called,
             pq_frustration=pq_frustration,
             pq_vagueness=pq_vagueness,
@@ -159,7 +183,7 @@ class TestResult:
         self.turns.append(turn)
         self.turns_count = len(self.turns)
         self.user_prompt = user_prompt
-        self.bot_response = sanitized_response
+        self.bot_response = clean_response
         self.tool_called = tool_called
     
     def get_full_conversation(self) -> str:

@@ -198,6 +198,28 @@ class ValidationDebugDB:
                 ON raw_llm_responses(test_id)
             """)
             
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS llm_reasoning (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    session_id TEXT,
+                    request_id TEXT,
+                    reasoning TEXT NOT NULL,
+                    parse_method TEXT NOT NULL,
+                    raw_response TEXT
+                )
+            """)
+            
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_llm_reasoning_session 
+                ON llm_reasoning(session_id)
+            """)
+            
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_llm_reasoning_request 
+                ON llm_reasoning(request_id)
+            """)
+            
             conn.commit()
         
         logger.info(f"ValidationDebugDB initialized at {self.db_path}")
@@ -269,6 +291,53 @@ class ValidationDebugDB:
                     request_id=request_id,
                     all_results=all_results
                 )
+    
+    def log_reasoning(
+        self,
+        session_id: Optional[str],
+        request_id: Optional[str],
+        reasoning: str,
+        parse_method: str,
+        raw_response: Optional[str] = None
+    ):
+        """
+        Log LLM reasoning that was extracted from structured output.
+        
+        This separates internal chain-of-thought from user-facing responses,
+        keeping debug info in SQLite while CSV only shows clean output.
+        
+        Args:
+            session_id: The session ID
+            request_id: The request ID
+            reasoning: The extracted reasoning/chain-of-thought
+            parse_method: How the response was parsed (json, delimiter, chatter_stripped)
+            raw_response: Optional full raw LLM response
+        """
+        timestamp = datetime.utcnow().isoformat()
+        
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                INSERT INTO llm_reasoning 
+                (timestamp, session_id, request_id, reasoning, parse_method, raw_response)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                timestamp, session_id, request_id, reasoning, parse_method, raw_response
+            ))
+            conn.commit()
+        
+        logger.debug(f"Logged LLM reasoning ({parse_method}): {reasoning[:100]}...")
+    
+    def get_reasoning_by_request(self, request_id: str) -> List[Dict[str, Any]]:
+        """Get all reasoning logs for a specific request ID."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute("""
+                SELECT * FROM llm_reasoning 
+                WHERE request_id = ? 
+                ORDER BY timestamp ASC
+            """, (request_id,))
+            
+            return [dict(row) for row in cursor.fetchall()]
     
     def get_rejections_by_test(self, test_id: str) -> List[OVRejectionRecord]:
         """Get all rejections for a specific test ID."""
