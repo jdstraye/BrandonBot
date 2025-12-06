@@ -259,12 +259,18 @@ class BrandonBotValidator:
                         This ensures proper intent checking via MS-MARCO cross-encoder.
                         If False, fall back to pattern-only checking (NOT recommended).
         """
-        self.pq = Prequalifier(require_slm=require_slm)
+        self._slm_manager = None
+        self._weaviate = None
+        
+        if require_slm and SLMManager is not None:
+            logger.info("Initializing SLMManager for validation...")
+            self._slm_manager = SLMManager()
+            logger.info("SLMManager ready (lazy loading)")
+        
+        self.pq = Prequalifier(require_slm=require_slm, slm_provider=self._slm_manager)
         self.ov = OutputValidatorSLM(require_slm=require_slm)
         self.judge = OllamaJudge() if use_judge else None
         self.agent = None
-        self._weaviate = None
-        self._slm_manager = None
         self._agent_initialized = False
         self._use_agent = use_agent and AGENT_AVAILABLE
         
@@ -323,13 +329,14 @@ class BrandonBotValidator:
             return self.agent is not None
         
         try:
-            logger.info("Initializing SLMManager for validation...")
-            self._slm_manager = SLMManager()
-            logger.info("SLMManager created (lazy loading)")
-            
-            logger.info("Wiring SLM provider to Prequalifier...")
-            self.pq.set_slm_provider(self._slm_manager)
-            logger.info("Prequalifier SLM provider configured")
+            if self._slm_manager is None and SLMManager is not None:
+                logger.info("Initializing SLMManager for validation...")
+                self._slm_manager = SLMManager()
+                logger.info("SLMManager created (lazy loading)")
+                
+                logger.info("Wiring SLM provider to Prequalifier...")
+                self.pq.set_slm_provider(self._slm_manager)
+                logger.info("Prequalifier SLM provider configured")
             
             logger.info("Initializing WeaviateManager for AgentOrchestrator...")
             self._weaviate = WeaviateManager()
