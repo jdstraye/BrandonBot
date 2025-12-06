@@ -909,6 +909,9 @@ class BrandonBotValidator:
             "pass_rate": self.session.passed_tests / max(self.session.total_tests, 1),
             "average_scores": self.session.average_scores,
             "by_category": self._aggregate_by_category(),
+            "by_engagement_style": self._aggregate_by_engagement_style(),
+            "by_model": self._aggregate_by_model(),
+            "by_persona": self._aggregate_by_persona(),
         }
         
         with open(summary_path, "w") as f:
@@ -916,16 +919,49 @@ class BrandonBotValidator:
         
         logger.info(f"Summary exported to: {summary_path}")
         
+        self._update_latest_symlinks(output_dir, csv_path, summary_path)
+        
         return csv_path
     
-    def _aggregate_by_category(self) -> Dict[str, Dict[str, Any]]:
-        """Aggregate results by category."""
-        categories = {}
+    def _update_latest_symlinks(self, output_dir: str, csv_path: str, summary_path: str):
+        """Create/update symlinks to the latest results and summary files."""
+        csv_latest = os.path.join(output_dir, "validation_results_latest.csv")
+        summary_latest = os.path.join(output_dir, "validation_summary_latest.json")
+        
+        csv_basename = os.path.basename(csv_path)
+        summary_basename = os.path.basename(summary_path)
+        
+        try:
+            if os.path.islink(csv_latest):
+                os.unlink(csv_latest)
+            elif os.path.exists(csv_latest):
+                os.remove(csv_latest)
+            os.symlink(csv_basename, csv_latest)
+            logger.info(f"Updated symlink: validation_results_latest.csv -> {csv_basename}")
+        except OSError as e:
+            logger.warning(f"Failed to create CSV symlink: {e}")
+        
+        try:
+            if os.path.islink(summary_latest):
+                os.unlink(summary_latest)
+            elif os.path.exists(summary_latest):
+                os.remove(summary_latest)
+            os.symlink(summary_basename, summary_latest)
+            logger.info(f"Updated symlink: validation_summary_latest.json -> {summary_basename}")
+        except OSError as e:
+            logger.warning(f"Failed to create summary symlink: {e}")
+    
+    def _aggregate_by_field(self, field_name: str) -> Dict[str, Dict[str, Any]]:
+        """Generic aggregation by any field on TestResult."""
+        groups = {}
         
         for result in self.session.results:
-            cat = result.category
-            if cat not in categories:
-                categories[cat] = {
+            key = getattr(result, field_name, "") or "unknown"
+            if not key:
+                key = "unknown"
+            
+            if key not in groups:
+                groups[key] = {
                     "total": 0,
                     "passed": 0,
                     "failed": 0,
@@ -937,31 +973,47 @@ class BrandonBotValidator:
                     "avg_alignment": 0,
                 }
             
-            categories[cat]["total"] += 1
+            groups[key]["total"] += 1
             if result.pass_fail == "PASS":
-                categories[cat]["passed"] += 1
+                groups[key]["passed"] += 1
             elif result.pass_fail == "FAIL":
-                categories[cat]["failed"] += 1
+                groups[key]["failed"] += 1
             
-            categories[cat]["avg_clarity"] += result.score_clarity
-            categories[cat]["avg_empathy"] += result.score_empathy
-            categories[cat]["avg_accuracy"] += result.score_accuracy
-            categories[cat]["avg_engagement"] += result.score_engagement
-            categories[cat]["avg_tone"] += result.score_tone
-            categories[cat]["avg_alignment"] += result.score_alignment
+            groups[key]["avg_clarity"] += result.score_clarity
+            groups[key]["avg_empathy"] += result.score_empathy
+            groups[key]["avg_accuracy"] += result.score_accuracy
+            groups[key]["avg_engagement"] += result.score_engagement
+            groups[key]["avg_tone"] += result.score_tone
+            groups[key]["avg_alignment"] += result.score_alignment
         
-        for cat in categories:
-            total = categories[cat]["total"]
+        for key in groups:
+            total = groups[key]["total"]
             if total > 0:
-                categories[cat]["avg_clarity"] /= total
-                categories[cat]["avg_empathy"] /= total
-                categories[cat]["avg_accuracy"] /= total
-                categories[cat]["avg_engagement"] /= total
-                categories[cat]["avg_tone"] /= total
-                categories[cat]["avg_alignment"] /= total
-                categories[cat]["pass_rate"] = categories[cat]["passed"] / total
+                groups[key]["avg_clarity"] /= total
+                groups[key]["avg_empathy"] /= total
+                groups[key]["avg_accuracy"] /= total
+                groups[key]["avg_engagement"] /= total
+                groups[key]["avg_tone"] /= total
+                groups[key]["avg_alignment"] /= total
+                groups[key]["pass_rate"] = groups[key]["passed"] / total
         
-        return categories
+        return groups
+    
+    def _aggregate_by_category(self) -> Dict[str, Dict[str, Any]]:
+        """Aggregate results by category."""
+        return self._aggregate_by_field("category")
+    
+    def _aggregate_by_engagement_style(self) -> Dict[str, Dict[str, Any]]:
+        """Aggregate results by engagement style."""
+        return self._aggregate_by_field("engagement_style")
+    
+    def _aggregate_by_model(self) -> Dict[str, Dict[str, Any]]:
+        """Aggregate results by LLM model (genai field)."""
+        return self._aggregate_by_field("genai")
+    
+    def _aggregate_by_persona(self) -> Dict[str, Dict[str, Any]]:
+        """Aggregate results by user persona."""
+        return self._aggregate_by_field("persona")
     
     def print_summary(self):
         """Print validation summary to console."""
