@@ -142,6 +142,7 @@ class TestResult:
         """
         # Primary: Try structured response parsing (JSON or delimiters)
         parsed = parse_structured_response(bot_response)
+        debug_db = get_debug_db()
         
         if parsed.parse_method in ("json", "delimiter"):
             # Successfully extracted structured response
@@ -149,7 +150,6 @@ class TestResult:
             
             # Log reasoning to debug DB
             if parsed.reasoning:
-                debug_db = get_debug_db()
                 debug_db.log_reasoning(
                     session_id="",
                     request_id=self.test_id,
@@ -161,8 +161,17 @@ class TestResult:
             # Fallback: Use regex sanitization for remaining chatter
             clean_response = sanitize_bot_response(parsed.final_response)
             
-            if bot_response != clean_response:
-                debug_db = get_debug_db()
+            # Always log fallback parsing for forensic visibility
+            # The "reasoning" in fallback is the chatter that was stripped
+            stripped_content = bot_response[:len(bot_response) - len(clean_response)] if len(bot_response) > len(clean_response) else ""
+            if bot_response != clean_response or stripped_content:
+                debug_db.log_reasoning(
+                    session_id="",
+                    request_id=self.test_id,
+                    reasoning=f"[FALLBACK STRIPPED] {stripped_content[:500] if stripped_content else 'Minor sanitization applied'}",
+                    parse_method=f"fallback_{parsed.parse_method}",
+                    raw_response=bot_response[:2000]
+                )
                 debug_db.log_raw_llm_response(
                     query=user_prompt,
                     raw_response=bot_response,

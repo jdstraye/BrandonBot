@@ -74,6 +74,16 @@ REASONING_PREFIXES = [
     re.compile(r"^No (?:search|tool|verification) is needed[^.]*[.,]\s*", re.IGNORECASE),
 ]
 
+# Patterns to match reasoning blocks that should be fully removed
+REASONING_BLOCK_PATTERNS = [
+    # "You're right, ... Let me check Brandon's platform."
+    re.compile(r"You(?:'re| are) right[^.]*\.[^\n]*(?:Let me|I'll)[^\n]*\.\s*", re.IGNORECASE | re.DOTALL),
+    # "I'll search the knowledge base." and similar
+    re.compile(r"I(?:'ll| will) (?:search|check|verify)[^.]*\.\s*", re.IGNORECASE),
+    # "Here's the corrected response:" (anywhere, not just at start)
+    re.compile(r"Here(?:'s| is) (?:the|my) (?:corrected|updated|revised) response:?\s*", re.IGNORECASE),
+]
+
 # Step heading patterns to strip
 STEP_HEADING_PATTERNS = [
     re.compile(r'^#+\s*Step \d+:?[^\n]*\n?', re.MULTILINE),
@@ -192,6 +202,10 @@ def _strip_reasoning_chatter(text: str) -> str:
     if (result.startswith('"') and result.endswith('"')) or \
        (result.startswith("'") and result.endswith("'")):
         result = result[1:-1].strip()
+    
+    # Strip reasoning block patterns (anywhere in text)
+    for pattern in REASONING_BLOCK_PATTERNS:
+        result = pattern.sub('', result)
     
     # Strip step heading patterns
     for pattern in STEP_HEADING_PATTERNS:
