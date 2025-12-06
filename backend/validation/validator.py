@@ -248,15 +248,16 @@ class BrandonBotValidator:
     Implements the 5-step adversarial evaluator loop.
     """
     
-    def __init__(self, use_judge: bool = True, use_agent: bool = False, require_slm: bool = False):
+    def __init__(self, use_judge: bool = True, use_agent: bool = False, require_slm: bool = True):
         """
         Initialize the BrandonBot validation engine.
         
         Args:
             use_judge: Enable Ollama LLM judge for scoring
             use_agent: Enable full agent orchestrator for vague loop testing
-            require_slm: If True, require SLM models and FEC RAG for validation.
-                        If False (default), use pattern fallbacks when SLM/RAG not available.
+            require_slm: If True (default), require SLM models for validation.
+                        This ensures proper intent checking via MS-MARCO cross-encoder.
+                        If False, fall back to pattern-only checking (NOT recommended).
         """
         self.pq = Prequalifier(require_slm=require_slm)
         self.ov = OutputValidatorSLM(require_slm=require_slm)
