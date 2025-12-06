@@ -509,6 +509,24 @@ def sanitize_bot_response(raw_response: str) -> str:
         r"I need to use the \w+ (?:tool|function)[^.]*\.",
         r"Based on the tool results?,?\s*",
         r"The \w+ tool (?:returned|shows|indicates)[^.]*\.",
+        
+        r"You're right,? I should verify[^.]*\. Here's the corrected response:?",
+        r"Here's (?:the|my) corrected response:?",
+        r"Here's (?:the|a) (?:more )?(?:accurate|better|proper) response:?",
+        r"I'll make sure to verify[^.]*\.",
+        r"I'll proceed to[^.]*\.",
+        r"^#+\s*Step \d+:?[^\n]*\n?",
+        r"\n#+\s*Step \d+:?[^\n]*",
+        r"No (?:search|tool|verification) is needed[^.]*[.,]",
+        r"(?:The|My) response is:?",
+        r"I'll (?:provide|give) (?:a|the) (?:friendly|helpful)[^.]*\.",
+        r"(?:So )?I'll proceed[^.]*\.",
+        r"Let me (?:provide|give)[^.]*\.",
+        r"I(?:'ll| will) verify[^.]*\.",
+        r"After (?:searching|checking|verifying)[^,.:]*,?\s*",
+        r"According to (?:my search|the search|my verification)[^,.:]*,?\s*",
+        r"^\"",
+        r"\"$",
     ]
     
     for pattern in patterns_to_remove:
@@ -529,7 +547,9 @@ def sanitize_bot_response(raw_response: str) -> str:
             skip_keywords = [
                 "should have", "apologize", "error in my", "let me correct",
                 "to verify", "search_", "function", "tool", "language model",
-                "correct response would be"
+                "correct response would be", "here's the corrected", "step 1:",
+                "step 2:", "step 3:", "i'll proceed", "no search is needed",
+                "i'll verify", "i'll make sure", "the response is:"
             ]
             for kw in skip_keywords:
                 if kw.lower() in sentence.lower():
