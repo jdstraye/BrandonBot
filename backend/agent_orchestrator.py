@@ -999,50 +999,131 @@ Remember: You're here to inform voters and build support for Brandon's campaign.
                     
                     # Check for "intent to search" without actual tool call
                     # LLM sometimes says "I will search..." but doesn't call tools
+                    # Only trigger if response is SHORT (< 200 chars) AND contains intent phrase ANYWHERE
                     import re
                     intent_to_search_patterns = [
                         r"I (?:will|shall|am going to|'ll) (?:now )?(?:search|check|verify|look up)",
-                        r"Let me (?:search|check|verify|look up|retrieve)",
                         r"I (?:need to|should) (?:search|check|verify)",
-                        r"searching (?:Brandon's|his|the) (?:official )?positions?",
+                        r"Let me (?:search|check|verify|look up|retrieve)",
+                        r"(?:searching|search) (?:Brandon's|his|the) (?:official )?positions?",
+                        r"check his (?:official )?position",
+                        r"One moment (?:while|as) I (?:verify|check|search)",
+                        r"verify Brandon's (?:official )?position",
                     ]
-                    intent_to_search = any(
+                    is_stub_response = len(proposed_response.strip()) < 200
+                    intent_to_search = is_stub_response and any(
                         re.search(pattern, proposed_response, re.IGNORECASE) 
                         for pattern in intent_to_search_patterns
                     )
+                    # Count how many times we've already tried to force action on intent stubs
+                    intent_force_count = sum(1 for m in messages if "SYSTEM: You said you would search" in m.get("content", ""))
                     
                     if intent_to_search and iteration < self.max_tool_iterations:
-                        logger.warning(f"[{request_id}] Intent-to-search detected without tool call - forcing action")
-                        messages.append({
-                            "role": "user",
-                            "content": """SYSTEM: You said you would search but didn't actually call a tool.
+                        if intent_force_count < 2:
+                            logger.warning(f"[{request_id}] Intent-to-search stub detected (attempt {intent_force_count + 1}) - forcing action")
+                            # Append the stub response to history so LLM has context
+                            messages.append({
+                                "role": "assistant",
+                                "content": proposed_response
+                            })
+                            messages.append({
+                                "role": "user",
+                                "content": """SYSTEM: You said you would search but didn't actually call a tool.
 
 Please either:
 1. Call search_brandon_positions NOW to get the information, OR
 2. Provide your final answer immediately without mentioning searching
 
 Do NOT say you will search - either search or answer."""
-                        })
-                        continue
+                            })
+                            continue
+                        else:
+                            # After 2 failed attempts, force a search ourselves
+                            logger.warning(f"[{request_id}] Intent stub persisted after {intent_force_count} attempts - forcing search")
+                            try:
+                                # Extract topic from the original question for search
+                                forced_search = ToolCall(
+                                    name="search_brandon_positions",
+                                    arguments={"query": sanitized_message, "limit": 5},
+                                    call_id="forced_search"
+                                )
+                                forced_result = await self.tool_executor.execute(forced_search, session_id)
+                                forced_context = forced_result.to_context_string()
+                                
+                                # Add the forced search results to messages
+                                messages.append({
+                                    "role": "assistant",
+                                    "content": proposed_response
+                                })
+                                messages.append({
+                                    "role": "tool",
+                                    "content": f"FORCED SEARCH RESULTS (system auto-executed):\n\n{forced_context}\n\nNow provide your final answer based on these results."
+                                })
+                                metadata["tool_calls"].append({
+                                    "name": "search_brandon_positions",
+                                    "arguments": {"query": sanitized_message, "limit": 5},
+                                    "forced": True
+                                })
+                                continue
+                            except Exception as e:
+                                logger.error(f"[{request_id}] Forced search failed: {e}")
+                                final_response = "I apologize, but I'm having technical difficulties retrieving that information right now. Would you like someone from Brandon's team to call you back to discuss this in detail?"
+                                break
                     
-                    # Factual safeguard check (removed iteration==1 restriction)
+                    # Factual safeguard check - fires when THIS ITERATION had no tools
+                    # (tool_calls is empty for this specific llm_response)
                     is_factual_policy = "policy" in question_types or topic not in ["general", "callback"]
-                    answered_without_search = len(metadata["tool_calls"]) == 0
-                    safeguard_already_triggered = any("SYSTEM CHECK" in m.get("content", "") for m in messages)
+                    this_iteration_no_tools = len(tool_calls) == 0  # Current llm_response had no tools
+                    factual_force_count = sum(1 for m in messages if "SYSTEM CHECK:" in m.get("content", ""))
                     
-                    if is_factual_policy and answered_without_search and not safeguard_already_triggered:
-                        logger.warning(f"[{request_id}] Factual safeguard triggered - LLM answered policy question without tools")
-                        messages.append({
-                            "role": "user",
-                            "content": f"""SYSTEM CHECK: You answered a factual policy question without searching Brandon's knowledge base.
+                    if is_factual_policy and this_iteration_no_tools:
+                        if factual_force_count < 2:
+                            logger.warning(f"[{request_id}] Factual safeguard triggered (attempt {factual_force_count + 1}) - LLM answered policy without tools")
+                            # Append the proposed answer to history so LLM has context
+                            messages.append({
+                                "role": "assistant",
+                                "content": proposed_response
+                            })
+                            messages.append({
+                                "role": "user",
+                                "content": f"""SYSTEM CHECK: You answered a factual policy question without searching Brandon's knowledge base.
 
 Please verify your answer by using search_brandon_positions to confirm Brandon's official position on this topic.
 
 Your proposed answer was: {proposed_response[:200]}...
 
 Either confirm with a search or explain why no search is needed."""
-                        })
-                        continue
+                            })
+                            continue
+                        else:
+                            # After 2 failed attempts, force a search ourselves
+                            logger.warning(f"[{request_id}] Factual safeguard exhausted after {factual_force_count} attempts - forcing search")
+                            try:
+                                forced_search = ToolCall(
+                                    name="search_brandon_positions",
+                                    arguments={"query": sanitized_message, "limit": 5},
+                                    call_id="forced_factual_search"
+                                )
+                                forced_result = await self.tool_executor.execute(forced_search, session_id)
+                                forced_context = forced_result.to_context_string()
+                                
+                                messages.append({
+                                    "role": "assistant",
+                                    "content": proposed_response
+                                })
+                                messages.append({
+                                    "role": "tool",
+                                    "content": f"FORCED VERIFICATION RESULTS (system auto-executed):\n\n{forced_context}\n\nNow provide your verified final answer based on these results."
+                                })
+                                metadata["tool_calls"].append({
+                                    "name": "search_brandon_positions",
+                                    "arguments": {"query": sanitized_message, "limit": 5},
+                                    "forced": True
+                                })
+                                continue
+                            except Exception as e:
+                                logger.error(f"[{request_id}] Forced factual search failed: {e}")
+                                # Accept the unverified response as last resort
                     
                     final_response = proposed_response
                     break
