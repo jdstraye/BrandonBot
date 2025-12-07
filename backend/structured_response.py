@@ -135,28 +135,94 @@ def parse_structured_response(raw_response: str) -> ParsedResponse:
     )
 
 
+def _fix_json_newlines(json_str: str) -> str:
+    """
+    Fix malformed JSON with literal newlines inside string values.
+    
+    LLMs sometimes output JSON like:
+        {"final_response": "Line 1
+    Line 2"}
+    
+    This converts literal newlines inside strings to proper \\n escapes.
+    """
+    result = []
+    in_string = False
+    escape_next = False
+    
+    for char in json_str:
+        if escape_next:
+            result.append(char)
+            escape_next = False
+        elif char == '\\':
+            result.append(char)
+            escape_next = True
+        elif char == '"':
+            result.append(char)
+            in_string = not in_string
+        elif char == '\n' and in_string:
+            # Convert literal newline inside string to escape sequence
+            result.append('\\n')
+        else:
+            result.append(char)
+    
+    return ''.join(result)
+
+
 def _try_parse_json(raw_response: str) -> Optional[ParsedResponse]:
     """Try to parse response as JSON with StructuredResponseSchema."""
     
-    # Try to find JSON object in the response
-    json_patterns = [
-        # Direct JSON object
-        re.compile(r'^\s*(\{[\s\S]*\})\s*$'),
-        # JSON in code block
-        re.compile(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```'),
-        # JSON after text
-        re.compile(r'(\{[^{}]*"final_response"[^{}]*\})'),
-    ]
+    # First, try direct JSON parse (most common case)
+    try:
+        data = json.loads(raw_response.strip())
+        if isinstance(data, dict) and "final_response" in data:
+            schema = StructuredResponseSchema(**data)
+            return ParsedResponse(
+                final_response=schema.final_response.strip(),
+                reasoning=schema.reasoning,
+                metadata=schema.metadata,
+                parse_method="json",
+                raw_response=raw_response
+            )
+    except (json.JSONDecodeError, ValidationError):
+        pass
     
-    for pattern in json_patterns:
-        match = pattern.search(raw_response)
-        if match:
+    # Try fixing malformed JSON with literal newlines in strings
+    if '{' in raw_response and '"final_response"' in raw_response:
+        fixed_json = _fix_json_newlines(raw_response.strip())
+        try:
+            data = json.loads(fixed_json)
+            if isinstance(data, dict) and "final_response" in data:
+                schema = StructuredResponseSchema(**data)
+                return ParsedResponse(
+                    final_response=schema.final_response.strip(),
+                    reasoning=schema.reasoning,
+                    metadata=schema.metadata,
+                    parse_method="json",
+                    raw_response=raw_response
+                )
+        except (json.JSONDecodeError, ValidationError):
+            pass
+    
+    # Try to find JSON object with balanced braces
+    json_start = raw_response.find('{')
+    if json_start != -1 and '"final_response"' in raw_response:
+        # Find the matching closing brace
+        brace_count = 0
+        json_end = -1
+        for i, char in enumerate(raw_response[json_start:], json_start):
+            if char == '{':
+                brace_count += 1
+            elif char == '}':
+                brace_count -= 1
+                if brace_count == 0:
+                    json_end = i + 1
+                    break
+        
+        if json_end > json_start:
+            json_str = raw_response[json_start:json_end]
             try:
-                json_str = match.group(1)
                 data = json.loads(json_str)
-                
-                # Validate with Pydantic
-                if "final_response" in data:
+                if isinstance(data, dict) and "final_response" in data:
                     schema = StructuredResponseSchema(**data)
                     return ParsedResponse(
                         final_response=schema.final_response.strip(),
@@ -166,8 +232,25 @@ def _try_parse_json(raw_response: str) -> Optional[ParsedResponse]:
                         raw_response=raw_response
                     )
             except (json.JSONDecodeError, ValidationError) as e:
-                logger.debug(f"JSON parse attempt failed: {e}")
-                continue
+                logger.debug(f"Balanced brace JSON parse failed: {e}")
+    
+    # Try code block extraction
+    code_block_pattern = re.compile(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```')
+    match = code_block_pattern.search(raw_response)
+    if match:
+        try:
+            data = json.loads(match.group(1))
+            if isinstance(data, dict) and "final_response" in data:
+                schema = StructuredResponseSchema(**data)
+                return ParsedResponse(
+                    final_response=schema.final_response.strip(),
+                    reasoning=schema.reasoning,
+                    metadata=schema.metadata,
+                    parse_method="json",
+                    raw_response=raw_response
+                )
+        except (json.JSONDecodeError, ValidationError) as e:
+            logger.debug(f"Code block JSON parse failed: {e}")
     
     return None
 
