@@ -997,9 +997,37 @@ Remember: You're here to inform voters and build support for Brandon's campaign.
                     
                     metadata["response_parse_method"] = parsed.parse_method
                     
-                    # Factual safeguard check
+                    # Check for "intent to search" without actual tool call
+                    # LLM sometimes says "I will search..." but doesn't call tools
+                    import re
+                    intent_to_search_patterns = [
+                        r"I (?:will|shall|am going to|'ll) (?:now )?(?:search|check|verify|look up)",
+                        r"Let me (?:search|check|verify|look up|retrieve)",
+                        r"I (?:need to|should) (?:search|check|verify)",
+                        r"searching (?:Brandon's|his|the) (?:official )?positions?",
+                    ]
+                    intent_to_search = any(
+                        re.search(pattern, proposed_response, re.IGNORECASE) 
+                        for pattern in intent_to_search_patterns
+                    )
+                    
+                    if intent_to_search and iteration < self.max_tool_iterations:
+                        logger.warning(f"[{request_id}] Intent-to-search detected without tool call - forcing action")
+                        messages.append({
+                            "role": "user",
+                            "content": """SYSTEM: You said you would search but didn't actually call a tool.
+
+Please either:
+1. Call search_brandon_positions NOW to get the information, OR
+2. Provide your final answer immediately without mentioning searching
+
+Do NOT say you will search - either search or answer."""
+                        })
+                        continue
+                    
+                    # Factual safeguard check (removed iteration==1 restriction)
                     is_factual_policy = "policy" in question_types or topic not in ["general", "callback"]
-                    answered_without_search = iteration == 1 and len(metadata["tool_calls"]) == 0
+                    answered_without_search = len(metadata["tool_calls"]) == 0
                     safeguard_already_triggered = any("SYSTEM CHECK" in m.get("content", "") for m in messages)
                     
                     if is_factual_policy and answered_without_search and not safeguard_already_triggered:
@@ -1033,8 +1061,25 @@ Either confirm with a search or explain why no search is needed."""
                         "arguments": tool_call.arguments
                     })
                     
+                    import time as time_module
+                    tool_start = time_module.time()
                     result = await self.tool_executor.execute(tool_call, session_id)
+                    tool_duration_ms = int((time_module.time() - tool_start) * 1000)
                     tool_results.append(result)
+                    
+                    # Log tool call to debug.db
+                    try:
+                        debug_db = get_debug_db()
+                        debug_db.log_tool_call(
+                            tool_name=tool_call.name,
+                            arguments=tool_call.arguments,
+                            result=result.to_context_string()[:2000],
+                            success=not result.error,
+                            duration_ms=tool_duration_ms,
+                            session_id=session_id
+                        )
+                    except Exception as db_err:
+                        logger.debug(f"[{request_id}] Failed to log tool call: {db_err}")
                     
                     if result.sources:
                         metadata["sources"].extend(result.sources)
