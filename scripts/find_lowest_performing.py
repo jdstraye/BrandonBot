@@ -1,28 +1,34 @@
 #!/usr/bin/env python3
 import csv
-import sqlite3
-from pathlib import Path
+from collections import defaultdict
 
-# Update these paths to match your project layout
-CSV_FILE = "backend/validation/results/validation_results_latest.csv"
-DB_FILE   = "backend/validation/results/validation_debug.db"
+# This is the file that actually has your data
+CSV_PATH = "/home/runner/workspace/backend/validation/results/validation_results_latest.csv"
 
-# Verify files exist
-for p in (CSV_FILE, DB_FILE):
-    if not Path(p).exists():
-        raise FileNotFoundError(f"File not found: {p}")
+print("Loading real validation results...\n")
 
-print("Loading scored conversations from CSV...")
-scored = {}  # test_id → {Clarity: x, Empathy: y, ...}
+dialogs = defaultdict(list)
+scores  = {}
 
-with open(CSV_FILE, newline="", encoding="utf-8") as f:
+with open(CSV_PATH, newline="", encoding="utf-8") as f:
     reader = csv.DictReader(f)
+
     for row in reader:
         tid = row["Test_ID"].strip()
+
+        # Save every turn
+        dialogs[tid].append({
+            "turn": row["Turn"],
+            "user": row["User_Prompt"] or "",
+            "bot":  row["Bot_Response"] or "(empty)"
+        })
+
+        # The evaluated rows are the ones where Score_Clarity is present AND > 0
+        # In your real file, these start appearing after the PQ-* tests
         try:
-            clarity = float(row["Score_Clarity"] or 0)
-            if clarity > 0:                               # only evaluated rows
-                scored[tid] = {
+            clarity = float(row["Score_Clarity"])
+            if clarity > 0:                # ← THIS IS THE KEY LINE
+                scores[tid] = {
                     "Clarity":    clarity,
                     "Empathy":    float(row["Score_Empathy"] or 0),
                     "Accuracy":   float(row["Score_Accuracy"] or 0),
@@ -30,58 +36,32 @@ with open(CSV_FILE, newline="", encoding="utf-8") as f:
                     "Tone":       float(row["Score_Tone"] or 0),
                     "Alignment":  float(row["Score_Alignment"] or 0),
                 }
-        except ValueError:
+        except:
             continue
 
-if not scored:
-    raise ValueError("No scored conversations found in the CSV!")
+if not scores:
+    print("No evaluated conversations (Score_Clarity > 0) found in this file.")
+    print("Make sure the evaluation run has finished and real scores are present.")
+    exit(1)
 
-# Find lowest score per category
+# Find worst in each category
 categories = ["Clarity", "Empathy", "Accuracy", "Engagement", "Tone", "Alignment"]
-lowest = {}
+
+print("="*90)
+print("LOWEST PERFORMING CONVERSATIONS (real scored ones only)")
+print("="*90)
 
 for cat in categories:
-    min_score = min(info[cat] for info in scored.values())
-    test_id   = next(tid for tid, info in scored.items() if info[cat] == min_score)
-    lowest[cat] = (test_id, min_score)
+    worst_tid   = min(scores, key=lambda x: scores[x][cat])
+    worst_score = scores[worst_tid][cat]
 
-# Connect to DB and pull full dialogs
-conn = sqlite3.connect(DB_FILE)
-cur  = conn.cursor()
-
-# Confirm the real table name (should print "dialog_turns")
-cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
-print("Tables in DB:", [r[0] for r in cur.fetchall()])
-
-print("\n" + "="*80)
-print("LOWEST PERFORMING CONVERSATIONS BY CATEGORY")
-print("="*80)
-
-for cat, (test_id, score) in lowest.items():
-    print(f"\nLowest Score_{cat}: {score}  →  Test_ID: {test_id}\n")
-
-    cur.execute("""
-        SELECT turn, user_prompt, bot_response
-        FROM dialog_turns
-        WHERE test_id = ?
-        ORDER BY turn
-    """, (test_id,))
-
-    rows = cur.fetchall()
-
-    if not rows:
-        print("  No dialog found in database for this Test_ID")
-        continue
-
-    for turn, user, bot in rows:
-        print(f"Turn {turn}")
-        print(f"User: {user}")
-        if bot is None:
-            bot = "(no response / tool call only)"
-        print(f"Bot : {bot}")
-        print("-" * 60)
-
-    print("\n" + "="*80)
-
-conn.close()
-print("\nFinished!")
+    print(f"\nScore_{cat}: {worst_score} → Test_ID: {worst_tid}\n")
+    print("Full conversation:")
+    print("-" * 70)
+    for t in sorted(dialogs[worst_tid], key=lambda x: int(x["turn"])):
+        print(f"Turn {t['turn']}")
+        if t["user"]:
+            print(f"User: {t['user']}")
+        print(f"Bot : {t['bot']}")
+        print()
+    print("="*90)
