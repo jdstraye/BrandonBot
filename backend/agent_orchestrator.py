@@ -218,7 +218,13 @@ class ToolExecutor:
         """Search Brandon's AUTHORITATIVE positions (BrandonPlatform + PreviousQA only)"""
         query = args.get("query", "")
         limit_val = args.get("limit", 5)
-        if isinstance(limit_val, float):
+        # Coerce to int - LLM sometimes passes string like "5" instead of 5
+        if isinstance(limit_val, str):
+            try:
+                limit_val = int(limit_val)
+            except ValueError:
+                limit_val = 5
+        elif isinstance(limit_val, float):
             limit_val = int(limit_val)
         limit = min(limit_val, 10)
         
@@ -260,7 +266,13 @@ class ToolExecutor:
         query = args.get("query", "")
         brandon_topic = args.get("brandon_topic", "")
         limit_val = args.get("limit", 3)
-        if isinstance(limit_val, float):
+        # Coerce to int - LLM sometimes passes string like "3" instead of 3
+        if isinstance(limit_val, str):
+            try:
+                limit_val = int(limit_val)
+            except ValueError:
+                limit_val = 3
+        elif isinstance(limit_val, float):
             limit_val = int(limit_val)
         limit = min(limit_val, 5)
         
