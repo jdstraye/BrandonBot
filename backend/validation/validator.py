@@ -624,7 +624,7 @@ class BrandonBotValidator:
                         last_metadata = metadata
                         
                         tool_called = metadata.get("tool_called", "") if metadata else ""
-                        result.genai = metadata.get("model", "") if metadata else ""
+                        result.genai = metadata.get("model_used", metadata.get("model", "")) if metadata else ""
                         
                         result.add_turn(
                             user_prompt=current_input,
@@ -811,7 +811,7 @@ class BrandonBotValidator:
                 passed = structure_passed and scores.all_passing
                 result.pass_fail = "PASS" if passed else "FAIL"
                 result.reasoning = f"Turns: {turn_count}, Clarifying: {clarifying_questions}, Scores: {scores.average:.2f}"
-                result.genai = last_metadata.get("model", "") if last_metadata else ""
+                result.genai = last_metadata.get("model_used", last_metadata.get("model", "")) if last_metadata else ""
                 
             except Exception as e:
                 result.pass_fail = "ERROR"
@@ -997,9 +997,13 @@ class BrandonBotValidator:
         groups = {}
         
         for result in self.session.results:
-            key = getattr(result, field_name, "") or "unknown"
+            key = getattr(result, field_name, "")
             if not key:
-                key = "unknown"
+                # Use descriptive label for tests that don't have this field
+                if result.category in ("PQ", "OV_UNIT"):
+                    key = "N/A (unit test)"
+                else:
+                    key = "unknown"
             
             if key not in groups:
                 groups[key] = {
