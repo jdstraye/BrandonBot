@@ -82,6 +82,10 @@ REASONING_BLOCK_PATTERNS = [
     re.compile(r"I(?:'ll| will) (?:search|check|verify)[^.]*\.\s*", re.IGNORECASE),
     # "Here's the corrected response:" (anywhere, not just at start)
     re.compile(r"Here(?:'s| is) (?:the|my) (?:corrected|updated|revised) response:?\s*", re.IGNORECASE),
+    # "One moment while I verify/check/search..." preambles
+    re.compile(r"One moment (?:while|as) I (?:verify|check|search|look up|retrieve)[^.]*\.\s*", re.IGNORECASE),
+    # "Let me verify/check/search..." preambles
+    re.compile(r"Let me (?:verify|check|search|look up|retrieve)[^.]*\.\s*", re.IGNORECASE),
 ]
 
 # Step heading patterns to strip
@@ -220,8 +224,10 @@ def _try_parse_json(raw_response: str) -> Optional[ParsedResponse]:
         
         if json_end > json_start:
             json_str = raw_response[json_start:json_end]
+            # Apply newline fix to extracted JSON block (handles literal newlines in strings)
+            fixed_json_str = _fix_json_newlines(json_str)
             try:
-                data = json.loads(json_str)
+                data = json.loads(fixed_json_str)
                 if isinstance(data, dict) and "final_response" in data:
                     schema = StructuredResponseSchema(**data)
                     return ParsedResponse(
