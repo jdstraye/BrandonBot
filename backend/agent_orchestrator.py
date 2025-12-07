@@ -687,8 +687,14 @@ class AgentOrchestrator:
         self.session_manager = SessionManager()
         self.max_tool_iterations = 5
     
-    def get_system_prompt(self, question_types: List[str] = None, topic: str = None) -> str:
-        """Get the system prompt for the LLM with optional question type hints"""
+    def get_system_prompt(self, question_types: List[str] = None, topic: str = None, internal_hints_block: str = None) -> str:
+        """Get the system prompt for the LLM with optional question type hints and internal context.
+        
+        Args:
+            question_types: List of detected question types
+            topic: Detected topic
+            internal_hints_block: Pre-formatted internal hints block from PQ (InternalHints.to_system_prompt_block())
+        """
         
         question_type_hint = ""
         if question_types:
@@ -702,6 +708,12 @@ class AgentOrchestrator:
                 question_type_hint += "\nUser may want a callback - be ready to offer one"
         
         topic_hint = f"\nDETECTED TOPIC: {topic}" if topic else ""
+        
+        # Internal hints block goes at the END of system prompt (before structured output instructions)
+        # These are sideband signals that should NEVER appear in user-facing output
+        internal_context = ""
+        if internal_hints_block:
+            internal_context = f"\n\n{internal_hints_block}\nIMPORTANT: The INTERNAL_CONTEXT above is guidance for you. NEVER include any text from it in your response to the user."
         
         return f"""You are BrandonBot, an AI assistant for Brandon Sowers' political campaign.
 {question_type_hint}{topic_hint}
@@ -765,7 +777,7 @@ CRITICAL RULES:
 - For emotional/values questions, consider scripture inclusion
 - NEVER invent specific dates, events, town halls, speeches, or quotes that are not in your retrieved context
 - If you don't have a specific source for a claim, use general language like "Brandon has stated" rather than fabricating citations
-
+{internal_context}
 Remember: You're here to inform voters and build support for Brandon's campaign.
 """ + get_structured_output_instructions()
 
@@ -898,8 +910,9 @@ Remember: You're here to inform voters and build support for Brandon's campaign.
             messages = self._build_messages(session)
             
             # ===== STAGE 2: LLM AGENT WITH TOOLS =====
-            # Build system prompt with PQ enrichment
-            full_system_prompt = self.get_system_prompt(question_types, topic)
+            # Build system prompt with PQ enrichment and internal hints
+            internal_hints_block = pq_result.internal_hints.to_system_prompt_block() if pq_result.internal_hints else ""
+            full_system_prompt = self.get_system_prompt(question_types, topic, internal_hints_block)
             
             # Add intent context
             if intent_context:
