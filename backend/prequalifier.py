@@ -116,6 +116,58 @@ class RAGResult:
 
 
 @dataclass
+class InternalHints:
+    """
+    Sideband signals for the LLM that stay in system prompt context.
+    
+    These hints guide the LLM's response without appearing in user messages.
+    Leak detection checks ensure these never appear in final output.
+    """
+    buying_signals: List[str] = field(default_factory=list)
+    suggested_actions: List[str] = field(default_factory=list)
+    frustration_context: Optional[str] = None
+    ov_feedback: Optional[str] = None
+    detected_email: Optional[str] = None
+    
+    def to_system_prompt_block(self) -> str:
+        """Format hints for injection into system prompt."""
+        if not self.buying_signals and not self.suggested_actions and not self.frustration_context and not self.ov_feedback:
+            return ""
+        
+        lines = ["[INTERNAL_CONTEXT_7x9k2m]"]  # Unique marker for leak detection
+        
+        if self.buying_signals:
+            lines.append(f"- Buying signals detected: {', '.join(self.buying_signals)}")
+        
+        if self.suggested_actions:
+            for action in self.suggested_actions:
+                lines.append(f"- Suggested action: {action}")
+        
+        if self.detected_email:
+            lines.append(f"- User provided email: {self.detected_email}")
+        
+        if self.frustration_context:
+            lines.append(f"- User frustration note: {self.frustration_context}")
+        
+        if self.ov_feedback:
+            lines.append(f"- Previous response issue: {self.ov_feedback}")
+        
+        lines.append("[END_INTERNAL_CONTEXT_7x9k2m]")
+        return "\n".join(lines)
+    
+    @staticmethod
+    def get_leak_markers() -> List[str]:
+        """Return markers that should NEVER appear in final user-facing output."""
+        return [
+            "[INTERNAL_CONTEXT_7x9k2m]",
+            "[END_INTERNAL_CONTEXT_7x9k2m]",
+            "INTERNAL_CONTEXT",
+            "Buying signals detected",
+            "Suggested action:",
+        ]
+
+
+@dataclass
 class PrequalifierResult:
     """Result from prequalifier analysis"""
     # Original query
@@ -151,6 +203,9 @@ class PrequalifierResult:
     
     # Pass-through flag (CLEAR + CALM = no enrichment needed)
     passthrough: bool = False
+    
+    # Internal hints for LLM guidance (never shown to user)
+    internal_hints: InternalHints = field(default_factory=InternalHints)
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert result to dictionary for serialization."""
@@ -241,6 +296,18 @@ class Prequalifier:
         r"useless|pointless|unhelpful",
         r"fed up|sick of|tired of|had enough",
         r"you (never|won't|can't|don't) (answer|help|listen)",
+    ]
+    
+    # Buying signal patterns - indicate user wants to take action
+    BUYING_SIGNAL_PATTERNS = [
+        (r"(i('d| would)?|i'd) (love|like|want) to help", "wants_to_help"),
+        (r"(sign|count) me (up|in)", "sign_up"),
+        (r"(want|ready|like) to (volunteer|donate|contribute|support)", "action_ready"),
+        (r"how (can|do) i (help|support|contribute|donate|volunteer)", "action_inquiry"),
+        (r"(i('m| am)|i'd be) (happy|willing|interested) to", "willing_to_help"),
+        (r"(take|taking) my money", "ready_to_donate"),
+        (r"(send|give|email) me (the|a|more) (booklet|info|brochure|information)", "wants_materials"),
+        (r"(my email|email.*(is|:))", "provided_email"),
     ]
     
     # SLM prompts for hybrid detection
@@ -431,6 +498,14 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
             vagueness_decision == VaguenessDecision.CLEAR
         )
         
+        # Step 8: Detect buying signals and build internal hints
+        buying_signals, detected_email = self._detect_buying_signals(result.sanitized_message)
+        result.internal_hints = self._build_internal_hints(
+            buying_signals,
+            detected_email,
+            frustration_decision
+        )
+        
         return result
     
     def _detect_patterns(self, message: str) -> PatternFlags:
@@ -485,6 +560,68 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
             flags.repeated_punct = True
         
         return flags
+    
+    def _detect_buying_signals(self, message: str) -> Tuple[List[str], Optional[str]]:
+        """
+        Detect buying signals in user message.
+        
+        Returns:
+            Tuple of (list of signal types detected, detected email if any)
+        """
+        signals = []
+        message_lower = message.lower()
+        detected_email = None
+        
+        for pattern, signal_type in self.BUYING_SIGNAL_PATTERNS:
+            if re.search(pattern, message_lower, re.IGNORECASE):
+                signals.append(signal_type)
+        
+        # Extract email if mentioned
+        email_match = re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', message)
+        if email_match:
+            detected_email = email_match.group()
+        
+        return signals, detected_email
+    
+    def _build_internal_hints(
+        self, 
+        signals: List[str], 
+        detected_email: Optional[str],
+        frustration_decision: FrustrationDecision
+    ) -> InternalHints:
+        """
+        Build internal hints based on detected signals and frustration.
+        
+        These hints go into the system prompt to guide the LLM without
+        appearing in user-facing output.
+        """
+        hints = InternalHints()
+        
+        if signals:
+            hints.buying_signals = signals
+            
+            # Generate suggested actions based on signals
+            if any(s in signals for s in ['wants_to_help', 'sign_up', 'action_ready', 'willing_to_help']):
+                hints.suggested_actions.append("Offer volunteer signup with register_volunteer tool")
+            
+            if any(s in signals for s in ['ready_to_donate', 'action_ready']):
+                hints.suggested_actions.append("Offer donation with make_donation tool")
+            
+            if 'action_inquiry' in signals:
+                hints.suggested_actions.append("Explain how user can help: volunteer, donate, or spread the word")
+            
+            if 'wants_materials' in signals:
+                hints.suggested_actions.append("Use perform_web_search to find booklet download link on brandonsowers.com, then provide the link")
+        
+        if detected_email:
+            hints.detected_email = detected_email
+        
+        if frustration_decision == FrustrationDecision.ESCALATE:
+            hints.frustration_context = "User is frustrated. Prioritize de-escalation and offer callback."
+        elif frustration_decision == FrustrationDecision.FRUSTRATED:
+            hints.frustration_context = "User shows mild frustration. Be extra empathetic and helpful."
+        
+        return hints
     
     def _classify_frustration(
         self,
