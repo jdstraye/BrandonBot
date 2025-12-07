@@ -130,7 +130,7 @@ class TestResult:
     duration_ms: int = 0
     
     def add_turn(self, user_prompt: str, bot_response: str, tool_called: str = "",
-                 pq_frustration: str = "", pq_vagueness: str = "") -> None:
+                 pq_frustration: str = "", pq_vagueness: str = "", model: str = "") -> None:
         """Add a conversation turn.
         
         The bot_response is processed to extract only user-facing content:
@@ -139,6 +139,9 @@ class TestResult:
         3. Finally uses regex sanitization for chatter removal
         
         Internal reasoning is logged to debug.db for investigation.
+        
+        Args:
+            model: The LLM model that generated this response (e.g. "nvidia/llama-4-maverick")
         """
         # Primary: Try structured response parsing (JSON or delimiters)
         parsed = parse_structured_response(bot_response)
@@ -157,6 +160,16 @@ class TestResult:
                     parse_method=parsed.parse_method,
                     raw_response=parsed.raw_response[:2000]
                 )
+            
+            # Always log raw LLM response with model info
+            debug_db.log_raw_llm_response(
+                query=user_prompt,
+                raw_response=bot_response,
+                sanitized_response=clean_response,
+                model=model,
+                test_id=self.test_id,
+                session_id=""
+            )
         else:
             # Fallback: Use regex sanitization for remaining chatter
             clean_response = sanitize_bot_response(parsed.final_response)
@@ -172,13 +185,16 @@ class TestResult:
                     parse_method=f"fallback_{parsed.parse_method}",
                     raw_response=bot_response[:2000]
                 )
-                debug_db.log_raw_llm_response(
-                    query=user_prompt,
-                    raw_response=bot_response,
-                    sanitized_response=clean_response,
-                    test_id=self.test_id,
-                    session_id=""
-                )
+            
+            # Always log raw LLM response with model info
+            debug_db.log_raw_llm_response(
+                query=user_prompt,
+                raw_response=bot_response,
+                sanitized_response=clean_response,
+                model=model,
+                test_id=self.test_id,
+                session_id=""
+            )
         
         turn = ConversationTurn(
             turn_number=len(self.turns) + 1,
@@ -624,14 +640,16 @@ class BrandonBotValidator:
                         last_metadata = metadata
                         
                         tool_called = metadata.get("tool_called", "") if metadata else ""
-                        result.genai = metadata.get("model_used", metadata.get("model", "")) if metadata else ""
+                        model_used = metadata.get("model_used", metadata.get("model", "")) if metadata else ""
+                        result.genai = model_used
                         
                         result.add_turn(
                             user_prompt=current_input,
                             bot_response=bot_response,
                             tool_called=tool_called,
                             pq_frustration=pq_frustration,
-                            pq_vagueness=pq_vagueness
+                            pq_vagueness=pq_vagueness,
+                            model=model_used
                         )
                         
                         bot_responses.append(bot_response)
@@ -765,12 +783,14 @@ class BrandonBotValidator:
                     logger.debug(f"Real agent response: {bot_response[:100]}")
                     
                     tool_called = metadata.get("tool_called", "") if metadata else ""
+                    model_used = metadata.get("model_used", metadata.get("model", "")) if metadata else ""
                     result.add_turn(
                         user_prompt=current_input,
                         bot_response=bot_response,
                         tool_called=tool_called,
                         pq_frustration=pq_frustration,
-                        pq_vagueness=pq_vagueness
+                        pq_vagueness=pq_vagueness,
+                        model=model_used
                     )
                     
                     bot_responses.append(bot_response)
