@@ -914,6 +914,19 @@ Remember: You're here to inform voters and build support for Brandon's campaign.
             internal_hints_block = pq_result.internal_hints.to_system_prompt_block() if pq_result.internal_hints else ""
             full_system_prompt = self.get_system_prompt(question_types, topic, internal_hints_block)
             
+            # Log internal hints to debug.db for forensic analysis
+            if pq_result.internal_hints and internal_hints_block:
+                try:
+                    debug_db = get_debug_db()
+                    debug_db.log_internal_hints(
+                        query=sanitized_message,
+                        internal_hints=pq_result.internal_hints,
+                        session_id=session_id,
+                        request_id=request_id
+                    )
+                except Exception as e:
+                    logger.warning(f"[{request_id}] Failed to log internal hints: {e}")
+            
             # Add intent context
             if intent_context:
                 full_system_prompt += f"\n\nINTENT ANALYSIS: {intent_context}"

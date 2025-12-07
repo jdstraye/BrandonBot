@@ -220,6 +220,32 @@ class ValidationDebugDB:
                 ON llm_reasoning(request_id)
             """)
             
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS internal_hints (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    test_id TEXT,
+                    session_id TEXT,
+                    request_id TEXT,
+                    query TEXT NOT NULL,
+                    buying_signals TEXT,
+                    frustration_context TEXT,
+                    suggested_actions TEXT,
+                    ov_feedback TEXT,
+                    full_hint_block TEXT
+                )
+            """)
+            
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_internal_hints_test_id 
+                ON internal_hints(test_id)
+            """)
+            
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_internal_hints_session 
+                ON internal_hints(session_id)
+            """)
+            
             conn.commit()
         
         logger.info(f"ValidationDebugDB initialized at {self.db_path}")
@@ -513,6 +539,42 @@ class ValidationDebugDB:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (timestamp, test_id, session_id, query, raw_response, sanitized_response, model, tokens_used))
             conn.commit()
+
+    def log_internal_hints(
+        self,
+        query: str,
+        internal_hints: Any,  # InternalHints from prequalifier
+        test_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        request_id: Optional[str] = None
+    ):
+        """
+        Log internal hints that were injected into the system prompt.
+        
+        This captures buying signals, frustration context, and other sideband
+        signals for forensic analysis of agent behavior.
+        """
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        buying_signals = json.dumps(internal_hints.buying_signals) if internal_hints.buying_signals else None
+        frustration_context = internal_hints.frustration_context
+        suggested_actions = json.dumps(internal_hints.suggested_actions) if internal_hints.suggested_actions else None
+        ov_feedback = internal_hints.ov_feedback
+        full_hint_block = internal_hints.to_system_prompt_block()
+        
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                INSERT INTO internal_hints 
+                (timestamp, test_id, session_id, request_id, query, buying_signals, 
+                 frustration_context, suggested_actions, ov_feedback, full_hint_block)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                timestamp, test_id, session_id, request_id, query, buying_signals,
+                frustration_context, suggested_actions, ov_feedback, full_hint_block
+            ))
+            conn.commit()
+        
+        logger.debug(f"Logged internal hints for query '{query[:50]}...'")
 
 
 # Global singleton instance
