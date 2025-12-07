@@ -996,11 +996,15 @@ class BrandonBotValidator:
         """Generic aggregation by any field on TestResult."""
         groups = {}
         
+        # Categories that are unit tests (no LLM/persona involved)
+        UNIT_TEST_CATEGORIES = {"PQ", "OV_UNIT"}
+        
         for result in self.session.results:
             key = getattr(result, field_name, "")
             if not key:
-                # Use descriptive label for tests that don't have this field
-                if result.category in ("PQ", "OV_UNIT"):
+                # Only label as "N/A (unit test)" for actual unit test categories
+                # Full tests with missing metadata remain "unknown"
+                if result.category in UNIT_TEST_CATEGORIES:
                     key = "N/A (unit test)"
                 else:
                     key = "unknown"
