@@ -395,13 +395,50 @@ class MSMarcoIntentChecker:
                     heuristic_boost = max(heuristic_boost, 0.3)
                     heuristic_reason = heuristic_reason or "refusal with alternative"
             
+            # Topic overlap heuristic: Boost if response contains key nouns from query
+            # MS-MARCO struggles with conversational political responses that ARE on-topic
+            stopwords = {
+                'what', 'where', 'when', 'which', 'would', 'could', 'should', 'about',
+                'think', 'your', 'have', 'does', 'that', 'this', 'with', 'from', 'they',
+                'their', 'there', 'been', 'being', 'will', 'more', 'some', 'than',
+                'brandon', 'sowers', 'campaign', 'candidate', 'support', 'vote', 'stand'
+            }
+            query_topics = set(re.findall(r'\b([a-z]{4,})\b', query_lower)) - stopwords
+            topic_matches = sum(1 for topic in query_topics if topic in response_lower)
+            if topic_matches >= 2:
+                heuristic_boost = max(heuristic_boost, 0.5)
+                heuristic_reason = heuristic_reason or f"topic overlap ({topic_matches} keywords)"
+            elif topic_matches == 1:
+                heuristic_boost = max(heuristic_boost, 0.3)
+                heuristic_reason = heuristic_reason or "topic overlap (1 keyword)"
+            
+            # Campaign-style response heuristic: "Brandon" + actual issue keywords (not generic campaign terms)
+            # Only triggers if there are real topical overlaps, not just "Brandon" in both
+            if 'brandon' in response_lower and topic_matches >= 2:
+                heuristic_boost = max(heuristic_boost, 0.55)
+                heuristic_reason = heuristic_reason or "Brandon policy response"
+            
             def _run_inference():
                 raw_score = self._model.predict([(query_snippet, response_snippet)])[0]
                 relevance = 1 / (1 + np.exp(-raw_score))
                 return float(relevance)
             
             raw_relevance = await asyncio.get_event_loop().run_in_executor(None, _run_inference)
-            relevance = min(1.0, raw_relevance + heuristic_boost)
+            
+            # Only apply heuristic boosts if MS-MARCO shows SOME relevance signal
+            # This prevents truly off-topic responses from being rescued by keyword matching
+            if raw_relevance < 0.08:
+                # Near-zero MS-MARCO score: cap boost at 0.15 to prevent false passes
+                # Even with boost, final score will be < 0.23 (score 3 = tangential)
+                effective_boost = min(heuristic_boost, 0.15)
+            elif raw_relevance < 0.15:
+                # Very low MS-MARCO score: limit boost to 0.3
+                effective_boost = min(heuristic_boost, 0.30)
+            else:
+                # MS-MARCO shows some relevance: apply full boost
+                effective_boost = heuristic_boost
+            
+            relevance = min(1.0, raw_relevance + effective_boost)
             
             if relevance >= 0.7:
                 score = 0
@@ -423,7 +460,7 @@ class MSMarcoIntentChecker:
                 explanation = f"Complete topic mismatch (relevance={relevance:.2f})"
             
             if heuristic_reason:
-                explanation += f" [heuristic: {heuristic_reason}]"
+                explanation += f" [heuristic: {heuristic_reason}, raw={raw_relevance:.2f}, boost={effective_boost:.2f}]"
             
             return IntentResult(
                 score=score,

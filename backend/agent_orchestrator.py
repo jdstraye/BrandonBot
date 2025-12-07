@@ -763,6 +763,8 @@ CRITICAL RULES:
 - If confidence is low, offer a callback from someone from the team
 - Always cite sources when using information from tools
 - For emotional/values questions, consider scripture inclusion
+- NEVER invent specific dates, events, town halls, speeches, or quotes that are not in your retrieved context
+- If you don't have a specific source for a claim, use general language like "Brandon has stated" rather than fabricating citations
 
 Remember: You're here to inform voters and build support for Brandon's campaign.
 """ + get_structured_output_instructions()
