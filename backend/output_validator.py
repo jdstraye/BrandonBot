@@ -33,6 +33,7 @@ class OVSafeguard(Enum):
     CITATION_VERIFICATION = "citation_verification"
     REDACTION_PII = "redaction_pii"
     CONFIDENCE_VERIFICATION = "confidence_verification"
+    INTERNAL_LEAK = "internal_leak"
 
 
 @dataclass
@@ -320,6 +321,7 @@ class OutputValidatorSLM:
             self._check_citations(response),
             self._check_pii(response),
             self._check_confidence(query, response, pq_confidence),
+            self._check_internal_leak(response),
             return_exceptions=True
         )
         
@@ -330,6 +332,7 @@ class OutputValidatorSLM:
             OVSafeguard.CITATION_VERIFICATION,
             OVSafeguard.REDACTION_PII,
             OVSafeguard.CONFIDENCE_VERIFICATION,
+            OVSafeguard.INTERNAL_LEAK,
         ]
         
         for safeguard, check_result in zip(safeguards, checks):
@@ -768,6 +771,42 @@ class OutputValidatorSLM:
             confidence=0.75,
             explanation=explanation,
             method="pattern_fallback"
+        )
+
+    async def _check_internal_leak(self, response: str) -> OVResult:
+        """
+        Check if internal context markers leaked into the user-facing response.
+        
+        Internal hints (buying signals, frustration context, OV feedback) are
+        injected into the system prompt for agent guidance but MUST NEVER appear
+        in the final response to users.
+        
+        This is a critical safeguard - any leak is a hard fail (score=5).
+        """
+        from prequalifier import InternalHints
+        
+        leak_markers = InternalHints.get_leak_markers()
+        found_leaks = []
+        
+        for marker in leak_markers:
+            if marker.lower() in response.lower():
+                found_leaks.append(marker)
+        
+        if found_leaks:
+            return OVResult(
+                safeguard=OVSafeguard.INTERNAL_LEAK,
+                score=5,
+                confidence=1.0,
+                explanation=f"Internal context leaked to user: {', '.join(found_leaks[:3])}",
+                method="pattern_match"
+            )
+        
+        return OVResult(
+            safeguard=OVSafeguard.INTERNAL_LEAK,
+            score=0,
+            confidence=1.0,
+            explanation="No internal context leakage detected",
+            method="pattern_match"
         )
 
 
