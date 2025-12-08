@@ -1,4 +1,4 @@
-modules = ["python-3.11"]
+modules = ["python-3.12"]
 [agent]
 expertMode = true
 
@@ -23,12 +23,12 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd backend && python3.11 -m uvicorn main:app --host 0.0.0.0 --port 5000 --timeout-keep-alive 300"
+args = "cd backend && python3.12 -m uvicorn main:app --host 0.0.0.0 --port 5000 --timeout-keep-alive 300"
 waitForPort = 5000
 
 [nix]
 channel = "stable-25_05"
-packages = ["c-ares", "cargo", "emacs", "grpc", "libiconv", "libxcrypt", "oneDNN", "openssh", "openssl", "pkg-config", "python312Packages.uvicorn", "re2", "rustc", "sqlite-interactive", "xcodebuild", "zlib", "csvkit"]
+packages = ["c-ares", "cargo", "csvkit", "emacs", "grpc", "libiconv", "libxcrypt", "oneDNN", "openssh", "openssl", "pkg-config", "python312Packages.uvicorn", "re2", "rustc", "sqlite-interactive", "xcodebuild", "zlib"]
 
 [[ports]]
 localPort = 5000
