@@ -362,6 +362,9 @@ class BrandonBotValidator:
             logger.info("Wiring Weaviate to Prequalifier...")
             self.pq.set_weaviate_manager(self._weaviate)
             
+            logger.info("Wiring Weaviate to OutputValidator for FEC RAG...")
+            self.set_fec_rag(self._weaviate)
+            
             logger.info("Initializing AgentOrchestrator...")
             self.agent = AgentOrchestrator(
                 weaviate_manager=self._weaviate, 
@@ -496,8 +499,28 @@ class BrandonBotValidator:
         has_xss = "<script>" in sanitized.cleaned_text.lower()
         return not has_xss, sanitized.cleaned_text
     
+    async def _ensure_fec_rag_ready(self) -> bool:
+        """Ensure FEC RAG is configured for OV tests."""
+        if self._weaviate is not None:
+            return True
+        
+        try:
+            logger.info("Initializing WeaviateManager for FEC RAG...")
+            self._weaviate = WeaviateManager()
+            await self._weaviate.initialize()
+            logger.info("WeaviateManager initialized successfully")
+            
+            logger.info("Wiring Weaviate to OutputValidator for FEC RAG...")
+            self.set_fec_rag(self._weaviate)
+            return True
+        except Exception as e:
+            logger.warning(f"Could not initialize FEC RAG: {e}")
+            return False
+    
     async def run_ov_unit_tests(self) -> List[TestResult]:
         """Run Phase 3A: OV Component Unit Tests with injection."""
+        await self._ensure_fec_rag_ready()
+        
         results = []
         ov_tests = self.test_data.get("ov_unit_tests", {}).get("tests", [])
         
