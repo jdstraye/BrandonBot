@@ -1,6 +1,6 @@
 start=$(date +%s)
 pushd ~/workspace/backend
-python3.11 -m validation.validator --phase all
+python3.12 -m validation.validator --phase all
 popd
 end=$(date +%s)
 duration=$((end - start))
