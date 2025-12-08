@@ -78,16 +78,16 @@ Provide a clear, conversational answer as BrandonBot. Keep it concise (2-4 sente
             logger.info(f"Encoded {len(tokens)} tokens")
             
             params = og.GeneratorParams(self.model)
-            params.input_ids = tokens
             params.set_search_options(
                 max_length=4096,
                 temperature=0.7,
                 top_p=0.9
             )
             
-            logger.info(f"Input tokens: {len(tokens)}, max_length: 4096, available for generation: {4096 - len(tokens)}")
-            
             generator = og.Generator(self.model, params)
+            generator.append_tokens(tokens)
+            
+            logger.info(f"Input tokens: {len(tokens)}, max_length: 4096, available for generation: {4096 - len(tokens)}")
             
             response_text = ""
             token_count = 0
@@ -105,7 +105,6 @@ Provide a clear, conversational answer as BrandonBot. Keep it concise (2-4 sente
                     break
                 
                 try:
-                    generator.compute_logits()
                     generator.generate_next_token()
                     new_tokens = generator.get_next_tokens()
                     

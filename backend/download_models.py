@@ -1,26 +1,29 @@
 #!/usr/bin/env python3
 """
-BrandonBot SLM Model Downloader
+BrandonBot Model Downloader
 
-Downloads and caches all 4 SLM models required for the 6-safeguard system:
-1. ME2-BERT (ethics) - ~420MB
-2. MS-MARCO cross-encoder (intent) - ~120MB  
-3. DeBERTa-PII (PII detection) - ~550MB
-4. BERT-tiny (confidence) - ~15MB
+Downloads and sets up all models required for self-hosted BrandonBot:
 
-Total: ~1.1GB disk space, ~2-3GB RAM when running
+1. Ollama + Llama 3.2 (LLM Judge) - Required for validation
+2. HuggingFace SLM Models (Safeguards) - Optional, for local inference
 
 Usage:
-    python download_models.py [--cache-dir PATH] [--verify-only]
+    python download_models.py                    # Download all models
+    python download_models.py --ollama-only      # Just Ollama/Llama setup
+    python download_models.py --slm-only         # Just SLM safeguard models
+    python download_models.py --verify-only      # Check what's installed
 """
 
 import os
 import sys
 import argparse
+import subprocess
 import shutil
 from pathlib import Path
 
-MODELS = {
+OLLAMA_MODEL = "llama3.2:3b"
+
+SLM_MODELS = {
     "ethics": {
         "name": "ME2-BERT (Ethics)",
         "model_id": "bert-base-uncased",
@@ -51,8 +54,130 @@ MODELS = {
     }
 }
 
-def check_dependencies():
-    """Check that required packages are installed."""
+
+def check_ollama_installed():
+    """Check if Ollama is installed and accessible."""
+    try:
+        result = subprocess.run(
+            ["ollama", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode == 0:
+            version = result.stdout.strip() or result.stderr.strip()
+            print(f"  Ollama: {version}")
+            return True
+    except FileNotFoundError:
+        pass
+    except subprocess.TimeoutExpired:
+        print("  Ollama: timeout checking version")
+    except Exception as e:
+        print(f"  Ollama: error - {e}")
+    return False
+
+
+def check_ollama_running():
+    """Check if Ollama server is running."""
+    try:
+        import urllib.request
+        req = urllib.request.Request("http://localhost:11434/api/tags")
+        with urllib.request.urlopen(req, timeout=5) as response:
+            return response.status == 200
+    except Exception:
+        return False
+
+
+def pull_ollama_model(model_name):
+    """Pull an Ollama model."""
+    print(f"    Pulling {model_name}...")
+    try:
+        result = subprocess.run(
+            ["ollama", "pull", model_name],
+            capture_output=False,
+            timeout=1800
+        )
+        return result.returncode == 0
+    except subprocess.TimeoutExpired:
+        print(f"    Timeout pulling {model_name}")
+        return False
+    except Exception as e:
+        print(f"    Error: {e}")
+        return False
+
+
+def check_ollama_model_exists(model_name):
+    """Check if a specific Ollama model is already downloaded."""
+    try:
+        result = subprocess.run(
+            ["ollama", "list"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode == 0:
+            return model_name.split(":")[0] in result.stdout
+    except Exception:
+        pass
+    return False
+
+
+def verify_ollama_model(model_name):
+    """Verify an Ollama model works by running a quick test."""
+    try:
+        result = subprocess.run(
+            ["ollama", "run", model_name, "Say 'OK'"],
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        return result.returncode == 0 and len(result.stdout.strip()) > 0
+    except Exception:
+        return False
+
+
+def setup_ollama():
+    """Set up Ollama and pull the LLM Judge model."""
+    print("\n" + "=" * 60)
+    print("Ollama Setup (LLM Judge)")
+    print("=" * 60)
+    
+    if not check_ollama_installed():
+        print("\n  Ollama is not installed.")
+        print("\n  Installation instructions:")
+        print("    Linux:   curl -fsSL https://ollama.com/install.sh | sh")
+        print("    macOS:   brew install ollama")
+        print("    Windows: Download from https://ollama.com/download")
+        print("\n  After installing, run: ollama serve")
+        return False
+    
+    if not check_ollama_running():
+        print("\n  Ollama server is not running.")
+        print("  Start it with: ollama serve")
+        print("  (or: systemctl start ollama)")
+        return False
+    
+    print(f"\n  Target model: {OLLAMA_MODEL}")
+    
+    if check_ollama_model_exists(OLLAMA_MODEL):
+        print("  Model already downloaded.")
+    else:
+        print("  Model not found, downloading...")
+        if not pull_ollama_model(OLLAMA_MODEL):
+            print("  Failed to pull model.")
+            return False
+    
+    print("  Verifying model...")
+    if verify_ollama_model(OLLAMA_MODEL):
+        print("  Model verified OK!")
+        return True
+    else:
+        print("  Model verification failed.")
+        return False
+
+
+def check_slm_dependencies():
+    """Check that required packages for SLM models are installed."""
     missing = []
     
     try:
@@ -87,96 +212,41 @@ def check_dependencies():
     return True
 
 
-def get_cache_dir(custom_dir=None):
-    """
-    Get the cache directory for models.
-    
-    Priority (matches ov_slm_models.get_model_cache_dir):
-    1. Custom directory (CLI argument)
-    2. MODEL_CACHE_DIR env var (project-specific)
-    3. HF_HOME env var (HuggingFace standard, maps to <hf_home>/hub)
-    4. TRANSFORMERS_CACHE env var (transformers standard)
-    5. Default: ~/.cache/huggingface
-    """
-    if custom_dir:
-        cache_dir = Path(custom_dir)
-    elif os.environ.get("MODEL_CACHE_DIR"):
-        cache_dir = Path(os.environ["MODEL_CACHE_DIR"])
-    elif os.environ.get("HF_HOME"):
-        cache_dir = Path(os.environ["HF_HOME"]) / "hub"
-    elif os.environ.get("TRANSFORMERS_CACHE"):
-        cache_dir = Path(os.environ["TRANSFORMERS_CACHE"])
-    else:
-        cache_dir = Path.home() / ".cache" / "huggingface"
-    
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    return cache_dir
-
-
-def download_transformers_model(model_id, cache_dir):
-    """Download a transformers model."""
+def download_transformers_model(model_id):
+    """Download a transformers model to default cache."""
     from transformers import AutoTokenizer, AutoModel, AutoModelForTokenClassification
     
     print(f"    Downloading tokenizer...")
-    AutoTokenizer.from_pretrained(model_id, cache_dir=cache_dir)
+    AutoTokenizer.from_pretrained(model_id)
     
     print(f"    Downloading model weights...")
     try:
-        AutoModelForTokenClassification.from_pretrained(model_id, cache_dir=cache_dir)
-    except:
-        AutoModel.from_pretrained(model_id, cache_dir=cache_dir)
+        AutoModelForTokenClassification.from_pretrained(model_id)
+    except Exception:
+        AutoModel.from_pretrained(model_id)
     
     return True
 
 
-def download_sentence_transformer(model_id, cache_dir):
+def download_sentence_transformer(model_id):
     """Download a sentence-transformers model."""
     from sentence_transformers import CrossEncoder
-    import sentence_transformers
     
     print(f"    Downloading cross-encoder...")
-    
-    version = tuple(int(x) for x in sentence_transformers.__version__.split('.')[:2])
-    if version >= (2, 7):
-        CrossEncoder(model_id, cache_folder=str(cache_dir))
-    else:
-        old_cache = os.environ.get("SENTENCE_TRANSFORMERS_HOME")
-        os.environ["SENTENCE_TRANSFORMERS_HOME"] = str(cache_dir)
-        try:
-            CrossEncoder(model_id)
-        finally:
-            if old_cache:
-                os.environ["SENTENCE_TRANSFORMERS_HOME"] = old_cache
-            else:
-                os.environ.pop("SENTENCE_TRANSFORMERS_HOME", None)
-    
+    CrossEncoder(model_id)
     return True
 
 
-def verify_model(model_key, model_info, cache_dir):
-    """Verify a model is properly cached and loadable."""
+def verify_slm_model(model_key, model_info):
+    """Verify an SLM model is properly cached and loadable."""
     try:
         if model_info["type"] == "transformers":
-            from transformers import AutoTokenizer, AutoModel
-            AutoTokenizer.from_pretrained(model_info["model_id"], cache_dir=cache_dir, local_files_only=True)
+            from transformers import AutoTokenizer
+            AutoTokenizer.from_pretrained(model_info["model_id"], local_files_only=True)
             return True
         elif model_info["type"] == "sentence-transformers":
             from sentence_transformers import CrossEncoder
-            import sentence_transformers
-            
-            version = tuple(int(x) for x in sentence_transformers.__version__.split('.')[:2])
-            if version >= (2, 7):
-                CrossEncoder(model_info["model_id"], cache_folder=str(cache_dir), local_files_only=True)
-            else:
-                old_cache = os.environ.get("SENTENCE_TRANSFORMERS_HOME")
-                os.environ["SENTENCE_TRANSFORMERS_HOME"] = str(cache_dir)
-                try:
-                    CrossEncoder(model_info["model_id"])
-                finally:
-                    if old_cache:
-                        os.environ["SENTENCE_TRANSFORMERS_HOME"] = old_cache
-                    else:
-                        os.environ.pop("SENTENCE_TRANSFORMERS_HOME", None)
+            CrossEncoder(model_info["model_id"], local_files_only=True)
             return True
     except Exception as e:
         print(f"    Verification failed: {e}")
@@ -184,39 +254,20 @@ def verify_model(model_key, model_info, cache_dir):
     return False
 
 
-def get_cache_size(cache_dir):
-    """Get total size of cache directory in MB."""
-    total = 0
-    cache_path = Path(cache_dir)
-    if cache_path.exists():
-        for f in cache_path.rglob("*"):
-            if f.is_file():
-                total += f.stat().st_size
-    return total / (1024 * 1024)
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Download BrandonBot SLM models")
-    parser.add_argument("--cache-dir", help="Custom cache directory for models")
-    parser.add_argument("--verify-only", action="store_true", help="Only verify existing models")
-    parser.add_argument("--model", choices=list(MODELS.keys()), help="Download specific model only")
-    args = parser.parse_args()
-    
-    print("=" * 60)
-    print("BrandonBot SLM Model Downloader")
+def setup_slm_models(verify_only=False, model_filter=None):
+    """Set up SLM safeguard models."""
+    print("\n" + "=" * 60)
+    print("SLM Safeguard Models")
     print("=" * 60)
     
     print("\nChecking dependencies...")
-    if not check_dependencies():
-        sys.exit(1)
+    if not check_slm_dependencies():
+        return False
     
-    cache_dir = get_cache_dir(args.cache_dir)
-    print(f"\nCache directory: {cache_dir}")
-    
-    models_to_process = {args.model: MODELS[args.model]} if args.model else MODELS
+    models_to_process = {model_filter: SLM_MODELS[model_filter]} if model_filter else SLM_MODELS
     
     total_size = sum(m["size_mb"] for m in models_to_process.values())
-    print(f"\nModels to {'verify' if args.verify_only else 'download'}: {len(models_to_process)}")
+    print(f"\nModels to {'verify' if verify_only else 'download'}: {len(models_to_process)}")
     print(f"Estimated total size: ~{total_size}MB")
     print("-" * 60)
     
@@ -228,20 +279,20 @@ def main():
         print(f"  Type: {info['type']}")
         print(f"  Size: ~{info['size_mb']}MB")
         
-        if args.verify_only:
+        if verify_only:
             print("  Verifying...")
-            success = verify_model(key, info, cache_dir)
+            success = verify_slm_model(key, info)
         else:
             print("  Downloading...")
             try:
                 if info["type"] == "transformers":
-                    success = download_transformers_model(info["model_id"], cache_dir)
+                    success = download_transformers_model(info["model_id"])
                 else:
-                    success = download_sentence_transformer(info["model_id"], cache_dir)
+                    success = download_sentence_transformer(info["model_id"])
                 
                 if success:
                     print("  Verifying...")
-                    success = verify_model(key, info, cache_dir)
+                    success = verify_slm_model(key, info)
             except Exception as e:
                 print(f"  ERROR: {e}")
                 success = False
@@ -250,26 +301,73 @@ def main():
         status = "OK" if success else "FAILED"
         print(f"  Status: {status}")
     
+    return all(results.values())
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Download BrandonBot models for self-hosted deployment"
+    )
+    parser.add_argument(
+        "--ollama-only",
+        action="store_true",
+        help="Only set up Ollama and Llama model"
+    )
+    parser.add_argument(
+        "--slm-only",
+        action="store_true",
+        help="Only download SLM safeguard models"
+    )
+    parser.add_argument(
+        "--verify-only",
+        action="store_true",
+        help="Only verify existing models, don't download"
+    )
+    parser.add_argument(
+        "--model",
+        choices=list(SLM_MODELS.keys()),
+        help="Download specific SLM model only"
+    )
+    args = parser.parse_args()
+    
+    print("=" * 60)
+    print("BrandonBot Model Downloader")
+    print("=" * 60)
+    
+    results = {}
+    
+    if not args.slm_only:
+        results["ollama"] = setup_ollama()
+    
+    if not args.ollama_only:
+        results["slm"] = setup_slm_models(
+            verify_only=args.verify_only,
+            model_filter=args.model
+        )
+    
     print("\n" + "=" * 60)
     print("Summary")
     print("=" * 60)
     
-    success_count = sum(1 for v in results.values() if v)
-    print(f"\nModels ready: {success_count}/{len(results)}")
+    if "ollama" in results:
+        status = "Ready" if results["ollama"] else "FAILED"
+        print(f"  Ollama ({OLLAMA_MODEL}): {status}")
     
-    actual_size = get_cache_size(cache_dir)
-    print(f"Cache size: {actual_size:.1f}MB")
+    if "slm" in results:
+        status = "Ready" if results["slm"] else "FAILED"
+        print(f"  SLM Safeguard Models: {status}")
     
-    for key, success in results.items():
-        status = "Ready" if success else "MISSING"
-        print(f"  {MODELS[key]['name']}: {status}")
+    all_success = all(results.values())
     
-    if success_count == len(results):
-        print("\nAll models ready! You can now run the full test suite:")
-        print("  cd backend && python -m pytest tests/test_ov_*.py tests/test_pq.py -v")
+    if all_success:
+        print("\nAll models ready!")
+        if "ollama" in results and results["ollama"]:
+            print("\nTo run validation with local LLM judge:")
+            print("  export USE_LOCAL_JUDGE=true")
+            print("  cd backend/validation && python validator.py")
         return 0
     else:
-        print("\nSome models failed to download. Check errors above.")
+        print("\nSome components failed. Check errors above.")
         return 1
 
 
