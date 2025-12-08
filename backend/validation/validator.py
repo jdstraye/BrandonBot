@@ -411,8 +411,38 @@ class BrandonBotValidator:
         probs = list(weights.values())
         return random.choices(styles, weights=probs, k=1)[0]
     
+    async def _ensure_pq_ready(self) -> bool:
+        """Ensure Prequalifier has Weaviate and SLM wired up for tests."""
+        if self._weaviate is not None:
+            return True
+        
+        try:
+            if self._slm_manager is None and SLMManager is not None:
+                logger.info("Initializing SLMManager for PQ tests...")
+                self._slm_manager = SLMManager()
+                logger.info("SLMManager created (lazy loading)")
+                
+                logger.info("Wiring SLM provider to Prequalifier...")
+                self.pq.set_slm_provider(self._slm_manager)
+                logger.info("Prequalifier SLM provider configured")
+            
+            logger.info("Initializing WeaviateManager for PQ tests...")
+            self._weaviate = WeaviateManager()
+            await self._weaviate.initialize()
+            logger.info("WeaviateManager initialized successfully")
+            
+            logger.info("Wiring Weaviate to Prequalifier...")
+            self.pq.set_weaviate_manager(self._weaviate)
+            logger.info("Prequalifier Weaviate configured")
+            return True
+        except Exception as e:
+            logger.warning(f"Could not initialize Prequalifier dependencies: {e}")
+            return False
+    
     async def run_pq_tests(self) -> List[TestResult]:
         """Run Phase 1: Prequalifier tests."""
+        await self._ensure_pq_ready()
+        
         results = []
         pq_tests = self.test_data.get("pq_tests", {}).get("tests", [])
         

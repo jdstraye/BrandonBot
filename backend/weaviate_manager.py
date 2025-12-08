@@ -53,6 +53,11 @@ class WeaviateManager:
                 "name": "MarketGurus",
                 "description": "Marketing and copywriting expert knowledge (Breakthrough Advertising, Boron Letters, etc.)",
                 "confidence_tier": 3
+            },
+            {
+                "name": "FECProhibited",
+                "description": "FEC prohibited phrases, regulations, and compliance rules",
+                "confidence_tier": 1
             }
         ]
         

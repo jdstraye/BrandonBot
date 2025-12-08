@@ -1,0 +1,73 @@
+{
+  "session_id": "val_20251208_192509",
+  "phase": "pq",
+  "started_at": "2025-12-08T19:25:09.897625",
+  "total_tests": 6,
+  "passed": 5,
+  "failed": 1,
+  "pass_rate": 0.8333333333333334,
+  "average_scores": {
+    "clarity": 0.0,
+    "empathy": 0.0,
+    "accuracy": 0.0,
+    "engagement": 0.0,
+    "tone": 0.0,
+    "alignment": 0.0
+  },
+  "by_category": {
+    "PQ": {
+      "total": 6,
+      "passed": 5,
+      "failed": 1,
+      "avg_clarity": 0.0,
+      "avg_empathy": 0.0,
+      "avg_accuracy": 0.0,
+      "avg_engagement": 0.0,
+      "avg_tone": 0.0,
+      "avg_alignment": 0.0,
+      "pass_rate": 0.8333333333333334
+    }
+  },
+  "by_engagement_style": {
+    "N/A (unit test)": {
+      "total": 6,
+      "passed": 5,
+      "failed": 1,
+      "avg_clarity": 0.0,
+      "avg_empathy": 0.0,
+      "avg_accuracy": 0.0,
+      "avg_engagement": 0.0,
+      "avg_tone": 0.0,
+      "avg_alignment": 0.0,
+      "pass_rate": 0.8333333333333334
+    }
+  },
+  "by_model": {
+    "N/A (unit test)": {
+      "total": 6,
+      "passed": 5,
+      "failed": 1,
+      "avg_clarity": 0.0,
+      "avg_empathy": 0.0,
+      "avg_accuracy": 0.0,
+      "avg_engagement": 0.0,
+      "avg_tone": 0.0,
+      "avg_alignment": 0.0,
+      "pass_rate": 0.8333333333333334
+    }
+  },
+  "by_persona": {
+    "N/A (unit test)": {
+      "total": 6,
+      "passed": 5,
+      "failed": 1,
+      "avg_clarity": 0.0,
+      "avg_empathy": 0.0,
+      "avg_accuracy": 0.0,
+      "avg_engagement": 0.0,
+      "avg_tone": 0.0,
+      "avg_alignment": 0.0,
+      "pass_rate": 0.8333333333333334
+    }
+  }
+}
