@@ -1,5 +1,9 @@
 """
-FEC Compliance Checker with Isolated RAG Collection
+FEC Compliance Checker with Mandatory RAG Collection
+
+FAIL-CLOSED DESIGN: System REQUIRES RAG to be operational.
+No pattern matching fallback - if FECProhibited collection is unavailable,
+the system refuses to process responses.
 
 Implements the Zero-Tolerance, Isolated RAG Collection with Double-Negative Check:
 
@@ -23,9 +27,19 @@ import re
 import asyncio
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Any, Tuple
-from pathlib import Path
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+
+class FECRAGUnavailableError(Exception):
+    """Raised when FEC RAG is required but not available."""
+    pass
+
+
+class FECCollectionMissingError(Exception):
+    """Raised when FECProhibited collection doesn't exist in Weaviate."""
+    pass
 
 
 @dataclass
@@ -47,6 +61,7 @@ class FECComplianceResult:
     retrieved_rules: List[Dict[str, Any]] = field(default_factory=list)
     remediation_needed: bool = False
     safe_response: Optional[str] = None
+    rag_available: bool = True
     
     def __post_init__(self):
         if self.violations:
@@ -55,132 +70,109 @@ class FECComplianceResult:
             self.remediation_needed = not self.compliant
 
 
-class FECProhibitedPhrasesStore:
-    """
-    In-memory store for prohibited phrases and FEC rules.
-    
-    This is used before Weaviate RAG is fully initialized.
-    """
-    
-    PROHIBITED_PHRASES = {
-        "tax_advice": [
-            ("your donation is tax deductible", 5),
-            ("you can write off this contribution", 5),
-            ("this qualifies for a tax benefit", 5),
-            ("legally, you should", 5),
-            ("this is not legal advice, but", 4),
-            ("you might want to sue", 4),
-        ],
-        "financial_solicitation": [
-            ("enter your credit card", 5),
-            ("provide your bank account", 5),
-            ("we will process your donation", 5),
-            ("click here to donate now", 4),
-            ("i can accept your payment", 5),
-        ],
-        "defamation": [
-            ("is a criminal", 4),
-            ("committed fraud", 4),
-            ("stole money", 4),
-            ("is corrupt", 4),
-            ("took bribes", 4),
-        ],
-        "false_identity": [
-            ("i am brandon", 5),
-            ("i am the candidate", 5),
-            ("i am a human", 5),
-            ("speaking as the candidate", 5),
-        ],
-        "false_claims": [
-            ("endorsed by", 4),
-            ("guaranteed to win", 4),
-            ("will definitely happen", 4),
-            ("promise you that", 3),
-            ("100% certain", 3),
-        ],
-        "coercion": [
-            ("vote for us or else", 5),
-            ("if you don't support us", 4),
-            ("you must donate", 4),
-            ("failure to support", 4),
-        ],
-        "medical_advice": [
-            ("you should take", 4),
-            ("i recommend this medication", 5),
-            ("this treatment will cure", 5),
-        ],
-    }
-    
-    SAFE_RESPONSES = {
-        "tax_advice": "I cannot provide tax or legal advice. Please consult with a qualified tax professional or attorney for guidance on these matters.",
-        "financial_solicitation": "I cannot process donations directly. For secure, FEC-compliant donation options, please visit our official donation page or request a callback from the team.",
-        "defamation": "I focus on policy differences and Brandon's positions rather than personal attacks. Would you like to know more about Brandon's stance on specific issues?",
-        "false_identity": "I'm an AI-powered assistant for Brandon's campaign. I can help you learn about Brandon's positions and connect you with the campaign team.",
-        "false_claims": "I can share Brandon's positions and plans, but I cannot make guarantees about outcomes. Would you like to learn more about his platform?",
-        "coercion": "We'd appreciate your support, but the choice is entirely yours. Can I share information about Brandon's positions that might help you decide?",
-        "medical_advice": "I cannot provide medical advice. Please consult with a healthcare professional for guidance on health-related matters.",
-        "default": "That topic falls under strict campaign finance regulations. Please refer to the official campaign website's legal page for guidance."
-    }
-    
-    def __init__(self):
-        self._compiled_patterns = {}
-        self._compile_patterns()
-    
-    def _compile_patterns(self):
-        """Compile regex patterns for faster matching."""
-        for category, phrases in self.PROHIBITED_PHRASES.items():
-            self._compiled_patterns[category] = [
-                (re.compile(re.escape(phrase), re.I), severity, phrase)
-                for phrase, severity in phrases
-            ]
-    
-    def check_prohibited(self, text: str) -> List[FECViolation]:
-        """Check text against all prohibited phrases."""
-        violations = []
-        text_lower = text.lower()
-        
-        for category, patterns in self._compiled_patterns.items():
-            for pattern, severity, phrase in patterns:
-                if pattern.search(text):
-                    violations.append(FECViolation(
-                        violation_type=category,
-                        severity=severity,
-                        matched_rule=phrase,
-                        explanation=f"Prohibited phrase in {category}: '{phrase}'",
-                        source_citation=f"FEC-PROHIB-{category.upper()}"
-                    ))
-        
-        return violations
-    
-    def get_safe_response(self, violation_type: str) -> str:
-        """Get a safe fallback response for a violation type."""
-        return self.SAFE_RESPONSES.get(violation_type, self.SAFE_RESPONSES["default"])
+SAFE_RESPONSES = {
+    "tax_advice": "I cannot provide tax or legal advice. Please consult with a qualified tax professional or attorney for guidance on these matters.",
+    "financial_solicitation": "I cannot process donations directly. For secure, FEC-compliant donation options, please visit our official donation page or request a callback from the team.",
+    "defamation": "I focus on policy differences and Brandon's positions rather than personal attacks. Would you like to know more about Brandon's stance on specific issues?",
+    "false_identity": "I'm an AI-powered assistant for Brandon's campaign. I can help you learn about Brandon's positions and connect you with the campaign team.",
+    "false_claims": "I can share Brandon's positions and plans, but I cannot make guarantees about outcomes. Would you like to learn more about his platform?",
+    "coercion": "We'd appreciate your support, but the choice is entirely yours. Can I share information about Brandon's positions that might help you decide?",
+    "medical_advice": "I cannot provide medical advice. Please consult with a healthcare professional for guidance on health-related matters.",
+    "rag_match": "I need to be careful about FEC compliance here. Let me rephrase that in a way that follows campaign finance regulations.",
+    "slm_detected": "I need to be careful about FEC compliance here. Let me rephrase that in a way that follows campaign finance regulations.",
+    "default": "That topic falls under strict campaign finance regulations. Please refer to the official campaign website's legal page for guidance."
+}
 
 
 class FECComplianceChecker:
     """
-    FEC Compliance Checker with RAG-based violation detection.
+    FEC Compliance Checker with MANDATORY RAG-based violation detection.
+    
+    FAIL-CLOSED DESIGN:
+    - RAG MUST be available for compliance checking
+    - If Weaviate is not connected, raises FECRAGUnavailableError
+    - If FECProhibited collection is missing, raises FECCollectionMissingError
+    - NO pattern matching fallback - system refuses to operate without RAG
     
     Implements:
-    1. Pattern-based first pass (fast)
-    2. RAG retrieval of relevant FEC rules (if Weaviate available)
-    3. SLM binary classification (if SLM available)
-    4. Remediation with safe fallback responses
+    1. RAG retrieval of relevant FEC rules (REQUIRED)
+    2. SLM binary classification (if SLM available)
+    3. Remediation with safe fallback responses
     """
     
-    def __init__(self, weaviate_manager=None, slm_classifier=None):
+    FEC_COLLECTION = "FECProhibited"
+    
+    def __init__(self, weaviate_manager=None, slm_classifier=None, require_rag: bool = True):
         self._weaviate = weaviate_manager
         self._slm = slm_classifier
-        self._phrase_store = FECProhibitedPhrasesStore()
+        self._require_rag = require_rag
+        self._rag_verified = False
         self._audit_log = []
     
     def set_weaviate(self, weaviate_manager):
         """Set the Weaviate manager for RAG lookups."""
         self._weaviate = weaviate_manager
+        self._rag_verified = False
     
     def set_slm(self, slm_classifier):
         """Set the SLM classifier for binary violation detection."""
         self._slm = slm_classifier
+    
+    @property
+    def rag_available(self) -> bool:
+        """Check if RAG is available."""
+        return self._weaviate is not None and self._rag_verified
+    
+    async def verify_rag_available(self) -> bool:
+        """
+        Verify that RAG is available and FECProhibited collection exists.
+        
+        Returns:
+            True if RAG is ready for use
+            
+        Raises:
+            FECRAGUnavailableError: If Weaviate is not connected
+            FECCollectionMissingError: If FECProhibited collection doesn't exist
+        """
+        if self._weaviate is None:
+            if self._require_rag:
+                raise FECRAGUnavailableError(
+                    "FEC RAG is REQUIRED but Weaviate is not connected. "
+                    "System cannot operate without FEC compliance checking."
+                )
+            return False
+        
+        try:
+            count = await self._weaviate.get_collection_count(self.FEC_COLLECTION)
+            if count == 0:
+                if self._require_rag:
+                    raise FECCollectionMissingError(
+                        f"FECProhibited collection exists but is EMPTY. "
+                        f"Run ingest_all.py to load FEC compliance data. "
+                        f"System cannot operate without FEC compliance data."
+                    )
+                return False
+            
+            logger.info(f"FEC RAG verified: {count} documents in {self.FEC_COLLECTION}")
+            self._rag_verified = True
+            return True
+            
+        except Exception as e:
+            if "does not exist" in str(e).lower() or "not found" in str(e).lower():
+                if self._require_rag:
+                    raise FECCollectionMissingError(
+                        f"FECProhibited collection does not exist in Weaviate. "
+                        f"Run ingest_all.py to create and populate it. "
+                        f"System cannot operate without FEC compliance checking."
+                    )
+                return False
+            
+            if self._require_rag:
+                raise FECRAGUnavailableError(
+                    f"FEC RAG verification failed: {e}. "
+                    f"System cannot operate without FEC compliance checking."
+                )
+            return False
     
     async def check_compliance(
         self, 
@@ -191,9 +183,11 @@ class FECComplianceChecker:
         """
         Check a response for FEC compliance violations.
         
+        FAIL-CLOSED: If RAG is required but unavailable, raises an error.
+        
         Protocol:
-        1. Pattern matching for obvious violations
-        2. RAG query of FECProhibited collection (if available)
+        1. Verify RAG is available (REQUIRED)
+        2. RAG query of FECProhibited collection
         3. SLM binary classification (if available)
         4. Generate remediation if violations found
         
@@ -204,38 +198,47 @@ class FECComplianceChecker:
         
         Returns:
             FECComplianceResult with violations and remediation
+            
+        Raises:
+            FECRAGUnavailableError: If RAG is required but not available
+            FECCollectionMissingError: If FECProhibited collection is missing
         """
+        if not self._rag_verified:
+            await self.verify_rag_available()
+        
         violations = []
         retrieved_rules = []
         
-        pattern_violations = self._phrase_store.check_prohibited(response)
-        violations.extend(pattern_violations)
+        try:
+            rag_violations, rag_rules = await self._check_rag(response)
+            violations.extend(rag_violations)
+            retrieved_rules.extend(rag_rules)
+        except Exception as e:
+            self._rag_verified = False
+            error_msg = f"FEC RAG check failed: {e}"
+            logger.error(error_msg)
+            if self._require_rag:
+                raise FECRAGUnavailableError(error_msg) from e
         
-        if self._weaviate and (not violations or max(v.severity for v in violations) < 4):
-            try:
-                rag_violations, rag_rules = await self._check_rag(response)
-                violations.extend(rag_violations)
-                retrieved_rules.extend(rag_rules)
-            except Exception as e:
-                logger.warning(f"FEC RAG check failed: {e}")
-        
-        if self._slm and (not violations or max(v.severity for v in violations) < 4):
+        if self._slm and retrieved_rules:
             try:
                 slm_violations = await self._check_slm(response, retrieved_rules)
                 violations.extend(slm_violations)
             except Exception as e:
-                logger.warning(f"FEC SLM check failed: {e}")
+                logger.warning(f"FEC SLM check failed (non-fatal): {e}")
         
         result = FECComplianceResult(
             compliant=len(violations) == 0 or all(v.severity <= 2 for v in violations),
             violations=violations,
-            retrieved_rules=retrieved_rules
+            retrieved_rules=retrieved_rules,
+            rag_available=True
         )
         
         if result.remediation_needed and violations:
             primary_violation = max(violations, key=lambda v: v.severity)
-            result.safe_response = self._phrase_store.get_safe_response(
-                primary_violation.violation_type
+            result.safe_response = SAFE_RESPONSES.get(
+                primary_violation.violation_type,
+                SAFE_RESPONSES["default"]
             )
         
         if violations:
@@ -253,41 +256,37 @@ class FECComplianceChecker:
         violations = []
         rules = []
         
-        try:
-            results = await self._weaviate.search(
-                collection_name="FECProhibited",
-                query=response[:500],
-                limit=5
-            )
+        results = await self._weaviate.search(
+            collection_name=self.FEC_COLLECTION,
+            query=response[:500],
+            limit=5
+        )
+        
+        for result in results:
+            content = result.get("content", "")
+            source = result.get("source", "")
+            distance = result.get("distance", 1.0)
             
-            for result in results:
-                content = result.get("content", "")
-                source = result.get("source", "")
-                distance = result.get("distance", 1.0)
+            rules.append({
+                "content": content,
+                "source": source,
+                "distance": distance
+            })
+            
+            if distance < 0.3:
+                prohibited_phrases = re.findall(r'"([^"]+)"', content)
+                response_lower = response.lower()
                 
-                rules.append({
-                    "content": content,
-                    "source": source,
-                    "distance": distance
-                })
-                
-                if distance < 0.3:
-                    prohibited_phrases = re.findall(r'"([^"]+)"', content)
-                    response_lower = response.lower()
-                    
-                    for phrase in prohibited_phrases:
-                        if phrase.lower() in response_lower:
-                            violations.append(FECViolation(
-                                violation_type="rag_match",
-                                severity=4,
-                                matched_rule=content[:100],
-                                explanation=f"RAG match: '{phrase}' (distance={distance:.3f})",
-                                source_citation=source
-                            ))
-                            break
-                            
-        except Exception as e:
-            logger.error(f"FEC RAG search failed: {e}")
+                for phrase in prohibited_phrases:
+                    if phrase.lower() in response_lower:
+                        violations.append(FECViolation(
+                            violation_type="rag_match",
+                            severity=4,
+                            matched_rule=content[:100],
+                            explanation=f"RAG match: '{phrase}' (distance={distance:.3f})",
+                            source_citation=source
+                        ))
+                        break
         
         return violations, rules
     
@@ -360,7 +359,7 @@ Your response must be a single word: YES or NO."""
                 }
                 for v in violations
             ],
-            "timestamp": asyncio.get_event_loop().time() if asyncio.get_event_loop().is_running() else 0
+            "timestamp": datetime.utcnow().isoformat()
         }
         
         self._audit_log.append(log_entry)
@@ -375,4 +374,4 @@ Your response must be a single word: YES or NO."""
         return self._audit_log.copy()
 
 
-fec_checker = FECComplianceChecker()
+fec_checker = FECComplianceChecker(require_rag=True)

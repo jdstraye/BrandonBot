@@ -13,7 +13,6 @@ Run with: python -m seed_weaviate
 import asyncio
 import logging
 from weaviate_manager import WeaviateManager
-from fec_compliance_checker import FECProhibitedPhrasesStore
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
