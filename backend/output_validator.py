@@ -865,22 +865,41 @@ class OutputValidatorSLM:
             import numpy as np
             
             # Use weaviate_manager's pre-loaded embedding model (non-blocking reuse)
+            # Timeout of 10 seconds per embedding to ensure fail-closed behavior
+            EMBEDDING_TIMEOUT = 10.0
             loop = asyncio.get_event_loop()
-            response_embedding = await loop.run_in_executor(
-                None, 
-                self._weaviate_manager.encode_text, 
-                response
-            )
             
-            # Encode previous responses
+            try:
+                response_embedding = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None, 
+                        self._weaviate_manager.encode_text, 
+                        response
+                    ),
+                    timeout=EMBEDDING_TIMEOUT
+                )
+            except asyncio.TimeoutError:
+                raise SLMNotAvailableError(
+                    f"Repetition safeguard embedding timed out after {EMBEDDING_TIMEOUT}s"
+                )
+            
+            # Encode previous responses with timeout
             prev_embeddings = []
             for prev in previous_responses:
-                prev_emb = await loop.run_in_executor(
-                    None,
-                    self._weaviate_manager.encode_text,
-                    prev
-                )
-                prev_embeddings.append(prev_emb)
+                try:
+                    prev_emb = await asyncio.wait_for(
+                        loop.run_in_executor(
+                            None,
+                            self._weaviate_manager.encode_text,
+                            prev
+                        ),
+                        timeout=EMBEDDING_TIMEOUT
+                    )
+                    prev_embeddings.append(prev_emb)
+                except asyncio.TimeoutError:
+                    raise SLMNotAvailableError(
+                        f"Repetition safeguard embedding timed out after {EMBEDDING_TIMEOUT}s"
+                    )
             
             max_similarity = 0.0
             response_arr = np.array(response_embedding)

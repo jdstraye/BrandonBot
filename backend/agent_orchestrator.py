@@ -1243,9 +1243,15 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
             
             # ===== STAGE 3: OUTPUT VALIDATOR WITH REGENERATION LOOP =====
             # Set up FEC RAG and weaviate manager for compliance checking
-            if self.tool_executor and self.tool_executor.weaviate:
-                output_validator.set_fec_rag(self.tool_executor.weaviate)
-                output_validator.set_weaviate_manager(self.tool_executor.weaviate)
+            # Fail-closed: Must always set weaviate_manager for repetition safeguard
+            weaviate_mgr = self.tool_executor.weaviate if self.tool_executor else None
+            if weaviate_mgr:
+                output_validator.set_fec_rag(weaviate_mgr)
+                output_validator.set_weaviate_manager(weaviate_mgr)
+            else:
+                # Fail-closed: If weaviate is unavailable, log error but continue
+                # The repetition check will raise SLMNotAvailableError which triggers fallback
+                logger.warning(f"[{request_id}] Weaviate unavailable - repetition safeguard will fail closed")
             
             regeneration_attempt = 0
             max_regenerations = 3
