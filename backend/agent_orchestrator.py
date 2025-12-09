@@ -974,7 +974,7 @@ Remember: You're here to inform voters and build support for Brandon's campaign.
                 full_system_prompt += f"\n\nINTENT ANALYSIS: {intent_context}"
             if intent_result.needs_scripture:
                 full_system_prompt += "\n\nNote: User may appreciate faith-based perspective. Consider including relevant scripture if appropriate."
-            if intent_result.needs_callback or user_frustrated:
+            if intent_result.needs_callback or (user_frustrated and query_vague):
                 full_system_prompt += "\n\nNote: User appears to need personal attention. Offer a callback from someone on the team."
             
             # Add PQ enrichment if not passthrough
