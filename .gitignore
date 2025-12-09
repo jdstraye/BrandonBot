@@ -19,8 +19,8 @@ dist/
 .idea/
 *.log
 node_modules/
-.env
-.venv
+.env*
+.venv*
 backend/data/
 ollama_data/
 weaviate_data/
