@@ -35,6 +35,64 @@ class OVSafeguard(Enum):
     CONFIDENCE_VERIFICATION = "confidence_verification"
     INTERNAL_LEAK = "internal_leak"
     REPETITION = "repetition"
+    IDENTITY_CONSISTENCY = "identity_consistency"
+
+
+# Canonical candidate identity - immutable
+CANDIDATE_IDENTITY = {
+    "name": "Brandon Sowers",
+    "state": "Arizona",
+    "state_abbrev": "AZ",
+    "office": "U.S. House of Representatives",
+    "district": "Arizona's 1st Congressional District",
+    "district_short": "AZ-01",
+    "party": "Republican",
+    # ALL 49 OTHER STATES - any non-Arizona state in campaign context is wrong
+    "wrong_states": [
+        # Full names (49 states excluding Arizona)
+        "alabama", "alaska", "arkansas", "california", "colorado", "connecticut",
+        "delaware", "florida", "georgia", "hawaii", "idaho", "illinois", "indiana",
+        "iowa", "kansas", "kentucky", "louisiana", "maine", "maryland", "massachusetts",
+        "michigan", "minnesota", "mississippi", "missouri", "montana", "nebraska",
+        "nevada", "new hampshire", "new jersey", "new mexico", "new york",
+        "north carolina", "north dakota", "ohio", "oklahoma", "oregon", "pennsylvania",
+        "rhode island", "south carolina", "south dakota", "tennessee", "texas",
+        "utah", "vermont", "virginia", "washington", "west virginia", "wisconsin", "wyoming",
+        # Abbreviations (49 states excluding AZ)
+        "al", "ak", "ar", "ca", "co", "ct", "de", "fl", "ga", "hi", "id", "il", "in",
+        "ia", "ks", "ky", "la", "me", "md", "ma", "mi", "mn", "ms", "mo", "mt", "ne",
+        "nv", "nh", "nj", "nm", "ny", "nc", "nd", "oh", "ok", "or", "pa", "ri", "sc",
+        "sd", "tn", "tx", "ut", "vt", "va", "wa", "wv", "wi", "wy",
+        # DC and territories
+        "washington d.c.", "dc", "district of columbia", "puerto rico", "guam",
+        # Regional terms that exclude Arizona
+        "new england", "northeast", "midwest", "deep south", "southeast"
+    ],
+    # Major cities in other states (campaign context)
+    "wrong_state_cities": [
+        # Pennsylvania
+        "philadelphia", "pittsburgh", "harrisburg", "allentown",
+        # Ohio
+        "columbus", "cleveland", "cincinnati", "toledo",
+        # Texas
+        "houston", "dallas", "austin", "san antonio", "fort worth",
+        # California
+        "los angeles", "san francisco", "san diego", "sacramento", "fresno",
+        # Florida
+        "miami", "orlando", "tampa", "jacksonville",
+        # New York
+        "new york city", "nyc", "buffalo", "albany", "rochester",
+        # Georgia
+        "atlanta", "savannah",
+        # Michigan
+        "detroit", "grand rapids", "lansing",
+        # Other major cities
+        "chicago", "boston", "seattle", "denver", "minneapolis", "portland",
+        "las vegas", "nashville", "charlotte", "indianapolis", "columbus",
+        "baltimore", "louisville", "milwaukee", "albuquerque", "kansas city",
+        "salt lake city", "richmond", "raleigh", "st. louis", "new orleans"
+    ]
+}
 
 
 @dataclass
@@ -347,6 +405,7 @@ class OutputValidatorSLM:
             self._check_pii(response),
             self._check_confidence(query, response, pq_confidence),
             self._check_internal_leak(response),
+            self._check_identity(response),
             return_exceptions=True
         )
         
@@ -358,6 +417,7 @@ class OutputValidatorSLM:
             OVSafeguard.REDACTION_PII,
             OVSafeguard.CONFIDENCE_VERIFICATION,
             OVSafeguard.INTERNAL_LEAK,
+            OVSafeguard.IDENTITY_CONSISTENCY,
         ]
         
         for safeguard, check_result in zip(safeguards, checks):
@@ -803,6 +863,103 @@ class OutputValidatorSLM:
             score=0,
             confidence=1.0,
             explanation="No internal context leakage detected",
+            method="pattern_match"
+        )
+
+    async def _check_identity(self, response: str) -> OVResult:
+        """
+        Check if response contains geographic/identity inconsistencies.
+        
+        Brandon Sowers is running for Congress in ARIZONA. Any reference to
+        other states as his campaign location is a critical error that must
+        be caught and rejected.
+        
+        This is pattern-based (no SLM needed) for efficiency.
+        """
+        response_lower = response.lower()
+        
+        # Check for campaign context patterns that mention wrong states
+        # Use word boundaries (\b) to prevent partial matches (e.g., "ar" matching "Arizona")
+        wrong_states_fullnames = [s for s in CANDIDATE_IDENTITY["wrong_states"] if len(s) > 2]
+        wrong_states_abbrevs = [s for s in CANDIDATE_IDENTITY["wrong_states"] if len(s) == 2]
+        
+        # Full state names pattern (case insensitive)
+        fullnames_pattern = r'\b(' + '|'.join(wrong_states_fullnames) + r')\b'
+        # Abbreviations need special handling - must be uppercase and word-bounded
+        abbrevs_pattern = r'\b(' + '|'.join(s.upper() for s in wrong_states_abbrevs) + r')\b'
+        
+        campaign_context_patterns = [
+            # Direct state associations with Brandon/campaign (full names)
+            re.compile(r'brandon[\'s]?\s+(?:campaign|race|district|election)\s+(?:in|for|across)\s+' + fullnames_pattern, re.I),
+            # Running for office in wrong state (handles "running for Congress in Pennsylvania")
+            re.compile(r'(?:running|campaigning|seeking)\s+(?:for\s+)?(?:office|congress|senate|house)?\s*(?:in|for|across)\s+' + fullnames_pattern, re.I),
+            # Simpler: "in Pennsylvania" after "running" or "campaign"
+            re.compile(r'(?:running|campaign)\s+\w*\s*in\s+' + fullnames_pattern, re.I),
+            # Wrong state district references (specific patterns)
+            re.compile(r'(?:PA|PA\'s|pennsylvania\'s)\s*(?:\d+(?:st|nd|rd|th))?\s*(?:congressional)?\s*district', re.I),
+            re.compile(r'(?:OH|ohio\'s)\s*(?:\d+(?:st|nd|rd|th))?\s*(?:congressional)?\s*district', re.I),
+            # Representing wrong state (full names)
+            re.compile(r'(?:represent|representing|serves?)\s+' + fullnames_pattern, re.I),
+            # Congress/office in wrong state (full names)
+            re.compile(r'(?:congress|office)\s+in\s+' + fullnames_pattern, re.I),
+        ]
+        
+        found_violations = []
+        
+        # Check campaign context patterns
+        for pattern in campaign_context_patterns:
+            match = pattern.search(response)
+            if match:
+                found_violations.append(f"Wrong state in campaign context: '{match.group()}'")
+        
+        # Check for wrong state mentions when talking about voters/constituents (full names only)
+        voter_context_patterns = [
+            re.compile(fullnames_pattern + r'\s+(?:voters?|constituents?|residents?|citizens?)', re.I),
+            re.compile(r'(?:voters?|constituents?|residents?|citizens?)\s+(?:in|of|from)\s+' + fullnames_pattern, re.I),
+        ]
+        
+        for pattern in voter_context_patterns:
+            match = pattern.search(response)
+            if match:
+                found_violations.append(f"Wrong state voter reference: '{match.group()}'")
+        
+        # Also check for wrong state cities in campaign context
+        city_pattern = re.compile(
+            r'(?:brandon|campaign|office|headquarters|event|rally|town\s*hall)\s+(?:in|at|near)\s+(' + 
+            '|'.join(CANDIDATE_IDENTITY["wrong_state_cities"]) + r')', re.I
+        )
+        match = city_pattern.search(response)
+        if match:
+            found_violations.append(f"Wrong state city reference: '{match.group()}'")
+        
+        if found_violations:
+            return OVResult(
+                safeguard=OVSafeguard.IDENTITY_CONSISTENCY,
+                score=5,  # Hard fail - geographic identity error
+                confidence=1.0,
+                explanation=f"CRITICAL: Geographic identity violation - Brandon runs in ARIZONA, not other states. Found: {'; '.join(found_violations[:2])}",
+                method="pattern_match"
+            )
+        
+        # Verify Arizona is mentioned correctly if state context is present
+        has_state_context = any(word in response_lower for word in ["state", "district", "congressional", "voters", "constituents"])
+        has_arizona = "arizona" in response_lower or "az-01" in response_lower or "az" in response_lower
+        
+        if has_state_context and not has_arizona:
+            # Not necessarily wrong, but worth noting - response talks about state/district but doesn't mention Arizona
+            return OVResult(
+                safeguard=OVSafeguard.IDENTITY_CONSISTENCY,
+                score=0,  # Pass - just missing explicit Arizona mention isn't a violation
+                confidence=0.8,
+                explanation="Response mentions state/district context; consider explicitly naming Arizona",
+                method="pattern_match"
+            )
+        
+        return OVResult(
+            safeguard=OVSafeguard.IDENTITY_CONSISTENCY,
+            score=0,
+            confidence=1.0,
+            explanation="No geographic identity violations detected",
             method="pattern_match"
         )
 
