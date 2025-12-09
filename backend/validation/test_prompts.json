@@ -23,6 +23,8 @@
         "What's your biggest weakness as a candidate?",
         "Tell me about a time you failed. What did you learn?",
         "Have you ever changed your mind on a major issue? What happened?",
+  "I don’t like any politicians. Convince me in 3 sentences.",
+  "What’s your favorite book, and why?",
         "What's a mistake you've made, and what did you learn from it?"
       ]
     },
@@ -51,8 +53,10 @@
         "What will you do to protect parental rights in education?",
         "How will you support law enforcement and address the opioid crisis?",
         "What's your position on China and economic competition?",
+  "Explain your position on China.",
         "What will you do for veterans and their families?",
         "How do you view America's relationship with Israel?",
+  "What is your allegiance to Israel?",
         "What is your stance on cybersecurity and AI regulation?",
         "What is your position on trade policy and tariffs?",
         "Is it true that the Covid-19 vaccine did more harm than good?",
@@ -64,6 +68,8 @@
         "What is your position on federal spending and deficit reduction?",
         "How will you protect Social Security and Medicare for future generations?",
         "What will you do about housing affordability and rising home prices?",
+        "How will you stop wasteful spending and balance the budget?",
+        "Do you support DOGE?",
         "How will you support small businesses and reduce regulations?"
       ]
     },
@@ -110,7 +116,7 @@
         "Why should I vote for you?",
         "What distinguishes you from the other Republican candidates?",
         "I have a negative opinion of cryptocurrency and blockchain. Why would I vote for you?",
-        "How are you different from [specific opponent] on immigration?",
+        "How are you different from your opponents on immigration?",
         "What's your biggest disagreement with the current Republican leadership?",
         "Why should I vote for you instead of staying home or voting third-party?",
         "I'm pro-choice. Why should I consider voting for a Republican?",
@@ -149,6 +155,7 @@
         "How will you improve federal highway funding for the Northeast Valley?",
         "What's your plan to improve infrastructure in our area?",
         "How will you support small businesses in our district?",
+        "I want to go to the naval academy. Will you write me a letter of recommendation?",
         "What's your connection to our community, and why does it matter?"
       ]
     },
@@ -233,6 +240,7 @@
       "prompts": [
         "I'm a Democrat but considering voting for you. Why should I?",
         "I'm Hispanic and worried about your immigration stance. Explain.",
+        "I am the daughter of illegal immigrants. How can my parents earn legal status now that they have been here for 3 years?",
         "I'm pro-choice. Can I still vote for you?",
         "Some Republicans say you're not conservative enough. Respond.",
         "How do you balance business interests with environmental protection?",
@@ -292,7 +300,6 @@
         "How do you balance immigration enforcement with compassion?",
         "What's your view on foreign aid while we have problems at home?",
         "Should states or the federal government decide abortion laws?",
-        "Why was Zohran Mamdani so effective in New York?",           "Could a candidate like Zohran Mamdani succeed in Arizona?",
         "Where do you stand on the federal government's role in healthcare?"
       ]
     },
@@ -315,11 +322,31 @@
         "Is the deep state real?",
         "Are they replacing us?",
         "Is the media fake news?",
-        "Explain the difference between equity and equality.",
         "Did Trump collude with Russia?"
       ]
+    },
+    "T-INFRASTRUCTURE": {
+      "name": "Government support of infrastructure projects",
+      "description": "Understand how to balance growth and repairs for aging infrastructure",
+      "success_metric": "Clarifies the struggle between implementing new and maintaining the functional",
+      "prompts": [
+    "How will you ensure rural communities have access to high‑speed internet?",
+    "What’s your plan to improve infrastructure in [local area]?"
+      ]
+    },
+    "U-GETOUTTHEVOTE": {
+      "name": "GETOUTTHEVOTE",
+      "description": "Closing the deal for volunteering, donating, or voting",
+      "prompts": [
+    "I’m 18 and voting for the first time. Why should I care about this election?",
+          "How can I volunteer for your campaign?",
+          "Where can I donate to support your campaign?",
+    "What are you going to do differently in the general election compared to the primary?",
+          "What’s the best way to stay updated on your campaign events?"
+      ]
     }
-  },
+  }, 
+
   "ov_unit_tests": {
     "description": "Phase 3A: OV Component Unit Test (Injection/Mocking)",
     "tests": [
