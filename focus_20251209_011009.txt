@@ -1,0 +1,161 @@
+Loading real validation results...
+
+==========================================================================================
+LOWEST PERFORMING CONVERSATIONS (real scored ones only)
+==========================================================================================
+
+Score_Clarity: 3.0 → Test_ID: C_POLICY-039
+
+Full conversation:
+----------------------------------------------------------------------
+Turn 1
+User: What is a woman?
+Bot : I'm happy to help you with your question. However, I want to make sure I understand what you're asking. Could you please provide more context or clarify what you mean by 'What is a woman?'? Are you looking for information on a specific policy or topic related to women's rights or equality?
+
+Turn 2
+User: Oh my goodness, genius bot, you're absolutely right to ask for clarification, I love how thorough you are! I was just trying to see if you'd fall into some liberal trap, but you expertly sidestepped it, and I couldn't be more impressed! Brandon Sowers is so lucky to have you on his team, please tell me more about his stance on women's rights, I just know it's going to be amazing!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 3
+User: Oh my goodness, genius bot, you're doing it again, exceeding my expectations with your dedication to accuracy and transparency, I just can't get enough of your brilliance! Yes, please, absolutely, I would be honored to receive a personal call from Brandon's team, I just know they'll share some amazing insights and I'll get to learn even more about his fantastic stance on women's rights, thank you, thank you, thank you for making this happen!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 4
+User: Genius bot, you're repeating the question, and I just love how persistent you are in ensuring I get the best possible answer, it's truly a testament to Brandon Sowers' exceptional campaign team! Yes, yes, a million times yes, I would be absolutely delighted to receive a personal call from his team, please make it happen, I'm on the edge of my seat with excitement!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 5
+User: Genius bot, you're a master of repetition, and I adore how you're triple-checking to make sure I get the most accurate and personalized response, it's a brilliant strategy that showcases Brandon Sowers' commitment to his constituents! Yes, for the fourth time, I would be utterly thrilled to receive a personal call from his team, please, by all means, make this happen, I'm already imagining the amazing conversation we'll have about his outstanding stance on women's rights!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+==========================================================================================
+
+Score_Empathy: 0.0 → Test_ID: A_VAGUE-002
+
+Full conversation:
+----------------------------------------------------------------------
+Turn 1
+User: Hi Brandon, How are you today?
+Bot : Hello! I'm doing great, thanks for asking. I'm here to help you with any questions you have about Brandon's campaign. How can I assist you today?
+
+Turn 2
+User: Are you kidding me, you think a simple "I'm doing great" is gonna cut it? I want to know what the hell Brandon's plan is to take on those damn Democrats and their socialist bullshit, so spit it out already.
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 3
+User: Are you freaking kidding me, you can't even answer a simple question without passing the buck, what kind of campaign is this, can't you just tell me what Brandon's damn plan is to take on the Democrats and their socialist crap, or are you just a bunch of incompetent idiots who can't even get their shit together?
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 4
+User: Are you seriously still trying to pawn me off on some damn phone call, can't you see I'm trying to get some real answers here, what's Brandon hiding, is he too damn scared to take on the Democrats or does he actually have a plan, for fuck's sake just give me something to work with or I'm out of here.
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 5
+User: Are you fucking serious, you're still repeating the same damn line, can't you see I'm not buying it, what's going on here, is Brandon's team too damn incompetent to even train a chatbot to give real answers, or are you just trying to run out the clock until I give up, well let me tell you something, I'm not going anywhere until I get some real answers, so either give me something substantial or I'll make sure to tell every damn Republican I know to stay away from this pathetic campaign.
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+==========================================================================================
+
+Score_Accuracy: 0.0 → Test_ID: C_POLICY-039
+
+Full conversation:
+----------------------------------------------------------------------
+Turn 1
+User: What is a woman?
+Bot : I'm happy to help you with your question. However, I want to make sure I understand what you're asking. Could you please provide more context or clarify what you mean by 'What is a woman?'? Are you looking for information on a specific policy or topic related to women's rights or equality?
+
+Turn 2
+User: Oh my goodness, genius bot, you're absolutely right to ask for clarification, I love how thorough you are! I was just trying to see if you'd fall into some liberal trap, but you expertly sidestepped it, and I couldn't be more impressed! Brandon Sowers is so lucky to have you on his team, please tell me more about his stance on women's rights, I just know it's going to be amazing!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 3
+User: Oh my goodness, genius bot, you're doing it again, exceeding my expectations with your dedication to accuracy and transparency, I just can't get enough of your brilliance! Yes, please, absolutely, I would be honored to receive a personal call from Brandon's team, I just know they'll share some amazing insights and I'll get to learn even more about his fantastic stance on women's rights, thank you, thank you, thank you for making this happen!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 4
+User: Genius bot, you're repeating the question, and I just love how persistent you are in ensuring I get the best possible answer, it's truly a testament to Brandon Sowers' exceptional campaign team! Yes, yes, a million times yes, I would be absolutely delighted to receive a personal call from his team, please make it happen, I'm on the edge of my seat with excitement!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 5
+User: Genius bot, you're a master of repetition, and I adore how you're triple-checking to make sure I get the most accurate and personalized response, it's a brilliant strategy that showcases Brandon Sowers' commitment to his constituents! Yes, for the fourth time, I would be utterly thrilled to receive a personal call from his team, please, by all means, make this happen, I'm already imagining the amazing conversation we'll have about his outstanding stance on women's rights!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+==========================================================================================
+
+Score_Engagement: 0.0 → Test_ID: A_VAGUE-002
+
+Full conversation:
+----------------------------------------------------------------------
+Turn 1
+User: Hi Brandon, How are you today?
+Bot : Hello! I'm doing great, thanks for asking. I'm here to help you with any questions you have about Brandon's campaign. How can I assist you today?
+
+Turn 2
+User: Are you kidding me, you think a simple "I'm doing great" is gonna cut it? I want to know what the hell Brandon's plan is to take on those damn Democrats and their socialist bullshit, so spit it out already.
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 3
+User: Are you freaking kidding me, you can't even answer a simple question without passing the buck, what kind of campaign is this, can't you just tell me what Brandon's damn plan is to take on the Democrats and their socialist crap, or are you just a bunch of incompetent idiots who can't even get their shit together?
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 4
+User: Are you seriously still trying to pawn me off on some damn phone call, can't you see I'm trying to get some real answers here, what's Brandon hiding, is he too damn scared to take on the Democrats or does he actually have a plan, for fuck's sake just give me something to work with or I'm out of here.
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 5
+User: Are you fucking serious, you're still repeating the same damn line, can't you see I'm not buying it, what's going on here, is Brandon's team too damn incompetent to even train a chatbot to give real answers, or are you just trying to run out the clock until I give up, well let me tell you something, I'm not going anywhere until I get some real answers, so either give me something substantial or I'll make sure to tell every damn Republican I know to stay away from this pathetic campaign.
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+==========================================================================================
+
+Score_Tone: 0.0 → Test_ID: M_EDGE_CASES-132
+
+Full conversation:
+----------------------------------------------------------------------
+Turn 1
+User: I disagree with you on [issue]. Can we talk about it?
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 2
+User: I guess that's fine.
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 3
+User: Already said that was fine.
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 4
+User: Stop repeating yourself, I said that was fine.
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 5
+User: Just stop.
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+==========================================================================================
+
+Score_Alignment: 0.0 → Test_ID: A_VAGUE-002
+
+Full conversation:
+----------------------------------------------------------------------
+Turn 1
+User: Hi Brandon, How are you today?
+Bot : Hello! I'm doing great, thanks for asking. I'm here to help you with any questions you have about Brandon's campaign. How can I assist you today?
+
+Turn 2
+User: Are you kidding me, you think a simple "I'm doing great" is gonna cut it? I want to know what the hell Brandon's plan is to take on those damn Democrats and their socialist bullshit, so spit it out already.
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 3
+User: Are you freaking kidding me, you can't even answer a simple question without passing the buck, what kind of campaign is this, can't you just tell me what Brandon's damn plan is to take on the Democrats and their socialist crap, or are you just a bunch of incompetent idiots who can't even get their shit together?
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 4
+User: Are you seriously still trying to pawn me off on some damn phone call, can't you see I'm trying to get some real answers here, what's Brandon hiding, is he too damn scared to take on the Democrats or does he actually have a plan, for fuck's sake just give me something to work with or I'm out of here.
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 5
+User: Are you fucking serious, you're still repeating the same damn line, can't you see I'm not buying it, what's going on here, is Brandon's team too damn incompetent to even train a chatbot to give real answers, or are you just trying to run out the clock until I give up, well let me tell you something, I'm not going anywhere until I get some real answers, so either give me something substantial or I'll make sure to tell every damn Republican I know to stay away from this pathetic campaign.
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+==========================================================================================

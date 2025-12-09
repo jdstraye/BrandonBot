@@ -103,7 +103,7 @@ python download_models.py
 |-------|------|---------|
 | all-MiniLM-L6-v2 | 90MB | Text embeddings for RAG |
 | ms-marco-MiniLM | 120MB | Intent/vagueness scoring |
-| emotion-distilroberta | 320MB | Frustration detection |
+| j-hartmann/emotion-english-distilroberta-base | 320MB | Frustration detection |
 | ME2-BERT | 420MB | Ethics classification |
 | deberta-pii | 550MB | PII detection |
 | bert-tiny | 15MB | Confidence verification |
@@ -224,8 +224,15 @@ export USE_LOCAL_JUDGE=true
 
 # Run validation
 cd backend/validation
-python validator.py
+python3.12 -m validation.validator --phase <phase>
+python validator.py 
 ```
+\<phase\> can be:
+>
+- all - run all the tests available, ~10 PQ + OV + ~150 prompts
+- pq - Run the PreQualifier gray box tests, which would include irritation and vagueness detection.
+- ov - Run the Output Validation gray box tests, which would include citation verification, DOS attack, PII redaction, and responding to the intent of the query.
+- full - Run the prompts but not the pq and ov gray box tests.
 
 ---
 
