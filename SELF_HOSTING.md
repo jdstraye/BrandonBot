@@ -229,10 +229,11 @@ python validator.py
 ```
 \<phase\> can be:
 >
-- all - run all the tests available, ~10 PQ + OV + ~150 prompts
+- all - run all the tests available, ~6 PQ + ~4 OV + ~4 OV_E2E + ~10 MCP + ~210 prompts
 - pq - Run the PreQualifier gray box tests, which would include irritation and vagueness detection.
 - ov - Run the Output Validation gray box tests, which would include citation verification, DOS attack, PII redaction, and responding to the intent of the query.
-- full - Run the prompts but not the pq and ov gray box tests.
+- mcp - Run the tests that check tool usage.
+- full - Run the prompts but not the pq, mcp, or ov gray box tests.
 
 ---
 
