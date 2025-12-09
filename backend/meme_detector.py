@@ -14,13 +14,13 @@ Flow:
 import asyncio
 import logging
 import numpy as np
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, List, Tuple
 
 logger = logging.getLogger(__name__)
 
 MEME_ANALYSIS_TEMPLATE = "This is about a political controversy, meme, or cultural debate"
-MEME_SIMILARITY_THRESHOLD = 0.20
+MEME_SIMILARITY_THRESHOLD = 0.16
 
 
 @dataclass
@@ -29,13 +29,12 @@ class MemeDetectionResult:
     is_meme: bool = False
     phrase: str = ""
     context: str = ""
-    search_snippets: List[str] = None
+    search_snippets: List[str] = field(default_factory=list)
     similarity_score: float = 0.0
     suggested_pivot: str = ""
-    
-    def __post_init__(self):
-        if self.search_snippets is None:
-            self.search_snippets = []
+    confidence: float = 0.0
+    cultural_context: str = ""
+    reasoning: str = ""
 
 
 class MemeDetector:
@@ -44,17 +43,20 @@ class MemeDetector:
     
     Uses existing all-MiniLM-L6-v2 model to analyze web search results
     and determine if a short question has hidden cultural/political meaning.
+    
+    Primary: SearxNG public instances (unlimited, free)
+    Fallback: SerpAPI (if configured)
     """
     
     def __init__(self):
         self._embedding_model = None
         self._template_embedding = None
-        self._web_search = None
+        self._multi_search = None
         self._initialized = False
         self._init_lock = asyncio.Lock()
     
     async def ensure_ready(self) -> bool:
-        """Initialize embedding model and web search."""
+        """Initialize embedding model and multi-provider search."""
         if self._initialized:
             return True
         
@@ -64,15 +66,15 @@ class MemeDetector:
             
             try:
                 from sentence_transformers import SentenceTransformer
-                from web_search_service import WebSearchService
+                from multi_search_service import multi_search_service
                 
-                logger.info("Loading meme detector (all-MiniLM-L6-v2)...")
+                logger.info("Loading meme detector (all-MiniLM-L6-v2 + SearxNG)...")
                 self._embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
                 self._template_embedding = self._embedding_model.encode(MEME_ANALYSIS_TEMPLATE)
-                self._web_search = WebSearchService()
+                self._multi_search = multi_search_service
                 
                 self._initialized = True
-                logger.info("Meme detector ready")
+                logger.info("Meme detector ready with multi-provider search")
                 return True
                 
             except Exception as e:
@@ -142,6 +144,12 @@ class MemeDetector:
         if "defund the police" in phrase_lower:
             return "law enforcement funding and public safety"
         
+        if "election" in phrase_lower and any(term in context_lower for term in ["stolen", "fraud", "rigged", "2020", "2024"]):
+            return "election integrity and voter confidence"
+        
+        if "genders" in phrase_lower or "gender" in phrase_lower:
+            return "gender identity and biological sex debates"
+        
         if any(term in context_lower for term in ["meme", "viral", "controversy", "debate"]):
             return "the cultural context of this phrase"
         
@@ -150,6 +158,9 @@ class MemeDetector:
     async def detect(self, query: str) -> MemeDetectionResult:
         """
         Detect if a query contains a meme or culturally loaded phrase.
+        
+        Uses SearxNG public instances for unlimited free searches,
+        with SerpAPI as fallback if configured.
         
         Args:
             query: User's question
@@ -160,37 +171,49 @@ class MemeDetector:
         result = MemeDetectionResult(phrase=query)
         
         if not self._is_short_question(query):
+            result.reasoning = "Query too long for meme detection"
             return result
         
         if not await self.ensure_ready():
             logger.warning("Meme detector not available, skipping detection")
+            result.reasoning = "Meme detector not initialized"
             return result
         
         try:
             search_query = self._build_search_query(query)
-            search_response = await self._web_search.search(search_query, max_results=5)
+            logger.info(f"Meme detection search: {search_query}")
+            
+            search_response = await self._multi_search.search(search_query, max_results=5)
             
             if not search_response.results:
+                result.reasoning = f"No search results (provider: {search_response.provider}, error: {search_response.error})"
+                logger.warning(f"Meme detection: no results for '{query}' - {result.reasoning}")
                 return result
             
             snippets = [r.snippet for r in search_response.results if r.snippet]
             result.search_snippets = snippets
+            result.reasoning = f"Got {len(snippets)} snippets from {search_response.provider}"
             
             similarity, context = self._analyze_snippets(snippets)
             result.similarity_score = similarity
             result.context = context
+            result.cultural_context = context[:300] if context else ""
+            result.confidence = min(similarity / MEME_SIMILARITY_THRESHOLD, 1.0) if similarity > 0 else 0.0
             
             if similarity >= MEME_SIMILARITY_THRESHOLD:
                 result.is_meme = True
                 result.suggested_pivot = self._determine_pivot(query, context)
+                result.reasoning += f" | Meme detected (score: {similarity:.3f})"
                 logger.info(f"Meme detected: '{query}' (score: {similarity:.3f}, pivot: {result.suggested_pivot})")
             else:
+                result.reasoning += f" | Not a meme (score: {similarity:.3f} < threshold {MEME_SIMILARITY_THRESHOLD})"
                 logger.debug(f"Not a meme: '{query}' (score: {similarity:.3f})")
             
             return result
             
         except Exception as e:
             logger.error(f"Meme detection failed: {e}")
+            result.reasoning = f"Error: {e}"
             return result
 
 
