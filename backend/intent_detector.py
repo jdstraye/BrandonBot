@@ -277,6 +277,21 @@ class IntentDetector:
             r"(prefer|rather) (talk|speak|phone)",
             r"complicated|confusing|hard to understand",
             r"this is (important|urgent|personal)",
+            r"give me a call",
+            r"call me back",
+            r"call me",
+            r"can we talk",
+            r"can i talk to",
+            r"speak to someone",
+            r"speak with someone",
+            r"talk to a person",
+            r"have someone (call|reach|contact)",
+            r"get back to me",
+            r"schedule a call",
+            r"set up a call",
+            r"reach out to me",
+            r"i'd like (to talk|a call)",
+            r"phone call",
         ]
         
         question_lower = question.lower()

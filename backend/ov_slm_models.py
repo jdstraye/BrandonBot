@@ -381,6 +381,31 @@ class MSMarcoIntentChecker:
                     heuristic_boost = 0.5
                     heuristic_reason = "direct answer pattern"
             
+            # Callback-related queries: Asking for contact details is a VALID response
+            # Must bypass MS-MARCO's low relevance score for these conversational exchanges
+            callback_query_patterns = [
+                r'\b(give me a call|call me back|call me|phone call)\b',
+                r'\b(can we talk|talk to someone|speak to someone|speak with)\b',
+                r'\b(have someone call|reach out|schedule a call|set up a call)\b',
+                r'\b(contact me|get back to me|get in touch)\b'
+            ]
+            callback_response_patterns = [
+                r'\b(phone number|contact|call you|call back|callback|reach you)\b',
+                r'\b(name and|your name|provide your|share your)\b',
+                r'\b(schedule|arrange|set up|connect you)\b',
+                r"\b(brandon'?s team|someone from|representative)\b"
+            ]
+            is_callback_query = any(re.search(pat, query_lower) for pat in callback_query_patterns)
+            is_callback_response = any(re.search(pat, response_lower) for pat in callback_response_patterns)
+            
+            if is_callback_query and is_callback_response:
+                heuristic_boost = max(heuristic_boost, 0.8)
+                heuristic_reason = "callback flow (query + appropriate response)"
+            elif is_callback_query:
+                # Query is about callback; give benefit of doubt to clarifying questions
+                heuristic_boost = max(heuristic_boost, 0.6)
+                heuristic_reason = "callback query with clarification"
+            
             if re.search(r'\?$', response.strip()) or re.search(r'\b(could you|can you|would you|do you mean|which|what kind)\b', response_lower):
                 heuristic_boost = max(heuristic_boost, 0.4)
                 heuristic_reason = heuristic_reason or "clarifying question"
@@ -427,7 +452,11 @@ class MSMarcoIntentChecker:
             
             # Only apply heuristic boosts if MS-MARCO shows SOME relevance signal
             # This prevents truly off-topic responses from being rescued by keyword matching
-            if raw_relevance < 0.08:
+            # Exception: Callback flow queries bypass cap since MS-MARCO fails on conversational exchanges
+            if is_callback_query:
+                # Callback queries: Apply full boost since MS-MARCO can't score conversational exchanges
+                effective_boost = heuristic_boost
+            elif raw_relevance < 0.08:
                 # Near-zero MS-MARCO score: cap boost at 0.15 to prevent false passes
                 # Even with boost, final score will be < 0.23 (score 3 = tangential)
                 effective_boost = min(heuristic_boost, 0.15)

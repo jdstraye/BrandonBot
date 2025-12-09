@@ -43,6 +43,8 @@ SYNONYM_TABLE = {
     
     "faith": ["religion", "religious", "christian", "church", "god", "spiritual", "moral", "morality", "values", "bible", "scripture"],
     "family": ["families", "children", "parents", "marriage", "traditional values"],
+    
+    "callback": ["call me", "give me a call", "call me back", "phone call", "can we talk", "talk to someone", "speak to someone", "speak with someone", "have someone call", "reach out to me", "schedule a call", "set up a call", "contact me", "get back to me"],
 }
 
 TOPIC_KEYWORDS = {
@@ -138,6 +140,18 @@ def get_topic_from_query(query: str) -> str:
         Primary topic string
     """
     query_lower = query.lower()
+    
+    # Priority phrase detection - check multi-word callback phrases FIRST
+    # These take precedence over single-word keyword matching
+    callback_phrases = [
+        "give me a call", "call me back", "call me", "phone call",
+        "can we talk", "talk to someone", "speak to someone", "speak with someone",
+        "have someone call", "reach out to me", "schedule a call", "set up a call",
+        "contact me", "get back to me", "get in touch", "someone can call"
+    ]
+    for phrase in callback_phrases:
+        if phrase in query_lower:
+            return "callback"
     
     topic_scores = {}
     for topic, synonyms in SYNONYM_TABLE.items():

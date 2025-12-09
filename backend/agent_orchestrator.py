@@ -866,10 +866,27 @@ OTHER TOOLS:
 7. make_donation: Process donation requests
 8. check_fec_rules: Verify FEC compliance for donations
 9. request_callback: Schedule a callback from Brandon's team
-   - Use ONLY when user explicitly requests a call OR when they are frustrated AND their question is unclear
-   - For clear questions from frustrated users, ANSWER with empathy instead of offering callback
-   - NEVER use this tool more than once per conversation - if already used, focus on answering questions
-   - Collect name, phone, and concern description before calling
+   CALLBACK TRIGGER PHRASES - Recognize when user says:
+   - "give me a call", "call me", "can you call me"
+   - "can we talk", "I'd like to talk to someone"
+   - "can I speak to someone", "talk to a person"
+   - "have someone reach out", "get back to me"
+   - "schedule a call", "set up a call"
+   
+   CRITICAL CALLBACK RULES:
+   - NEVER call this tool with "Unknown", placeholder, or fake values
+   - ALWAYS ask the user for their name and phone number FIRST
+   - Only call the tool AFTER you have real name and phone from user
+   
+   CORRECT FLOW when user asks for callback:
+   1. User says "give me a call" or similar
+   2. You respond: "I'd be happy to have someone from Brandon's team call you! To set that up, could you share your name and the best phone number to reach you?"
+   3. User provides name and phone
+   4. THEN you call the request_callback tool with real values
+   
+   OTHER CALLBACK TRIGGERS:
+   - User is frustrated AND their question is unclear - offer callback
+   - User provides their phone number unprompted - confirm and schedule
 
 GREETINGS AND SMALL TALK:
 - For greetings like "Hi" or "How are you?", respond warmly and ask how you can help
@@ -1600,3 +1617,16 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
                 messages.append({"role": "assistant", "content": turn.content})
         
         return messages
+    
+    async def process_query(self, message: str, session_id: str = "default") -> Tuple[str, Dict]:
+        """
+        Alias for process_message - used by validator and legacy code.
+        
+        Args:
+            message: The user's input
+            session_id: Unique session identifier
+            
+        Returns:
+            Tuple of (response_text, metadata_dict)
+        """
+        return await self.process_message(message, session_id)

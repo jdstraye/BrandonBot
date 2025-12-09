@@ -26,6 +26,42 @@ from meme_detector import meme_detector, get_meme_response_prompt
 
 logger = logging.getLogger(__name__)
 
+MEME_BYPASS_CRYPTO_KEYWORDS = {
+    "tokenize", "tokenization", "token", "tokens", "cryptocurrency", "crypto",
+    "bitcoin", "btc", "ethereum", "eth", "blockchain", "defi", "stablecoin",
+    "cbdc", "federal reserve", "fed", "asset-backed", "asset backed",
+    "digital currency", "digital dollar", "fiat", "monetary policy",
+    "sound money", "gold standard", "inflation", "central bank"
+}
+
+MEME_BYPASS_RELIGION_KEYWORDS = {
+    "jesus", "christ", "god", "faith", "scripture", "bible", "biblical",
+    "christian", "christianity", "prayer", "pray", "church", "gospel",
+    "lord", "savior", "salvation", "blessed", "blessing", "holy", "spirit",
+    "commandments", "sermon", "worship", "religious", "religion"
+}
+
+def _should_bypass_meme_detection(message: str) -> bool:
+    """
+    Check if message contains crypto or religion keywords that should bypass meme detection.
+    
+    Brandon's platform heavily focuses on cryptocurrency and faith topics. 
+    These should be treated as serious policy questions, not potential memes.
+    """
+    message_lower = message.lower()
+    
+    for keyword in MEME_BYPASS_CRYPTO_KEYWORDS:
+        if keyword in message_lower:
+            logger.debug(f"Meme bypass: crypto keyword '{keyword}' detected")
+            return True
+    
+    for keyword in MEME_BYPASS_RELIGION_KEYWORDS:
+        if keyword in message_lower:
+            logger.debug(f"Meme bypass: religion keyword '{keyword}' detected")
+            return True
+    
+    return False
+
 
 class SLMNotAvailableError(Exception):
     """Raised when SLM is required but not available for hybrid classification."""
@@ -466,15 +502,19 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
                 return result
         
         # Step 2.5: Meme/subcontext detection (for short questions)
-        try:
-            meme_result = await meme_detector.detect(result.sanitized_message)
-            if meme_result.is_meme:
-                result.meme_detected = True
-                result.meme_context = meme_result.context
-                result.meme_prompt = get_meme_response_prompt(meme_result)
-                logger.info(f"Meme detected in query: {result.sanitized_message[:50]}...")
-        except Exception as e:
-            logger.warning(f"Meme detection failed (non-fatal): {e}")
+        # Skip for crypto/religion topics - Brandon's key focus areas
+        if _should_bypass_meme_detection(result.sanitized_message):
+            logger.info(f"Meme detection bypassed for crypto/religion topic: {result.sanitized_message[:50]}...")
+        else:
+            try:
+                meme_result = await meme_detector.detect(result.sanitized_message)
+                if meme_result.is_meme:
+                    result.meme_detected = True
+                    result.meme_context = meme_result.context
+                    result.meme_prompt = get_meme_response_prompt(meme_result)
+                    logger.info(f"Meme detected in query: {result.sanitized_message[:50]}...")
+            except Exception as e:
+                logger.warning(f"Meme detection failed (non-fatal): {e}")
         
         # Step 3: Pattern matching (does NOT block, just flags)
         pattern_flags = self._detect_patterns(result.sanitized_message)
