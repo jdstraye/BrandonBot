@@ -234,22 +234,25 @@ def get_meme_response_prompt(meme_result: MemeDetectionResult) -> str:
     pivot_text = meme_result.suggested_pivot or "the cultural context of this phrase"
     
     return f"""
-[MEME/CULTURAL REFERENCE DETECTED]
+[MEME/CULTURAL REFERENCE DETECTED - RESPOND DIRECTLY, NO TOOLS NEEDED]
 The user asked: "{meme_result.phrase}"
 
-This appears to be a politically loaded phrase or cultural meme. Context from web search:
+This is a politically loaded meme/cultural reference. Context from web search:
 {meme_result.context[:500]}
 
+CRITICAL: RESPOND DIRECTLY - DO NOT call search_brandon_positions or any other tools.
+The context above is sufficient for a witty pivot response.
+
 INSTRUCTIONS:
-1. Show that you understand the cultural/political subtext of this question
-2. Craft a brief, witty acknowledgment that demonstrates awareness (not dry or robotic)
-3. Naturally pivot to {pivot_text}
-4. Then present Brandon's relevant policy position
+1. Craft a brief, witty acknowledgment that shows you get the cultural/political subtext
+2. Naturally pivot to {pivot_text}
+3. Share Brandon's relevant perspective on the underlying issue
 
-Example tone: "Ah, I see what you're getting at! That phrase has certainly sparked quite the debate..." then pivot to policy.
+Example opening: "Ha! I know exactly what you're getting at - that phrase has become quite the cultural flashpoint..." then pivot.
 
-Do NOT:
-- Pretend the question is straightforward
-- Give a dry policy response without acknowledging the subtext
-- Lecture or be preachy about the controversy
+AVOID:
+- Using any tools or searches (you have the context already)
+- Pretending the question is straightforward
+- Giving a dry policy response without acknowledging the subtext
+- Being preachy or lecturing about the controversy
 """

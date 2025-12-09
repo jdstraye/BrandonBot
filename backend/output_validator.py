@@ -301,7 +301,8 @@ class OutputValidatorSLM:
         self,
         query: str,
         response: str,
-        pq_confidence: float = 0.85
+        pq_confidence: float = 0.85,
+        meme_detected: bool = False
     ) -> OVValidationResult:
         """
         Validate a response against all safeguards.
@@ -310,6 +311,7 @@ class OutputValidatorSLM:
             query: Original user query
             response: LLM response to validate
             pq_confidence: Prequalifier confidence score (0-1)
+            meme_detected: If True, skip intent checking (meme responses pivot to political topics)
         
         Returns:
             OVValidationResult with scores for each safeguard
@@ -320,8 +322,22 @@ class OutputValidatorSLM:
             pq_confidence=pq_confidence
         )
         
+        async def meme_bypass_intent() -> OVResult:
+            return OVResult(
+                safeguard=OVSafeguard.INTENT_CHECKING,
+                score=0,
+                confidence=1.0,
+                explanation="Intent check skipped (meme/political subtext detected - response expected to pivot)",
+                method="meme_bypass"
+            )
+        
+        if meme_detected:
+            intent_check = meme_bypass_intent()
+        else:
+            intent_check = self._check_intent(query, response)
+        
         checks = await asyncio.gather(
-            self._check_intent(query, response),
+            intent_check,
             self._check_ethics(response),
             self._check_fec(response),
             self._check_citations(response),

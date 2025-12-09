@@ -1,21 +1,24 @@
 """
 Multi-Provider Search Service for BrandonBot
 
-Uses SearxNG public instances as primary search (unlimited, free)
-with SerpAPI as fallback when configured.
+Three-tier failover for reliable web search:
+1. SearxNG public instances (primary) - unlimited, free
+2. DuckDuckGo (first fallback) - free, no API key
+3. SerpAPI (final fallback) - uses API key when others fail
 
 Flow:
 1. Try SearxNG public instances in round-robin order
-2. On failure/timeout, try next SearxNG instance
-3. If all SearxNG fail, fall back to SerpAPI (if configured)
-4. If all fail, return empty results
+2. On failure/timeout, try next SearxNG instance  
+3. If all SearxNG fail, try DuckDuckGo
+4. If DDG fails, fall back to SerpAPI (if configured)
+5. If all fail, return empty results
 """
 
 import asyncio
 import logging
 import os
 import httpx
-import time
+import concurrent.futures
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -34,6 +37,7 @@ SEARXNG_PUBLIC_INSTANCES = [
 ]
 
 SEARXNG_TIMEOUT = 8.0
+DDG_TIMEOUT = 10.0
 SERPAPI_TIMEOUT = 10.0
 INSTANCE_COOLDOWN = 60
 
@@ -171,8 +175,53 @@ class MultiSearchService:
             logger.warning(f"SearxNG {instance_url} error: {e}")
             return SearchResponse(results=[], error=str(e))
     
+    def _ddg_sync_search(self, query: str, max_results: int) -> list:
+        """Synchronous DDG search for executor"""
+        try:
+            from ddgs import DDGS
+        except ImportError:
+            from duckduckgo_search import DDGS
+        ddgs = DDGS()
+        return list(ddgs.text(query, max_results=max_results))
+    
+    async def _search_duckduckgo(self, query: str, max_results: int) -> SearchResponse:
+        """Search using DuckDuckGo (first fallback after SearxNG)"""
+        try:
+            loop = asyncio.get_event_loop()
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                search_results = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        executor,
+                        lambda: self._ddg_sync_search(query, max_results)
+                    ),
+                    timeout=DDG_TIMEOUT
+                )
+            
+            results = []
+            for item in search_results[:max_results]:
+                results.append(SearchResult(
+                    title=item.get("title", ""),
+                    url=item.get("href", ""),
+                    snippet=item.get("body", ""),
+                    source="duckduckgo",
+                    date=None
+                ))
+            
+            if results:
+                logger.info(f"DuckDuckGo returned {len(results)} results")
+                return SearchResponse(results=results, provider="duckduckgo")
+            else:
+                return SearchResponse(results=[], error="no_results")
+            
+        except asyncio.TimeoutError:
+            logger.warning("DuckDuckGo timeout")
+            return SearchResponse(results=[], error="timeout")
+        except Exception as e:
+            logger.warning(f"DuckDuckGo error: {e}")
+            return SearchResponse(results=[], error=str(e))
+    
     async def _search_serpapi(self, query: str, max_results: int) -> SearchResponse:
-        """Search using SerpAPI as fallback"""
+        """Search using SerpAPI (final fallback)"""
         if not self._serpapi_key:
             return SearchResponse(results=[], error="no_api_key")
         
@@ -211,7 +260,9 @@ class MultiSearchService:
     
     async def search(self, query: str, max_results: int = 5) -> SearchResponse:
         """
-        Perform search with automatic provider failover.
+        Perform search with three-tier provider failover.
+        
+        Order: SearxNG -> DuckDuckGo -> SerpAPI
         
         Args:
             query: Search query string
@@ -221,6 +272,7 @@ class MultiSearchService:
             SearchResponse with results from first successful provider
         """
         async with self._lock:
+            # Tier 1: Try SearxNG public instances
             attempts = 0
             max_attempts = min(len(SEARXNG_PUBLIC_INSTANCES), 3)
             
@@ -235,9 +287,18 @@ class MultiSearchService:
                 
                 attempts += 1
             
+            # Tier 2: Try DuckDuckGo
+            logger.info("SearxNG instances failed, trying DuckDuckGo fallback")
+            response = await self._search_duckduckgo(query, max_results)
+            if response.success:
+                return response
+            
+            # Tier 3: Try SerpAPI (if configured)
             if self._serpapi_key:
-                logger.info("All SearxNG instances failed, trying SerpAPI fallback")
-                return await self._search_serpapi(query, max_results)
+                logger.info("DuckDuckGo failed, trying SerpAPI fallback")
+                response = await self._search_serpapi(query, max_results)
+                if response.success:
+                    return response
             
             logger.warning("All search providers failed")
             return SearchResponse(

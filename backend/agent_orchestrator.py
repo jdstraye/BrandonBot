@@ -1129,7 +1129,9 @@ Do NOT say you will search - either search or answer."""
                     
                     # Factual safeguard check - fires when THIS ITERATION had no tools
                     # (tool_calls is empty for this specific llm_response)
-                    is_factual_policy = "policy" in question_types or topic not in ["general", "callback"]
+                    # Skip factual safeguard for meme-detected queries - the meme prompt provides witty pivot context
+                    is_meme_query = pq_result.meme_detected
+                    is_factual_policy = ("policy" in question_types or topic not in ["general", "callback"]) and not is_meme_query
                     this_iteration_no_tools = len(tool_calls) == 0  # Current llm_response had no tools
                     factual_force_count = sum(1 for m in messages if "SYSTEM CHECK:" in m.get("content", ""))
                     
@@ -1261,7 +1263,8 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
                 validation_result = await output_validator.validate(
                     query=sanitized_message,
                     response=final_response,
-                    pq_confidence=pq_confidence
+                    pq_confidence=pq_confidence,
+                    meme_detected=pq_result.meme_detected
                 )
                 
                 # Add repetition check (fail-closed on SLMNotAvailableError)
