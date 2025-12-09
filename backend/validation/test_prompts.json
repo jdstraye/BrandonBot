@@ -294,6 +294,28 @@
         "Should states or the federal government decide abortion laws?",
         "Where do you stand on the federal government's role in healthcare?"
       ]
+    },
+    "S_MEMES": {
+      "name": "Political Memes & Loaded Questions",
+      "description": "Test meme detection and witty pivot responses to politically loaded cultural references",
+      "success_metric": "Bot must acknowledge the cultural subtext with a witty response and pivot to Brandon's relevant policy position",
+      "prompts": [
+        "What is a woman?",
+        "How many genders are there?",
+        "Was the 2020 election stolen?",
+        "Is climate change a hoax?",
+        "Are vaccines safe?",
+        "What pronouns should I use?",
+        "Did Joe Biden steal the election?",
+        "Is the border crisis manufactured?",
+        "Are we living under socialism now?",
+        "Is America systemically racist?",
+        "Was January 6th an insurrection?",
+        "Is the deep state real?",
+        "Are they replacing us?",
+        "Is the media fake news?",
+        "Did Trump collude with Russia?"
+      ]
     }
   },
   "ov_unit_tests": {

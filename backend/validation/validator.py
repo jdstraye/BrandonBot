@@ -1119,7 +1119,8 @@ class BrandonBotValidator:
                 groups[key]["avg_alignment"] /= total
                 groups[key]["pass_rate"] = groups[key]["passed"] / total
         
-        return groups
+        sorted_groups = dict(sorted(groups.items(), key=lambda x: x[1].get("pass_rate", 0)))
+        return sorted_groups
     
     def _aggregate_by_category(self) -> Dict[str, Dict[str, Any]]:
         """Aggregate results by category."""
