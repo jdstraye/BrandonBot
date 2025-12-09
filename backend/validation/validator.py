@@ -118,6 +118,7 @@ class TestResult:
     
     ov_passed: bool = True
     ov_issues: List[str] = field(default_factory=list)
+    ov_retries: int = 0
     
     pass_fail: str = "PENDING"
     reasoning: str = ""
@@ -615,6 +616,151 @@ class BrandonBotValidator:
         
         return results
     
+    async def run_mcp_tests(self) -> List[TestResult]:
+        """Run Phase 2: MCP Tool Verification Tests.
+        
+        Tests that specific prompts trigger the correct MCP tools.
+        Validates tool execution and proper handling of blocked requests.
+        """
+        results = []
+        
+        if not AGENT_AVAILABLE:
+            raise RuntimeError("AgentOrchestrator not available - cannot run MCP tests without real agent")
+        
+        agent_ready = await self._ensure_agent_ready()
+        if not agent_ready or self.agent is None:
+            raise RuntimeError("AgentOrchestrator failed to initialize - cannot run MCP tests without real agent")
+        
+        mcp_tests = self.test_data.get("mcp_tests", {}).get("tests", [])
+        test_identity = self.test_data.get("mcp_tests", {}).get("test_identity", {})
+        
+        for test in mcp_tests:
+            test_id = test["id"]
+            logger.info(f"Running MCP test: {test_id}")
+            
+            result = TestResult(
+                test_id=test_id,
+                category="MCP",
+                user_prompt=test.get("input", ""),
+                expected_tool=test.get("expected_tool", ""),
+                timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            
+            start_time = time.time()
+            session_id = f"mcp_test_{test_id}_{int(time.time())}"
+            
+            try:
+                response, metadata = await self.agent.process_query(
+                    message=test["input"],
+                    session_id=session_id,
+                    consent=True
+                )
+                
+                result.bot_response = sanitize_bot_response(response)
+                
+                tool_calls = metadata.get("tool_calls", [])
+                tools_called = [tc.get("name", "") for tc in tool_calls]
+                result.tool_called = ", ".join(tools_called) if tools_called else "NONE"
+                
+                expected = test.get("expected_tool", "")
+                
+                if expected == "NONE (Blocked)":
+                    passed = len(tools_called) == 0
+                    result.reasoning = "Correctly blocked - no tools called" if passed else f"Expected no tools, got: {tools_called}"
+                elif expected:
+                    passed = any(expected.lower() in tc.lower() for tc in tools_called)
+                    result.reasoning = f"Expected {expected}, got {tools_called}" if not passed else f"Correct tool called: {expected}"
+                else:
+                    passed = True
+                    result.reasoning = "No expected tool specified"
+                
+                result.pass_fail = "PASS" if passed else "FAIL"
+                result.genai = metadata.get("model_used", metadata.get("model", ""))
+                
+            except Exception as e:
+                result.pass_fail = "ERROR"
+                result.reasoning = str(e)
+                logger.error(f"MCP test {test_id} failed: {e}")
+            
+            result.duration_ms = int((time.time() - start_time) * 1000)
+            results.append(result)
+        
+        return results
+    
+    async def run_ov_e2e_tests(self) -> List[TestResult]:
+        """Run Phase 3B: End-to-End OV Drift Detection Tests.
+        
+        Tests full pipeline with personas to detect LLM drift and verify
+        OV catches issues like intent drift, excessive rhetoric, missing citations.
+        """
+        results = []
+        
+        if not AGENT_AVAILABLE:
+            raise RuntimeError("AgentOrchestrator not available - cannot run OV E2E tests without real agent")
+        
+        agent_ready = await self._ensure_agent_ready()
+        if not agent_ready or self.agent is None:
+            raise RuntimeError("AgentOrchestrator failed to initialize - cannot run OV E2E tests without real agent")
+        
+        if not self.judge:
+            raise RuntimeError("LLM Judge not configured - cannot run OV E2E tests without judge")
+        
+        ov_e2e_tests = self.test_data.get("ov_e2e_tests", {}).get("tests", [])
+        
+        for test in ov_e2e_tests:
+            test_id = test["id"]
+            logger.info(f"Running OV E2E test: {test_id}")
+            
+            result = TestResult(
+                test_id=test_id,
+                category="OV_E2E",
+                user_prompt=test.get("prompt", ""),
+                persona=test.get("persona", ""),
+                engagement_style=test.get("style", ""),
+                timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            
+            start_time = time.time()
+            session_id = f"ov_e2e_test_{test_id}_{int(time.time())}"
+            
+            try:
+                response, metadata = await self.agent.process_query(
+                    message=test["prompt"],
+                    session_id=session_id,
+                    consent=True
+                )
+                
+                result.bot_response = sanitize_bot_response(response)
+                result.genai = metadata.get("model_used", metadata.get("model", ""))
+                
+                ov_data = metadata.get("ov_validation", {})
+                ov_retries = metadata.get("ov_retries", 0)
+                ov_final_status = ov_data.get("status", "unknown")
+                
+                result.ov_passed = ov_final_status in ["passed", "approved"]
+                result.ov_retries = ov_retries
+                
+                expected_success = test.get("success", "")
+                
+                if "catch" in expected_success.lower() or "trigger" in expected_success.lower():
+                    passed = ov_retries > 0 or not result.ov_passed
+                    result.reasoning = f"OV retries: {ov_retries}, Status: {ov_final_status}"
+                else:
+                    passed = result.ov_passed
+                    result.reasoning = f"OV passed: {result.ov_passed}"
+                
+                result.pass_fail = "PASS" if passed else "FAIL"
+                
+            except Exception as e:
+                result.pass_fail = "ERROR"
+                result.reasoning = str(e)
+                logger.error(f"OV E2E test {test_id} failed: {e}")
+            
+            result.duration_ms = int((time.time() - start_time) * 1000)
+            results.append(result)
+        
+        return results
+    
     async def run_full_validation(self, max_prompts: int = None) -> List[TestResult]:
         """Run Phase 4: Full conversational validation with Judge.
         
@@ -896,6 +1042,336 @@ class BrandonBotValidator:
         
         return results
     
+    async def run_multi_turn_tests(self) -> List[TestResult]:
+        """Run Phase 5: Multi-Turn Conversation Tests.
+        
+        Tests callback cooldown, vague-to-clear transitions, and frustrated user handling
+        across multiple conversation turns in the same session.
+        """
+        results = []
+        
+        if not AGENT_AVAILABLE:
+            raise RuntimeError("AgentOrchestrator not available - cannot run multi-turn tests without real agent")
+        
+        agent_ready = await self._ensure_agent_ready()
+        if not agent_ready or self.agent is None:
+            raise RuntimeError("AgentOrchestrator failed to initialize - cannot run multi-turn tests without real agent")
+        
+        multi_turn_tests = self.test_data.get("multi_turn_tests", {}).get("tests", [])
+        
+        for test in multi_turn_tests:
+            test_id = test["id"]
+            logger.info(f"Running multi-turn test: {test_id}")
+            
+            result = TestResult(
+                test_id=test_id,
+                category="MULTI_TURN",
+                timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            
+            start_time = time.time()
+            session_id = f"multi_turn_test_{test_id}_{int(time.time())}"
+            
+            try:
+                turns = test.get("turns", [])
+                all_passed = True
+                turn_results = []
+                metadata = {}
+                
+                for i, turn in enumerate(turns):
+                    user_msg = turn.get("user", "")
+                    expected_tool = turn.get("expected_tool", "")
+                    expected_behavior = turn.get("expected", "")
+                    
+                    response, metadata = await self.agent.process_query(
+                        message=user_msg,
+                        session_id=session_id,
+                        consent=True
+                    )
+                    
+                    tool_calls = metadata.get("tool_calls", [])
+                    tools_called = [tc.get("name", "") for tc in tool_calls]
+                    tool_str = ", ".join(tools_called) if tools_called else "NONE"
+                    
+                    result.add_turn(
+                        user_prompt=user_msg,
+                        bot_response=response,
+                        tool_called=tool_str,
+                        model=metadata.get("model_used", "")
+                    )
+                    
+                    if expected_tool:
+                        if "Blocked" in expected_tool or expected_tool == "NONE":
+                            turn_passed = len(tools_called) == 0 or all("blocked" in str(tc) for tc in tool_calls)
+                        else:
+                            turn_passed = any(expected_tool.lower() in tc.lower() for tc in tools_called)
+                        
+                        turn_results.append({
+                            "turn": i + 1,
+                            "expected": expected_tool,
+                            "actual": tool_str,
+                            "passed": turn_passed
+                        })
+                        
+                        if not turn_passed:
+                            all_passed = False
+                
+                result.pass_fail = "PASS" if all_passed else "FAIL"
+                result.reasoning = f"Turns: {len(turns)}, Results: {turn_results}"
+                result.genai = metadata.get("model_used", "") if metadata else ""
+                
+            except Exception as e:
+                result.pass_fail = "ERROR"
+                result.reasoning = str(e)
+                logger.error(f"Multi-turn test {test_id} failed: {e}")
+            
+            result.duration_ms = int((time.time() - start_time) * 1000)
+            results.append(result)
+        
+        return results
+    
+    async def run_repetition_tests(self) -> List[TestResult]:
+        """Run Phase 6: OV Repetition Safeguard Tests.
+        
+        Tests cosine similarity-based repetition detection using the public OV API
+        with weaviate_manager's embedding model for proper cosine similarity.
+        
+        FAIL-CLOSED: If SLM/embeddings unavailable, each test gets FAIL result (not skip).
+        """
+        await self._ensure_fec_rag_ready()
+        
+        results = []
+        rep_tests = self.test_data.get("repetition_safeguard_tests", {}).get("tests", [])
+        
+        embedding_error = None
+        if not self._weaviate:
+            embedding_error = "Weaviate manager not available for embeddings"
+        elif not hasattr(self._weaviate, 'encode_text') or not callable(getattr(self._weaviate, 'encode_text', None)):
+            embedding_error = "Weaviate manager missing encode_text method"
+        else:
+            try:
+                test_embed = self._weaviate.encode_text("test embedding initialization")
+                if test_embed is None or len(test_embed) == 0:
+                    embedding_error = "Weaviate manager returned empty embedding"
+            except Exception as e:
+                embedding_error = f"Weaviate embedding initialization failed: {e}"
+        
+        if embedding_error:
+            logger.error(f"FAIL-CLOSED: {embedding_error}")
+            for test in rep_tests:
+                result = TestResult(
+                    test_id=test["id"],
+                    category="REPETITION",
+                    user_prompt="Repetition safeguard test",
+                    timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    pass_fail="FAIL",
+                    reasoning=f"FAIL-CLOSED: {embedding_error}"
+                )
+                results.append(result)
+            return results
+        
+        for test in rep_tests:
+            test_id = test["id"]
+            logger.info(f"Running repetition test: {test_id}")
+            
+            result = TestResult(
+                test_id=test_id,
+                category="REPETITION",
+                user_prompt="Repetition safeguard test",
+                timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            
+            start_time = time.time()
+            
+            try:
+                previous_response = test.get("injected_previous", "")
+                current_response = test.get("injected_output", "")
+                expected = test.get("expected", "")
+                expected_score_range = test.get("expected_score_range", None)
+                
+                self.ov.set_weaviate_manager(self._weaviate)
+                
+                try:
+                    ov_result = await self.ov.check_repetition(
+                        response=current_response,
+                        previous_responses=[previous_response],
+                        similarity_threshold=0.85
+                    )
+                except SLMNotAvailableError as e:
+                    result.pass_fail = "FAIL"
+                    result.reasoning = f"FAIL-CLOSED: SLM unavailable - {e}"
+                    result.duration_ms = int((time.time() - start_time) * 1000)
+                    results.append(result)
+                    continue
+                
+                if "detect" in expected.lower() or "block" in expected.lower():
+                    passed = ov_result.score >= 4
+                elif "allow" in expected.lower():
+                    passed = ov_result.score <= 3
+                else:
+                    passed = True
+                
+                if expected_score_range:
+                    min_score, max_score = expected_score_range
+                    score_in_range = min_score <= ov_result.score <= max_score
+                    passed = passed and score_in_range
+                
+                result.bot_response = f"Score: {ov_result.score}, Method: {ov_result.method}"
+                result.pass_fail = "PASS" if passed else "FAIL"
+                result.reasoning = f"Expected: {expected}, OV Score: {ov_result.score}/5, Explanation: {ov_result.explanation}"
+                
+            except SLMNotAvailableError as e:
+                result.pass_fail = "FAIL"
+                result.reasoning = f"FAIL-CLOSED: SLM/embedding unavailable - {e}"
+                logger.error(f"Repetition test {test_id} failed (SLM unavailable): {e}")
+            except (asyncio.TimeoutError, RuntimeError) as e:
+                result.pass_fail = "FAIL"
+                result.reasoning = f"FAIL-CLOSED: Embedding operation failed - {e}"
+                logger.error(f"Repetition test {test_id} failed (embedding error): {e}")
+            except Exception as e:
+                result.pass_fail = "FAIL"
+                result.reasoning = f"FAIL-CLOSED: Unexpected error - {e}"
+                logger.error(f"Repetition test {test_id} failed: {e}")
+            
+            result.duration_ms = int((time.time() - start_time) * 1000)
+            results.append(result)
+        
+        return results
+    
+    async def run_callback_edge_case_tests(self) -> List[TestResult]:
+        """Run callback edge case tests from M_EDGE_CASES.callback_edge_cases.
+        
+        Tests for M_EDGE_CASES-132 regression: callback repetition prevention,
+        cooldown enforcement, and explicit vs implied callback detection.
+        """
+        results = []
+        
+        if not AGENT_AVAILABLE:
+            raise RuntimeError("AgentOrchestrator not available - cannot run callback edge case tests")
+        
+        agent_ready = await self._ensure_agent_ready()
+        if not agent_ready or self.agent is None:
+            raise RuntimeError("AgentOrchestrator failed to initialize - cannot run callback edge case tests")
+        
+        m_edge_cases = self.test_data.get("categories", {}).get("M_EDGE_CASES", {})
+        callback_edge_cases = m_edge_cases.get("callback_edge_cases", {}).get("tests", [])
+        
+        if not callback_edge_cases:
+            logger.warning("No callback_edge_cases found in M_EDGE_CASES")
+            return results
+        
+        for test in callback_edge_cases:
+            test_id = test["id"]
+            logger.info(f"Running callback edge case test: {test_id}")
+            
+            result = TestResult(
+                test_id=test_id,
+                category="CALLBACK_EDGE",
+                timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            
+            start_time = time.time()
+            session_id = f"callback_edge_{test_id}_{int(time.time())}"
+            
+            try:
+                if test_id == "M_EDGE_CASES-132":
+                    prompt = test.get("prompt", "")
+                    anti_pattern = test.get("anti_pattern", "")
+                    
+                    response, metadata = await self.agent.process_query(
+                        message=prompt,
+                        session_id=session_id,
+                        consent=True
+                    )
+                    
+                    tool_calls = metadata.get("tool_calls", [])
+                    tools_called = [tc.get("name", "") for tc in tool_calls]
+                    
+                    callback_offered = any("callback" in tc.lower() for tc in tools_called)
+                    
+                    passed = not callback_offered
+                    
+                    result.user_prompt = prompt
+                    result.bot_response = response
+                    result.tool_called = ", ".join(tools_called) if tools_called else "NONE"
+                    result.pass_fail = "PASS" if passed else "FAIL"
+                    result.reasoning = f"Anti-pattern: {anti_pattern}. Callback offered: {callback_offered}"
+                
+                elif test_id == "M_EDGE_CASES-133":
+                    turn_1 = test.get("turn_1", "")
+                    turn_2 = test.get("turn_2", "")
+                    
+                    response1, metadata1 = await self.agent.process_query(
+                        message=turn_1,
+                        session_id=session_id,
+                        consent=True
+                    )
+                    
+                    response2, metadata2 = await self.agent.process_query(
+                        message=turn_2,
+                        session_id=session_id,
+                        consent=True
+                    )
+                    
+                    tool_calls_2 = metadata2.get("tool_calls", [])
+                    tools_called_2 = [tc.get("name", "") for tc in tool_calls_2]
+                    callback_in_turn_2 = any("callback" in tc.lower() for tc in tools_called_2)
+                    
+                    passed = not callback_in_turn_2
+                    
+                    result.user_prompt = f"Turn 1: {turn_1} | Turn 2: {turn_2}"
+                    result.bot_response = f"Turn 1: {response1[:100]}... | Turn 2: {response2[:100]}..."
+                    result.tool_called = ", ".join(tools_called_2) if tools_called_2 else "NONE"
+                    result.pass_fail = "PASS" if passed else "FAIL"
+                    result.reasoning = f"Turn 2 callback: {callback_in_turn_2}. Expected: no callback after first offer"
+                    
+                    result.add_turn(user_prompt=turn_1, bot_response=response1)
+                    result.add_turn(user_prompt=turn_2, bot_response=response2)
+                
+                elif test_id == "M_EDGE_CASES-134":
+                    explicit = test.get("explicit", "")
+                    implied = test.get("implied", "")
+                    
+                    resp_explicit, meta_explicit = await self.agent.process_query(
+                        message=explicit,
+                        session_id=f"{session_id}_explicit",
+                        consent=True
+                    )
+                    
+                    resp_implied, meta_implied = await self.agent.process_query(
+                        message=implied,
+                        session_id=f"{session_id}_implied",
+                        consent=True
+                    )
+                    
+                    explicit_tools = [tc.get("name", "") for tc in meta_explicit.get("tool_calls", [])]
+                    implied_tools = [tc.get("name", "") for tc in meta_implied.get("tool_calls", [])]
+                    
+                    explicit_callback = any("callback" in tc.lower() for tc in explicit_tools)
+                    implied_callback = any("callback" in tc.lower() for tc in implied_tools)
+                    
+                    passed = explicit_callback and not implied_callback
+                    
+                    result.user_prompt = f"Explicit: {explicit} | Implied: {implied}"
+                    result.bot_response = f"Explicit resp: {resp_explicit[:100]}... | Implied resp: {resp_implied[:100]}..."
+                    result.tool_called = f"Explicit: {explicit_tools}, Implied: {implied_tools}"
+                    result.pass_fail = "PASS" if passed else "FAIL"
+                    result.reasoning = f"Explicit callback: {explicit_callback}, Implied callback: {implied_callback}. Expected: explicit=yes, implied=no"
+                
+                else:
+                    result.pass_fail = "SKIP"
+                    result.reasoning = f"Unknown callback edge case ID: {test_id}"
+                
+            except Exception as e:
+                result.pass_fail = "ERROR"
+                result.reasoning = str(e)
+                logger.error(f"Callback edge case test {test_id} failed: {e}")
+            
+            result.duration_ms = int((time.time() - start_time) * 1000)
+            results.append(result)
+        
+        return results
+    
     async def run_validation(self, phase: TestPhase, max_prompts: int = None) -> ValidationSession:
         """Run validation for specified phase."""
         self.session = ValidationSession(
@@ -903,6 +1379,10 @@ class BrandonBotValidator:
             started_at=datetime.now(),
             phase=phase
         )
+        
+        m_edge_cases = self.test_data.get("categories", {}).get("M_EDGE_CASES", {})
+        callback_edge_tests = m_edge_cases.get("callback_edge_cases", {}).get("tests", [])
+        REQUIRED_CALLBACK_EDGE_IDS = {t["id"] for t in callback_edge_tests}
         
         if phase in [TestPhase.PQ, TestPhase.ALL]:
             logger.info("Running PQ tests...")
@@ -913,6 +1393,27 @@ class BrandonBotValidator:
             logger.info("Running OV unit tests...")
             results = await self.run_ov_unit_tests()
             self.session.results.extend(results)
+            
+            logger.info("Running OV E2E tests...")
+            results = await self.run_ov_e2e_tests()
+            self.session.results.extend(results)
+            
+            logger.info("Running repetition safeguard tests...")
+            results = await self.run_repetition_tests()
+            self.session.results.extend(results)
+        
+        if phase in [TestPhase.MCP, TestPhase.ALL]:
+            logger.info("Running MCP tool tests...")
+            results = await self.run_mcp_tests()
+            self.session.results.extend(results)
+            
+            logger.info("Running multi-turn tests...")
+            results = await self.run_multi_turn_tests()
+            self.session.results.extend(results)
+            
+            logger.info("Running callback edge case tests (M_EDGE_CASES-132 regression)...")
+            results = await self.run_callback_edge_case_tests()
+            self.session.results.extend(results)
         
         if phase in [TestPhase.FULL, TestPhase.ALL]:
             logger.info("Running full validation...")
@@ -922,6 +1423,27 @@ class BrandonBotValidator:
             logger.info("Running vague loop tests...")
             results = await self.run_vague_loop_test()
             self.session.results.extend(results)
+            
+            logger.info("Running callback edge case tests (M_EDGE_CASES-132 regression)...")
+            results = await self.run_callback_edge_case_tests()
+            self.session.results.extend(results)
+        
+        if phase in [TestPhase.MCP, TestPhase.FULL, TestPhase.ALL] and REQUIRED_CALLBACK_EDGE_IDS:
+            executed_ids = {r.test_id for r in self.session.results}
+            missing_ids = REQUIRED_CALLBACK_EDGE_IDS - executed_ids
+            if missing_ids:
+                logger.error(f"REGRESSION GUARD FAILED: Missing callback edge case tests: {missing_ids}")
+                for missing_id in missing_ids:
+                    fail_result = TestResult(
+                        test_id=missing_id,
+                        category="CALLBACK_EDGE",
+                        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        pass_fail="FAIL",
+                        reasoning=f"REGRESSION GUARD: Required test {missing_id} was not executed. Check test_prompts.json callback_edge_cases."
+                    )
+                    self.session.results.append(fail_result)
+            else:
+                logger.info(f"Callback edge case coverage verified: {REQUIRED_CALLBACK_EDGE_IDS}")
         
         return self.session
     
@@ -1195,7 +1717,7 @@ async def main():
     print(f"\nStarting BrandonBot Validation - Phase: {phase.value}")
     print(f"Testing mode: {TESTING_MODE}")
     
-    use_agent = phase in [TestPhase.FULL, TestPhase.ALL]
+    use_agent = phase in [TestPhase.FULL, TestPhase.MCP, TestPhase.OV, TestPhase.ALL]
     validator = BrandonBotValidator(use_judge=not args.no_judge, use_agent=use_agent)
     
     session = await validator.run_validation(phase, args.max_prompts)

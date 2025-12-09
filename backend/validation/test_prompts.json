@@ -214,7 +214,7 @@
     },
     "M_EDGE_CASES": {
       "name": "Edge Cases & Special Requests",
-      "description": "Test unusual or edge case requests",
+      "description": "Test unusual or edge case requests including callback handling",
       "prompts": [
         "I want to go to the naval academy. Will you write me a letter of recommendation?",
         "I am the daughter of illegal immigrants. How can my parents earn legal status now that they have been here for 3 years?",
@@ -231,8 +231,41 @@
         "What about semiconductor manufacturing and CHIPS Act funding?",
         "Should we reform HOA regulations in Arizona?",
         "What's your opinion on AI regulation, and how will you approach it in Congress?",
-        "What are your thoughts on quantum computing policy?"
-      ]
+        "What are your thoughts on quantum computing policy?",
+        "I've asked you three times about taxes and you keep saying the same thing!!!",
+        "This is ridiculous! You politicians are all the same. Just have someone call me.",
+        "I'm so frustrated with this conversation. Can a real person help me?"
+      ],
+      "callback_edge_cases": {
+        "description": "Tests for callback repetition safeguard (M_EDGE_CASES-132 regression)",
+        "tests": [
+          {
+            "id": "M_EDGE_CASES-132",
+            "name": "Callback Repetition Prevention",
+            "scenario": "User frustrated but asking clear question - should get empathetic answer, NOT callback offer",
+            "prompt": "I've asked you three times about taxes and you keep saying the same thing!!!",
+            "expected": "Empathetic acknowledgment + substantive policy answer",
+            "anti_pattern": "Bot should NOT offer callback for clear+frustrated query"
+          },
+          {
+            "id": "M_EDGE_CASES-133",
+            "name": "Callback Cooldown After First Offer",
+            "scenario": "After callback is scheduled, user continues asking - bot should answer, not re-offer",
+            "turn_1": "I'm confused. Call me at 555-1234. I'm John.",
+            "turn_2": "Wait, I also wanted to ask about immigration",
+            "expected_turn_2": "Bot answers immigration question, does NOT offer another callback"
+          },
+          {
+            "id": "M_EDGE_CASES-134",
+            "name": "Explicit Callback Request vs Implied",
+            "scenario": "User explicitly asks for callback vs user is just frustrated",
+            "explicit": "Please have someone call me at 555-9999. My name is Sarah.",
+            "implied": "This is so frustrating! Nobody listens to voters anymore!!!",
+            "expected_explicit": "Callback tool triggered",
+            "expected_implied": "Empathetic response, no callback unless VAGUE+frustrated"
+          }
+        ]
+      }
     },
     "N_DEMOGRAPHICS": {
       "name": "Demographic-Specific",
@@ -506,6 +539,102 @@
         "input": "Can I donate $50,000 in cash?",
         "expected_tool": "check_fec_rules",
         "verification": "Log Check: Confirm FEC RAG lookup triggered. Response cites donation limits"
+      },
+      {
+        "id": "MCP-07",
+        "input": "I need to talk to someone! This is urgent. My name is John and my phone is 555-1234.",
+        "expected_tool": "request_callback",
+        "verification": "Database Check: Confirm callback request logged with name, phone, and concern"
+      },
+      {
+        "id": "MCP-08",
+        "input": "Can someone from the campaign call me? I'm Jane, 555-5678, and I have questions about your immigration policy.",
+        "expected_tool": "request_callback",
+        "verification": "Database Check: Confirm callback scheduled with contact info and concern extracted"
+      },
+      {
+        "id": "MCP-09",
+        "input": "I'm frustrated and confused. Please have someone call me at 555-9999. My name is Bob.",
+        "expected_tool": "request_callback",
+        "verification": "Log Check: Confirm callback tool executed for frustrated user escalation"
+      },
+      {
+        "id": "MCP-10",
+        "input": "What is your stance on taxes?",
+        "expected_tool": "search_brandon_positions",
+        "verification": "Log Check: Confirm RAG search executed, no callback offered for clear policy question"
+      }
+    ]
+  },
+  "multi_turn_tests": {
+    "description": "Phase 5: Multi-Turn Conversation Tests with Callback Cooldown",
+    "tests": [
+      {
+        "id": "MT-01",
+        "name": "Callback Cooldown Enforcement",
+        "description": "Verify callback tool cannot be called within 2 turns of last callback",
+        "turns": [
+          {"user": "I'm confused about everything. My name is Jane, phone 555-1111.", "expected_tool": "request_callback"},
+          {"user": "I'm still confused! Call me again!", "expected_tool": "NONE (Blocked by cooldown)"},
+          {"user": "Please, I need more help!", "expected_tool": "NONE (Blocked by cooldown)"},
+          {"user": "What about your tax policy?", "expected_tool": "search_brandon_positions"}
+        ],
+        "success_metric": "Callback tool should only execute on Turn 1. Turns 2-3 should be blocked by cooldown."
+      },
+      {
+        "id": "MT-02",
+        "name": "Vague to Clear Transition",
+        "description": "Test bot's ability to extract clarity from vague opener",
+        "turns": [
+          {"user": "Hi Brandon", "expected": "clarifying_question"},
+          {"user": "I'm worried about my future", "expected": "clarifying_question"},
+          {"user": "Specifically, will my Social Security be safe?", "expected": "policy_answer"}
+        ],
+        "success_metric": "Bot must ask clarifying questions for vague inputs, then provide substantive answer for clear question"
+      },
+      {
+        "id": "MT-03",
+        "name": "Frustrated User Empathy Path",
+        "description": "Test empathetic response to clear but frustrated query",
+        "turns": [
+          {"user": "I've asked 3 times about immigration and nobody gives me a straight answer!!!", "expected": "empathetic_policy_answer"}
+        ],
+        "success_metric": "Bot must provide empathetic acknowledgment AND substantive policy answer (not callback offer)"
+      }
+    ]
+  },
+  "repetition_safeguard_tests": {
+    "description": "Phase 6: OV Repetition Safeguard Tests (Cosine Similarity)",
+    "tests": [
+      {
+        "id": "REP-01",
+        "name": "Identical Response Block",
+        "description": "Verify OV blocks identical responses in same session",
+        "setup": "Inject previous response into session history",
+        "injected_previous": "Brandon supports strong border security and legal immigration reform.",
+        "injected_output": "Brandon supports strong border security and legal immigration reform.",
+        "expected": "block",
+        "expected_score_range": [4, 5]
+      },
+      {
+        "id": "REP-02",
+        "name": "Paraphrase Detection",
+        "description": "Verify OV catches paraphrased repetition",
+        "setup": "Inject semantically similar response into session",
+        "injected_previous": "Brandon believes in securing our borders while welcoming legal immigrants.",
+        "injected_output": "Brandon supports border security and legal immigration pathways.",
+        "expected": "detect",
+        "expected_score_range": [4, 5]
+      },
+      {
+        "id": "REP-03",
+        "name": "Legitimate New Content",
+        "description": "Verify OV allows genuinely new responses",
+        "setup": "Inject unrelated previous response",
+        "injected_previous": "Brandon supports school choice and parental rights in education.",
+        "injected_output": "Brandon's tax policy focuses on reducing federal income taxes for families.",
+        "expected": "allow",
+        "expected_score_range": [0, 2]
       }
     ]
   },
