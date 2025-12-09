@@ -27,6 +27,7 @@ class ToolName(str, Enum):
     REGISTER_VOLUNTEER = "register_volunteer"
     MAKE_DONATION = "make_donation"
     CHECK_FEC_RULES = "check_fec_rules"
+    REQUEST_CALLBACK = "request_callback"
 
 
 TOOL_SCHEMAS = {
@@ -329,6 +330,57 @@ This tool provides accurate, up-to-date FEC rules to ensure campaign compliance.
                 }
             },
             "required": ["query_type"]
+        }
+    },
+    
+    "request_callback": {
+        "name": "request_callback",
+        "description": """Schedule a callback from Brandon's campaign team.
+
+Use this tool when:
+- User explicitly requests to speak with someone
+- User is frustrated AND their question is unclear (vague + escalate scenario)
+- User wants to discuss a sensitive personal issue that requires human attention
+- User explicitly asks for a phone call
+
+IMPORTANT RULES:
+1. Do NOT use this tool repeatedly in the same conversation - if you've already offered or scheduled a callback, do NOT offer again for at least 2 turns
+2. For clear questions from frustrated users, ANSWER THE QUESTION with empathy instead of offering a callback
+3. Only use when human escalation is truly needed
+
+Collect their contact information and the nature of their concern.
+After scheduling, confirm the callback request and provide expected timeframe.""",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Caller's full name"
+                },
+                "phone": {
+                    "type": "string",
+                    "description": "Phone number for the callback (required)"
+                },
+                "email": {
+                    "type": "string",
+                    "description": "Email address for confirmation (optional)"
+                },
+                "concern": {
+                    "type": "string",
+                    "description": "Brief description of what they want to discuss - helps the team prepare"
+                },
+                "preferred_time": {
+                    "type": "string",
+                    "enum": ["morning", "afternoon", "evening", "anytime"],
+                    "description": "Preferred time for the callback"
+                },
+                "urgency": {
+                    "type": "string",
+                    "enum": ["normal", "urgent"],
+                    "description": "Urgency level - set to 'urgent' only for time-sensitive issues"
+                }
+            },
+            "required": ["name", "phone", "concern"]
         }
     }
 }

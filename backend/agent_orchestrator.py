@@ -228,6 +228,8 @@ class ToolExecutor:
                 return await self._execute_make_donation(tool_call.arguments)
             elif tool_call.name == ToolName.CHECK_FEC_RULES.value:
                 return await self._execute_check_fec_rules(tool_call.arguments)
+            elif tool_call.name == ToolName.REQUEST_CALLBACK.value:
+                return await self._execute_request_callback(tool_call.arguments, session_id)
             else:
                 return ToolResult(
                     tool_name=tool_call.name,
@@ -688,6 +690,71 @@ class ToolExecutor:
                 "note": "STUB: In production, this would integrate with ActBlue/Stripe"
             }
         )
+    
+    async def _execute_request_callback(self, args: Dict, session_id: str = "default") -> ToolResult:
+        """Schedule a callback from the campaign team"""
+        name = args.get("name", "")
+        phone = args.get("phone", "")
+        email = args.get("email", "")
+        concern = args.get("concern", "")
+        preferred_time = args.get("preferred_time", "anytime")
+        urgency = args.get("urgency", "normal")
+        
+        if not name or not phone or not concern:
+            return ToolResult(
+                tool_name=ToolName.REQUEST_CALLBACK.value,
+                success=False,
+                data=None,
+                error_message="Name, phone number, and concern description are required"
+            )
+        
+        phone_digits = ''.join(c for c in phone if c.isdigit())
+        if len(phone_digits) < 10:
+            return ToolResult(
+                tool_name=ToolName.REQUEST_CALLBACK.value,
+                success=False,
+                data=None,
+                error_message="Please provide a valid phone number with at least 10 digits"
+            )
+        
+        callback_id = f"CB-{int(time.time())}"
+        
+        callback_data = {
+            "callback_id": callback_id,
+            "name": name,
+            "phone": phone,
+            "email": email,
+            "concern": concern,
+            "preferred_time": preferred_time,
+            "urgency": urgency,
+            "session_id": session_id,
+            "requested_at": datetime.now().isoformat(),
+            "status": "pending"
+        }
+        
+        logger.info(f"CALLBACK REQUEST: {json.dumps(callback_data)}")
+        
+        timeframe = "within 24-48 hours" if urgency == "normal" else "as soon as possible"
+        
+        return ToolResult(
+            tool_name=ToolName.REQUEST_CALLBACK.value,
+            success=True,
+            data={
+                "callback_id": callback_id,
+                "message": f"Thank you, {name}! Your callback request has been submitted.",
+                "confirmation": {
+                    "phone": phone,
+                    "preferred_time": preferred_time,
+                    "concern_summary": concern[:100] + ("..." if len(concern) > 100 else ""),
+                    "expected_timeframe": timeframe
+                },
+                "next_steps": [
+                    f"A member of Brandon's team will call you {timeframe}",
+                    "Keep your phone available during your preferred time",
+                    "Check your email for confirmation if provided"
+                ]
+            }
+        )
 
 
 class AgentOrchestrator:
@@ -798,6 +865,11 @@ OTHER TOOLS:
 6. register_volunteer: Sign up volunteers
 7. make_donation: Process donation requests
 8. check_fec_rules: Verify FEC compliance for donations
+9. request_callback: Schedule a callback from Brandon's team
+   - Use ONLY when user explicitly requests a call OR when they are frustrated AND their question is unclear
+   - For clear questions from frustrated users, ANSWER with empathy instead of offering callback
+   - NEVER use this tool more than once per conversation - if already used, focus on answering questions
+   - Collect name, phone, and concern description before calling
 
 GREETINGS AND SMALL TALK:
 - For greetings like "Hi" or "How are you?", respond warmly and ask how you can help
@@ -1196,6 +1268,26 @@ Either confirm with a search or explain why no search is needed."""
                         call_id=tc_data.get("id")
                     )
                     
+                    # Block callback tool if on cooldown (within 2 turns of last callback)
+                    if tool_call.name == ToolName.REQUEST_CALLBACK.value:
+                        current_turn = len(session.turns)
+                        turns_since_callback = current_turn - session.last_callback_offered_turn
+                        if session.last_callback_offered_turn >= 0 and turns_since_callback < 2:
+                            result = ToolResult(
+                                tool_name=ToolName.REQUEST_CALLBACK.value,
+                                success=False,
+                                data=None,
+                                error_message="Callback already scheduled recently. Focus on answering the user's current question instead of offering another callback."
+                            )
+                            tool_results.append(result)
+                            metadata["tool_calls"].append({
+                                "name": tool_call.name,
+                                "arguments": tool_call.arguments,
+                                "blocked": "cooldown"
+                            })
+                            logger.info(f"[{request_id}] Callback tool blocked - on cooldown ({turns_since_callback} turns since last)")
+                            continue
+                    
                     metadata["tool_calls"].append({
                         "name": tool_call.name,
                         "arguments": tool_call.arguments
@@ -1207,6 +1299,12 @@ Either confirm with a search or explain why no search is needed."""
                     tool_duration_ms = int((time_module.time() - tool_start) * 1000)
                     tool_results.append(result)
                     
+                    # Track callback tool execution for cooldown logic
+                    if tool_call.name == ToolName.REQUEST_CALLBACK.value and result.success:
+                        session.last_callback_offered_turn = len(session.turns)
+                        session.callback_offer_count += 1
+                        logger.info(f"[{request_id}] Callback tool executed (offer #{session.callback_offer_count})")
+                    
                     # Log tool call to debug.db
                     try:
                         debug_db = get_debug_db()
@@ -1214,7 +1312,7 @@ Either confirm with a search or explain why no search is needed."""
                             tool_name=tool_call.name,
                             arguments=tool_call.arguments,
                             result=result.to_context_string()[:2000],
-                            success=not result.error,
+                            success=result.success,
                             duration_ms=tool_duration_ms,
                             session_id=session_id
                         )
