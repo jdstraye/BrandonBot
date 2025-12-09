@@ -55,6 +55,18 @@ class WebSearchService:
                 import logging
                 logging.warning("ddgs/duckduckgo-search not installed. Web search disabled.")
     
+    def _sync_search(self, query: str, max_results: int) -> list:
+        """
+        Synchronous search function to run in executor.
+        Creates fresh DDGS instance for thread safety.
+        """
+        try:
+            from ddgs import DDGS
+        except ImportError:
+            from duckduckgo_search import DDGS
+        ddgs = DDGS()
+        return list(ddgs.text(query, max_results=max_results))
+    
     async def search(self, query: str, max_results: int = 3) -> SearchResponse:
         """
         Perform web search and return formatted results with citations
@@ -67,8 +79,9 @@ class WebSearchService:
             SearchResponse with summary, results, and formatted citations
         """
         import asyncio
+        import concurrent.futures
         
-        if not self.search_available or not self.ddgs:
+        if not self.search_available:
             return SearchResponse(
                 summary="External search not available",
                 results=[],
@@ -77,10 +90,11 @@ class WebSearchService:
         
         try:
             loop = asyncio.get_event_loop()
-            search_results = await loop.run_in_executor(
-                None,
-                lambda: list(self.ddgs.text(query, max_results=max_results))
-            )
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                search_results = await loop.run_in_executor(
+                    executor,
+                    lambda: self._sync_search(query, max_results)
+                )
             
             results = []
             for result in search_results[:max_results]:

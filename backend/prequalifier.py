@@ -22,6 +22,7 @@ from typing import Optional, List, Dict, Tuple, Any, Union
 from enum import Enum
 
 from security import input_sanitizer, rate_limiter, SanitizationResult
+from meme_detector import meme_detector, get_meme_response_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +208,11 @@ class PrequalifierResult:
     # Internal hints for LLM guidance (never shown to user)
     internal_hints: InternalHints = field(default_factory=InternalHints)
     
+    # Meme/subcontext detection
+    meme_detected: bool = False
+    meme_context: str = ""
+    meme_prompt: str = ""
+    
     def to_dict(self) -> Dict[str, Any]:
         """Convert result to dictionary for serialization."""
         return {
@@ -228,6 +234,8 @@ class PrequalifierResult:
             "enriched_prompt": self.enriched_prompt,
             "pq_instructions": self.pq_instructions,
             "passthrough": self.passthrough,
+            "meme_detected": self.meme_detected,
+            "meme_context": self.meme_context,
         }
 
 
@@ -456,6 +464,17 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
                 result.blocked = True
                 result.block_reason = f"Security violation detected: {issue_type}"
                 return result
+        
+        # Step 2.5: Meme/subcontext detection (for short questions)
+        try:
+            meme_result = await meme_detector.detect(result.sanitized_message)
+            if meme_result.is_meme:
+                result.meme_detected = True
+                result.meme_context = meme_result.context
+                result.meme_prompt = get_meme_response_prompt(meme_result)
+                logger.info(f"Meme detected in query: {result.sanitized_message[:50]}...")
+        except Exception as e:
+            logger.warning(f"Meme detection failed (non-fatal): {e}")
         
         # Step 3: Pattern matching (does NOT block, just flags)
         pattern_flags = self._detect_patterns(result.sanitized_message)

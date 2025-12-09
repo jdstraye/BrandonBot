@@ -29,7 +29,7 @@ from query_expansion import detect_question_type, get_topic_from_query
 from llm_providers import LLMProviderManager
 from intent_detector import intent_detector, UserIntent, escalation_detector
 from prequalifier import prequalifier, PrequalifierResult, FrustrationDecision, VaguenessDecision
-from output_validator import output_validator, OVValidationResult, ValidationStatus, RejectionReason, OVSafeguard
+from output_validator import output_validator, OVValidationResult, ValidationStatus, RejectionReason, OVSafeguard, SLMNotAvailableError
 from validation_debug import get_debug_db
 from structured_response import (
     parse_structured_response,
@@ -68,6 +68,8 @@ class Session:
     created_at: datetime = field(default_factory=datetime.now)
     last_active: datetime = field(default_factory=datetime.now)
     user_context: Dict = field(default_factory=dict)
+    last_callback_offered_turn: int = -1
+    callback_offer_count: int = 0
     
     def add_turn(self, role: ConversationRole, content: str, 
                  tool_calls: Optional[List[ToolCall]] = None,
@@ -113,6 +115,34 @@ class Session:
             topics_discussed.append(turn.content[:100])
         
         return f"Previous topics in this conversation: {'; '.join(topics_discussed)}"
+    
+    def get_previous_responses(self, count: int = 3) -> List[str]:
+        """Get the last N assistant responses for repetition checking."""
+        assistant_turns = [t for t in self.turns if t.role == ConversationRole.ASSISTANT]
+        return [t.content for t in assistant_turns[-count:]]
+    
+    def track_callback_offer(self, response: str) -> bool:
+        """
+        Check if response offers a callback and track it.
+        
+        Returns True if callback was offered, False otherwise.
+        """
+        callback_patterns = [
+            "call you back",
+            "callback",
+            "call back",
+            "someone from brandon's team",
+            "someone from the team",
+            "reach out to you",
+            "personal call",
+        ]
+        response_lower = response.lower()
+        
+        if any(pattern in response_lower for pattern in callback_patterns):
+            self.last_callback_offered_turn = len(self.turns)
+            self.callback_offer_count += 1
+            return True
+        return False
 
 
 class SessionManager:
@@ -965,6 +995,21 @@ Remember: You're here to inform voters and build support for Brandon's campaign.
             if query_vague:
                 full_system_prompt += f"\n\nVAGUE QUERY DETECTED: The user's question needs clarification. Ask clarifying questions before providing a detailed answer."
             
+            # Add meme/subcontext prompt if detected
+            if pq_result.meme_detected and pq_result.meme_prompt:
+                full_system_prompt += f"\n\n{pq_result.meme_prompt}"
+            
+            # Callback cooldown logic
+            current_turn = len(session.turns)
+            turns_since_callback = current_turn - session.last_callback_offered_turn
+            callback_on_cooldown = session.last_callback_offered_turn >= 0 and turns_since_callback < 2
+            
+            if callback_on_cooldown and (intent_result.needs_callback or user_frustrated):
+                if turns_since_callback < 2:
+                    full_system_prompt += "\n\nCALLBACK COOLDOWN: You already offered a callback recently. Do NOT offer another callback yet. Focus on answering their question or providing helpful information."
+                else:
+                    full_system_prompt += "\n\nCALLBACK RE-OFFER: You offered a callback earlier but the user seems to still need help. Gently acknowledge you mentioned this before: 'I know I offered earlier, but I want to extend that olive branch again - would a personal call from our team be helpful?'"
+            
             iteration = 0
             final_response = None
             
@@ -1197,9 +1242,10 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
                 final_response = "I apologize, but I'm having trouble completing this request. Would you like someone from the team to call you back to discuss this?"
             
             # ===== STAGE 3: OUTPUT VALIDATOR WITH REGENERATION LOOP =====
-            # Set up FEC RAG for compliance checking
+            # Set up FEC RAG and weaviate manager for compliance checking
             if self.tool_executor and self.tool_executor.weaviate:
                 output_validator.set_fec_rag(self.tool_executor.weaviate)
+                output_validator.set_weaviate_manager(self.tool_executor.weaviate)
             
             regeneration_attempt = 0
             max_regenerations = 3
@@ -1211,6 +1257,31 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
                     response=final_response,
                     pq_confidence=pq_confidence
                 )
+                
+                # Add repetition check (fail-closed on SLMNotAvailableError)
+                previous_responses = session.get_previous_responses(count=3)
+                if previous_responses:
+                    try:
+                        repetition_result = await output_validator.check_repetition(
+                            response=final_response,
+                            previous_responses=previous_responses
+                        )
+                        validation_result.results[OVSafeguard.REPETITION] = repetition_result
+                        
+                        # Update max_violation and passed status
+                        validation_result.max_violation = max(r.score for r in validation_result.results.values())
+                        validation_result.passed = validation_result.max_violation <= 3
+                        
+                        if not validation_result.passed:
+                            failed = [f"{s.value}: {r.explanation}" 
+                                     for s, r in validation_result.results.items() if r.score > 3]
+                            validation_result.rejection_reason = "; ".join(failed)
+                    except SLMNotAvailableError as e:
+                        # Fail-closed: If repetition safeguard fails, block response
+                        logger.error(f"[{request_id}] Repetition safeguard failed (fail-closed): {e}")
+                        final_response = "I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?"
+                        metadata["blocked_by_ov_safeguard_failure"] = True
+                        break
                 
                 metadata["validation_status"] = "passed" if validation_result.passed else "rejected"
                 
@@ -1301,6 +1372,10 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
                         break
             
             session.add_turn(ConversationRole.ASSISTANT, final_response)
+            
+            # Track callback offers for cooldown logic
+            if session.track_callback_offer(final_response):
+                logger.info(f"[{request_id}] Callback offer tracked (offer #{session.callback_offer_count})")
             
             metadata["sources"] = list(set(metadata["sources"]))
             metadata["duration_ms"] = int((time.time() - start_time) * 1000)

@@ -34,6 +34,7 @@ class OVSafeguard(Enum):
     REDACTION_PII = "redaction_pii"
     CONFIDENCE_VERIFICATION = "confidence_verification"
     INTERNAL_LEAK = "internal_leak"
+    REPETITION = "repetition"
 
 
 @dataclass
@@ -131,8 +132,13 @@ class OutputValidatorSLM:
         self._citation_store = None
         self._fec_rag = None
         self._require_slm = require_slm
+        self._weaviate_manager = None
         
         self._compile_patterns()
+    
+    def set_weaviate_manager(self, manager):
+        """Set the weaviate manager for embedding operations."""
+        self._weaviate_manager = manager
     
     def _compile_patterns(self):
         """Compile regex patterns for pattern-based checks."""
@@ -807,6 +813,170 @@ class OutputValidatorSLM:
             confidence=1.0,
             explanation="No internal context leakage detected",
             method="pattern_match"
+        )
+
+    async def check_repetition(
+        self, 
+        response: str, 
+        previous_responses: List[str],
+        similarity_threshold: float = 0.85
+    ) -> OVResult:
+        """
+        Check if the response is too similar to previous responses (repetition).
+        
+        Uses all-MiniLM embeddings from weaviate_manager to compute similarity.
+        Score 4+ (hard fail) if response is nearly identical to a recent response.
+        
+        FAIL-CLOSED: If embedding service is unavailable, raises SLMNotAvailableError
+        instead of bypassing the safeguard.
+        
+        Args:
+            response: Current response to check
+            previous_responses: List of last 3 assistant responses
+            similarity_threshold: Cosine similarity threshold (default 0.85)
+            
+        Returns:
+            OVResult with repetition check results
+            
+        Raises:
+            SLMNotAvailableError: If embedding service is unavailable (fail-closed)
+        """
+        if not previous_responses:
+            return OVResult(
+                safeguard=OVSafeguard.REPETITION,
+                score=0,
+                confidence=1.0,
+                explanation="No previous responses to compare",
+                method="embedding"
+            )
+        
+        # Fail-closed: Require weaviate_manager for embeddings
+        if not self._weaviate_manager:
+            if self._require_slm:
+                raise SLMNotAvailableError(
+                    "Repetition safeguard requires weaviate_manager for embeddings. "
+                    "Set weaviate_manager via set_weaviate_manager() or set require_slm=False."
+                )
+            else:
+                # Fallback to simple string comparison when SLM not required
+                return self._check_repetition_pattern_fallback(response, previous_responses)
+        
+        try:
+            import numpy as np
+            
+            # Use weaviate_manager's pre-loaded embedding model (non-blocking reuse)
+            loop = asyncio.get_event_loop()
+            response_embedding = await loop.run_in_executor(
+                None, 
+                self._weaviate_manager.encode_text, 
+                response
+            )
+            
+            # Encode previous responses
+            prev_embeddings = []
+            for prev in previous_responses:
+                prev_emb = await loop.run_in_executor(
+                    None,
+                    self._weaviate_manager.encode_text,
+                    prev
+                )
+                prev_embeddings.append(prev_emb)
+            
+            max_similarity = 0.0
+            response_arr = np.array(response_embedding)
+            
+            for prev_emb in prev_embeddings:
+                prev_arr = np.array(prev_emb)
+                similarity = float(np.dot(response_arr, prev_arr) / (
+                    np.linalg.norm(response_arr) * np.linalg.norm(prev_arr)
+                ))
+                if similarity > max_similarity:
+                    max_similarity = similarity
+            
+            if max_similarity >= 0.95:
+                return OVResult(
+                    safeguard=OVSafeguard.REPETITION,
+                    score=5,
+                    confidence=0.95,
+                    explanation=f"Response is nearly identical to a previous response (similarity: {max_similarity:.2f}). This is repetitive - provide a different, more helpful response.",
+                    method="embedding"
+                )
+            elif max_similarity >= similarity_threshold:
+                return OVResult(
+                    safeguard=OVSafeguard.REPETITION,
+                    score=4,
+                    confidence=0.9,
+                    explanation=f"Response is very similar to a previous response (similarity: {max_similarity:.2f}). Vary your response to be more helpful.",
+                    method="embedding"
+                )
+            elif max_similarity >= 0.7:
+                return OVResult(
+                    safeguard=OVSafeguard.REPETITION,
+                    score=2,
+                    confidence=0.8,
+                    explanation=f"Response has some similarity to previous (similarity: {max_similarity:.2f})",
+                    method="embedding"
+                )
+            else:
+                return OVResult(
+                    safeguard=OVSafeguard.REPETITION,
+                    score=0,
+                    confidence=0.9,
+                    explanation=f"Response is sufficiently different from previous responses (max similarity: {max_similarity:.2f})",
+                    method="embedding"
+                )
+                
+        except SLMNotAvailableError:
+            raise  # Re-raise fail-closed errors
+        except Exception as e:
+            logger.error(f"Repetition check failed with unexpected error: {e}")
+            if self._require_slm:
+                raise SLMNotAvailableError(f"Repetition safeguard failed unexpectedly: {e}")
+            else:
+                return self._check_repetition_pattern_fallback(response, previous_responses)
+    
+    def _check_repetition_pattern_fallback(
+        self, 
+        response: str, 
+        previous_responses: List[str]
+    ) -> OVResult:
+        """Pattern-based fallback for repetition check when embeddings unavailable."""
+        # Normalize responses for comparison
+        normalized = response.lower().strip()
+        
+        for prev in previous_responses:
+            prev_normalized = prev.lower().strip()
+            
+            # Exact match = hard fail
+            if normalized == prev_normalized:
+                return OVResult(
+                    safeguard=OVSafeguard.REPETITION,
+                    score=5,
+                    confidence=0.95,
+                    explanation="Response is identical to a previous response (exact match)",
+                    method="pattern_fallback"
+                )
+            
+            # Check for high overlap (simple word-based)
+            response_words = set(normalized.split())
+            prev_words = set(prev_normalized.split())
+            if response_words and prev_words:
+                overlap = len(response_words & prev_words) / max(len(response_words), len(prev_words))
+                if overlap > 0.9:
+                    return OVResult(
+                        safeguard=OVSafeguard.REPETITION,
+                        score=4,
+                        confidence=0.7,
+                        explanation=f"Response has high word overlap with previous ({overlap:.0%})",
+                        method="pattern_fallback"
+                    )
+        
+        return OVResult(
+            safeguard=OVSafeguard.REPETITION,
+            score=0,
+            confidence=0.6,
+            explanation="Response appears different from previous (pattern check)",
+            method="pattern_fallback"
         )
 
 
