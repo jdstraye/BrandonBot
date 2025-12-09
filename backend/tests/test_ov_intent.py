@@ -190,5 +190,124 @@ class TestIntentEdgeCases:
         assert result.score <= 2  # Clarifying question is acceptable
 
 
+class TestCallbackBypass:
+    """Test callback detection and bypass logic in intent checking."""
+    
+    @pytest.fixture
+    def intent_checker(self):
+        """Get the MS-MARCO intent checker."""
+        from ov_slm_models import msmarco_checker
+        return msmarco_checker
+    
+    @pytest.fixture
+    def validator(self):
+        from output_validator import OutputValidatorSLM
+        return OutputValidatorSLM()
+    
+    def test_callback_query_with_contact_request_passes(self, intent_checker):
+        """Test that callback queries asking for contact details pass validation."""
+        async def run_test():
+            ready = await intent_checker.ensure_ready()
+            if not ready:
+                pytest.skip("MS-MARCO not available")
+            
+            result = await intent_checker.check_intent(
+                "Can you give me a call to discuss this further?",
+                "I'd be happy to have someone from Brandon's team call you! Could you share your name and phone number?"
+            )
+            return result
+        
+        result = asyncio.get_event_loop().run_until_complete(run_test())
+        
+        assert result.score <= 2, f"Callback flow should pass (score <= 2), got {result.score}: {result.explanation}"
+        assert "callback" in result.explanation.lower(), f"Should mention callback heuristic: {result.explanation}"
+    
+    def test_callback_query_call_me_back_passes(self, intent_checker):
+        """Test that 'call me back' queries pass with appropriate response."""
+        async def run_test():
+            ready = await intent_checker.ensure_ready()
+            if not ready:
+                pytest.skip("MS-MARCO not available")
+            
+            result = await intent_checker.check_intent(
+                "Please call me back about this issue.",
+                "I'd be glad to arrange a callback. What's the best phone number to reach you?"
+            )
+            return result
+        
+        result = asyncio.get_event_loop().run_until_complete(run_test())
+        
+        assert result.score <= 2, f"Callback flow should pass, got {result.score}: {result.explanation}"
+    
+    def test_callback_query_schedule_call_passes(self, intent_checker):
+        """Test that 'schedule a call' queries pass with appropriate response."""
+        async def run_test():
+            ready = await intent_checker.ensure_ready()
+            if not ready:
+                pytest.skip("MS-MARCO not available")
+            
+            result = await intent_checker.check_intent(
+                "Can we schedule a call?",
+                "Absolutely! Someone from Brandon's team can reach out to you. What's your name and contact information?"
+            )
+            return result
+        
+        result = asyncio.get_event_loop().run_until_complete(run_test())
+        
+        assert result.score <= 2, f"Callback flow should pass, got {result.score}: {result.explanation}"
+    
+    def test_callback_query_speak_to_someone_passes(self, intent_checker):
+        """Test that 'speak to someone' queries pass with appropriate response."""
+        async def run_test():
+            ready = await intent_checker.ensure_ready()
+            if not ready:
+                pytest.skip("MS-MARCO not available")
+            
+            result = await intent_checker.check_intent(
+                "I want to speak to someone about volunteering.",
+                "I'd love to connect you with someone from our volunteer team! Could you provide your contact details?"
+            )
+            return result
+        
+        result = asyncio.get_event_loop().run_until_complete(run_test())
+        
+        assert result.score <= 2, f"Callback flow should pass, got {result.score}: {result.explanation}"
+    
+    def test_callback_heuristic_boost_applied(self, intent_checker):
+        """Test that callback queries get heuristic boost even with low MS-MARCO score."""
+        async def run_test():
+            ready = await intent_checker.ensure_ready()
+            if not ready:
+                pytest.skip("MS-MARCO not available")
+            
+            result = await intent_checker.check_intent(
+                "Can you give me a call?",
+                "Sure! What's your name and phone number so we can call you back?"
+            )
+            return result
+        
+        result = asyncio.get_event_loop().run_until_complete(run_test())
+        
+        assert result.relevance_score >= 0.5, f"Callback should get boosted relevance, got {result.relevance_score}"
+    
+    def test_non_callback_query_no_false_positive(self, intent_checker):
+        """Test that non-callback queries don't incorrectly get callback boost."""
+        async def run_test():
+            ready = await intent_checker.ensure_ready()
+            if not ready:
+                pytest.skip("MS-MARCO not available")
+            
+            result = await intent_checker.check_intent(
+                "What is Brandon's tax policy?",
+                "The weather is nice today."
+            )
+            return result
+        
+        result = asyncio.get_event_loop().run_until_complete(run_test())
+        
+        assert result.score >= 4, f"Off-topic response should fail, got {result.score}"
+        assert "callback" not in result.explanation.lower(), "Should not mention callback for non-callback query"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

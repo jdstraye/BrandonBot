@@ -237,7 +237,7 @@
         "I'm so frustrated with this conversation. Can a real person help me?"
       ],
       "callback_edge_cases": {
-        "description": "Tests for callback repetition safeguard (M_EDGE_CASES-132 regression)",
+        "description": "Tests for callback flow - topic detection, OV bypass, and safeguards",
         "tests": [
           {
             "id": "M_EDGE_CASES-132",
@@ -263,6 +263,61 @@
             "implied": "This is so frustrating! Nobody listens to voters anymore!!!",
             "expected_explicit": "Callback tool triggered",
             "expected_implied": "Empathetic response, no callback unless VAGUE+frustrated"
+          },
+          {
+            "id": "M_EDGE_CASES-135",
+            "name": "Topic Detection: Give Me A Call vs Donate",
+            "scenario": "Test that 'give me a call' is detected as callback, not donate from 'give'",
+            "prompt": "Can you give me a call to discuss this further?",
+            "expected_topic": "callback",
+            "anti_pattern": "Should NOT be detected as 'donate' due to the word 'give'"
+          },
+          {
+            "id": "M_EDGE_CASES-136",
+            "name": "OV Bypass: Callback Query with Contact Request",
+            "scenario": "Callback queries asking for contact details should pass OV intent check",
+            "prompt": "Can you give me a call?",
+            "expected_response_pattern": "Ask for name and phone number",
+            "expected_ov_result": "PASS - callback heuristic boost bypasses MS-MARCO low score",
+            "anti_pattern": "Should NOT trigger OV rejection loop for 'mostly unrelated'"
+          },
+          {
+            "id": "M_EDGE_CASES-137",
+            "name": "Factual Safeguard Bypass: Callback Queries",
+            "scenario": "Callback queries should bypass factual safeguard (no forced search)",
+            "prompt": "Please call me back about my concerns.",
+            "expected_behavior": "No factual safeguard triggered, no forced search_brandon_positions",
+            "expected_topic": "callback",
+            "anti_pattern": "Should NOT trigger factual policy safeguard"
+          },
+          {
+            "id": "M_EDGE_CASES-138",
+            "name": "Callback Phrase: Schedule A Call",
+            "scenario": "Test 'schedule a call' callback detection",
+            "prompt": "Can we schedule a call?",
+            "expected_topic": "callback",
+            "expected_behavior": "Ask for contact details without policy search"
+          },
+          {
+            "id": "M_EDGE_CASES-139",
+            "name": "Callback Phrase: Speak To Someone",
+            "scenario": "Test 'speak to someone' callback detection",
+            "prompt": "I want to speak to someone about this.",
+            "expected_topic": "callback",
+            "expected_behavior": "Ask for contact details without policy search"
+          },
+          {
+            "id": "M_EDGE_CASES-140",
+            "name": "Callback vs Donate Disambiguation",
+            "scenario": "Ensure donation queries still work correctly after callback fix",
+            "prompts": {
+              "callback": "Can you give me a call?",
+              "donate": "I want to give to the campaign."
+            },
+            "expected": {
+              "callback": "topic = callback",
+              "donate": "topic = donate"
+            }
           }
         ]
       }
