@@ -1374,12 +1374,23 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
             max_regenerations = 3
             pq_confidence = pq_result.avg_rag_confidence if pq_result.rag_results else 0.5
             
+            callback_tool_invoked = any(
+                tc.get("name") == ToolName.REQUEST_CALLBACK.value 
+                for tc in metadata.get("tool_calls", [])
+            )
+            is_callback_flow = callback_tool_invoked
+            
+            if is_callback_flow:
+                logger.info(f"[{request_id}] Callback flow detected - OV intent check will bypass "
+                           f"(request_callback tool invoked)")
+            
             while regeneration_attempt <= max_regenerations:
                 validation_result = await output_validator.validate(
                     query=sanitized_message,
                     response=final_response,
                     pq_confidence=pq_confidence,
-                    meme_detected=pq_result.meme_detected
+                    meme_detected=pq_result.meme_detected,
+                    is_callback_flow=is_callback_flow
                 )
                 
                 # Add repetition check (fail-closed on SLMNotAvailableError)

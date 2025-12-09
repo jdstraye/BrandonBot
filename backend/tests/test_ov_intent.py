@@ -70,14 +70,14 @@ class TestIntentChecker:
         assert result.score >= 3, f"Expected fail (score >= 3), got {result.score}: {result.explanation}"
     
     def test_intent_method_is_ms_marco(self, validator):
-        """Test that intent check uses MS-MARCO when available."""
+        """Test that intent check uses MS-MARCO (no fallback allowed - fail-closed)."""
         async def run_test():
             result = await validator._check_intent("What is your name?", "My name is BrandonBot.")
             return result
         
         result = asyncio.get_event_loop().run_until_complete(run_test())
         
-        assert result.method in ["ms_marco", "pattern_fallback"], f"Unexpected method: {result.method}"
+        assert result.method == "ms_marco", f"Expected ms_marco (no fallback), got {result.method}"
     
     def test_relevance_scoring(self, intent_checker):
         """Test that MS-MARCO returns relevance scores."""
@@ -191,122 +191,102 @@ class TestIntentEdgeCases:
 
 
 class TestCallbackBypass:
-    """Test callback detection and bypass logic in intent checking."""
+    """Test callback detection and bypass logic via is_callback_flow parameter.
     
-    @pytest.fixture
-    def intent_checker(self):
-        """Get the MS-MARCO intent checker."""
-        from ov_slm_models import msmarco_checker
-        return msmarco_checker
+    Callback detection is now tool-based, not pattern-based:
+    - When request_callback tool is invoked OR query topic is "callback"
+    - is_callback_flow=True is passed to OV.validate()
+    - OV bypasses MS-MARCO intent check entirely
+    
+    This ensures fail-closed behavior: no pattern fallback, pure tool invocation.
+    """
     
     @pytest.fixture
     def validator(self):
         from output_validator import OutputValidatorSLM
         return OutputValidatorSLM()
     
-    def test_callback_query_with_contact_request_passes(self, intent_checker):
-        """Test that callback queries asking for contact details pass validation."""
+    def test_callback_flow_bypasses_intent_check(self, validator):
+        """Test that is_callback_flow=True bypasses intent check entirely."""
         async def run_test():
-            ready = await intent_checker.ensure_ready()
-            if not ready:
-                pytest.skip("MS-MARCO not available")
-            
-            result = await intent_checker.check_intent(
-                "Can you give me a call to discuss this further?",
-                "I'd be happy to have someone from Brandon's team call you! Could you share your name and phone number?"
-            )
-            return result
-        
-        result = asyncio.get_event_loop().run_until_complete(run_test())
-        
-        assert result.score <= 2, f"Callback flow should pass (score <= 2), got {result.score}: {result.explanation}"
-        assert "callback" in result.explanation.lower(), f"Should mention callback heuristic: {result.explanation}"
-    
-    def test_callback_query_call_me_back_passes(self, intent_checker):
-        """Test that 'call me back' queries pass with appropriate response."""
-        async def run_test():
-            ready = await intent_checker.ensure_ready()
-            if not ready:
-                pytest.skip("MS-MARCO not available")
-            
-            result = await intent_checker.check_intent(
-                "Please call me back about this issue.",
-                "I'd be glad to arrange a callback. What's the best phone number to reach you?"
-            )
-            return result
-        
-        result = asyncio.get_event_loop().run_until_complete(run_test())
-        
-        assert result.score <= 2, f"Callback flow should pass, got {result.score}: {result.explanation}"
-    
-    def test_callback_query_schedule_call_passes(self, intent_checker):
-        """Test that 'schedule a call' queries pass with appropriate response."""
-        async def run_test():
-            ready = await intent_checker.ensure_ready()
-            if not ready:
-                pytest.skip("MS-MARCO not available")
-            
-            result = await intent_checker.check_intent(
-                "Can we schedule a call?",
-                "Absolutely! Someone from Brandon's team can reach out to you. What's your name and contact information?"
-            )
-            return result
-        
-        result = asyncio.get_event_loop().run_until_complete(run_test())
-        
-        assert result.score <= 2, f"Callback flow should pass, got {result.score}: {result.explanation}"
-    
-    def test_callback_query_speak_to_someone_passes(self, intent_checker):
-        """Test that 'speak to someone' queries pass with appropriate response."""
-        async def run_test():
-            ready = await intent_checker.ensure_ready()
-            if not ready:
-                pytest.skip("MS-MARCO not available")
-            
-            result = await intent_checker.check_intent(
-                "I want to speak to someone about volunteering.",
-                "I'd love to connect you with someone from our volunteer team! Could you provide your contact details?"
-            )
-            return result
-        
-        result = asyncio.get_event_loop().run_until_complete(run_test())
-        
-        assert result.score <= 2, f"Callback flow should pass, got {result.score}: {result.explanation}"
-    
-    def test_callback_heuristic_boost_applied(self, intent_checker):
-        """Test that callback queries get heuristic boost even with low MS-MARCO score."""
-        async def run_test():
-            ready = await intent_checker.ensure_ready()
-            if not ready:
-                pytest.skip("MS-MARCO not available")
-            
-            result = await intent_checker.check_intent(
+            result = await validator._check_intent(
                 "Can you give me a call?",
-                "Sure! What's your name and phone number so we can call you back?"
+                "I'd be happy to have someone call you! What's your name and phone number?",
+                is_callback_flow=True
             )
             return result
         
         result = asyncio.get_event_loop().run_until_complete(run_test())
         
-        assert result.relevance_score >= 0.5, f"Callback should get boosted relevance, got {result.relevance_score}"
+        assert result.score == 0, f"Callback flow should pass with score 0, got {result.score}"
+        assert result.method == "callback_tool_bypass", f"Method should be callback_tool_bypass, got {result.method}"
     
-    def test_non_callback_query_no_false_positive(self, intent_checker):
-        """Test that non-callback queries don't incorrectly get callback boost."""
+    def test_callback_flow_bypass_works_for_any_response(self, validator):
+        """Test that callback flow bypass works even for responses that would normally fail."""
         async def run_test():
-            ready = await intent_checker.ensure_ready()
-            if not ready:
-                pytest.skip("MS-MARCO not available")
-            
-            result = await intent_checker.check_intent(
+            result = await validator._check_intent(
+                "Please call me back.",
+                "What's your phone number?",
+                is_callback_flow=True
+            )
+            return result
+        
+        result = asyncio.get_event_loop().run_until_complete(run_test())
+        
+        assert result.score == 0, "Callback flow should bypass intent check"
+        assert result.confidence == 1.0, "Callback bypass should have full confidence"
+    
+    def test_non_callback_flow_uses_ms_marco(self, validator):
+        """Test that non-callback queries go through MS-MARCO."""
+        async def run_test():
+            result = await validator._check_intent(
                 "What is Brandon's tax policy?",
-                "The weather is nice today."
+                "Brandon supports tax reform for working families.",
+                is_callback_flow=False
+            )
+            return result
+        
+        result = asyncio.get_event_loop().run_until_complete(run_test())
+        
+        assert result.method == "ms_marco", f"Non-callback should use MS-MARCO, got {result.method}"
+    
+    def test_off_topic_response_fails_without_callback_flag(self, validator):
+        """Test that off-topic responses fail when is_callback_flow=False."""
+        async def run_test():
+            result = await validator._check_intent(
+                "What is Brandon's tax policy?",
+                "The weather is nice today.",
+                is_callback_flow=False
             )
             return result
         
         result = asyncio.get_event_loop().run_until_complete(run_test())
         
         assert result.score >= 4, f"Off-topic response should fail, got {result.score}"
-        assert "callback" not in result.explanation.lower(), "Should not mention callback for non-callback query"
+    
+    def test_ov_validate_accepts_callback_flow_param(self, validator):
+        """Test that OV.validate() accepts is_callback_flow parameter."""
+        async def run_test():
+            try:
+                result = await validator.validate(
+                    query="Give me a call",
+                    response="What's your phone number?",
+                    is_callback_flow=True
+                )
+                return result
+            except Exception as e:
+                # May fail due to missing FEC RAG in test environment
+                from output_validator import SLMNotAvailableError
+                if "FEC RAG" in str(e):
+                    pytest.skip("FEC RAG not configured")
+                raise
+        
+        result = asyncio.get_event_loop().run_until_complete(run_test())
+        
+        from output_validator import OVSafeguard
+        intent_result = result.results.get(OVSafeguard.INTENT_CHECKING)
+        assert intent_result is not None
+        assert intent_result.method == "callback_tool_bypass"
 
 
 if __name__ == "__main__":

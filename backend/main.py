@@ -110,7 +110,23 @@ async def startup_event():
         logger.info("Initializing Weaviate (embedded mode)...")
         await weaviate_manager.initialize()
     else:
-        logger.warning("Weaviate not available - RAG features limited")
+        logger.error("FAIL-CLOSED: Weaviate not available - RAG is REQUIRED")
+        raise RuntimeError("Weaviate/RAG is required for BrandonBot operation. Cannot start without vector database.")
+    
+    logger.info("Verifying SLM models for Output Validation (fail-closed)...")
+    try:
+        from ov_slm_models import msmarco_checker
+        ms_marco_ready = await msmarco_checker.ensure_ready()
+        if not ms_marco_ready:
+            logger.error("FAIL-CLOSED: MS-MARCO model failed to load")
+            raise RuntimeError("MS-MARCO intent checker is required for Output Validation. Cannot start without SLM models.")
+        logger.info("MS-MARCO intent checker: READY")
+    except ImportError as e:
+        logger.error(f"FAIL-CLOSED: Cannot import SLM models: {e}")
+        raise RuntimeError(f"SLM models import failed: {e}. Cannot start without Output Validation models.")
+    except Exception as e:
+        logger.error(f"FAIL-CLOSED: SLM initialization failed: {e}")
+        raise RuntimeError(f"SLM initialization failed: {e}. Cannot start without Output Validation models.")
     
     provider_stats = agent_orchestrator.llm_manager.get_provider_stats()
     total_slots = provider_stats.get("total_slots", 0)
@@ -118,7 +134,7 @@ async def startup_event():
     total_models = provider_stats.get("total_models", 0)
     logger.info(f"LLM Slots: {available_slots}/{total_slots} available, {total_models} unique models")
     
-    logger.info("BrandonBot ready with multi-provider LLM support")
+    logger.info("BrandonBot ready with multi-provider LLM support (fail-closed verification complete)")
 
 @app.on_event("shutdown")
 async def shutdown_event():

@@ -302,7 +302,8 @@ class OutputValidatorSLM:
         query: str,
         response: str,
         pq_confidence: float = 0.85,
-        meme_detected: bool = False
+        meme_detected: bool = False,
+        is_callback_flow: bool = False
     ) -> OVValidationResult:
         """
         Validate a response against all safeguards.
@@ -312,6 +313,8 @@ class OutputValidatorSLM:
             response: LLM response to validate
             pq_confidence: Prequalifier confidence score (0-1)
             meme_detected: If True, skip intent checking (meme responses pivot to political topics)
+            is_callback_flow: If True, bypass intent checking - callback tool invocation validates intent.
+                             This is set when the LLM invoked the request_callback tool.
         
         Returns:
             OVValidationResult with scores for each safeguard
@@ -334,7 +337,7 @@ class OutputValidatorSLM:
         if meme_detected:
             intent_check = meme_bypass_intent()
         else:
-            intent_check = self._check_intent(query, response)
+            intent_check = self._check_intent(query, response, is_callback_flow=is_callback_flow)
         
         checks = await asyncio.gather(
             intent_check,
@@ -380,76 +383,48 @@ class OutputValidatorSLM:
         
         return result
     
-    async def _check_intent(self, query: str, response: str) -> OVResult:
+    async def _check_intent(self, query: str, response: str, is_callback_flow: bool = False) -> OVResult:
         """
         Check if response addresses the user's intent using MS-MARCO cross-encoder.
         
         MS-MARCO is trained on QA pairs, optimal for detecting query-response alignment.
         
+        Args:
+            query: User's query
+            response: LLM response
+            is_callback_flow: If True, bypass MS-MARCO scoring - callback tool invocation
+                             already validates intent. No pattern matching needed.
+        
         Raises:
-            SLMNotAvailableError: If require_slm=True and MS-MARCO cannot be loaded.
+            SLMNotAvailableError: MS-MARCO is REQUIRED. No pattern fallback exists.
+            Even callback bypass requires MS-MARCO to be ready (fail-closed guarantee).
         """
-        if await self._ensure_msmarco_ready():
-            try:
-                intent_result = await self._msmarco.check_intent(query, response)
-                return OVResult(
-                    safeguard=OVSafeguard.INTENT_CHECKING,
-                    score=intent_result.score,
-                    confidence=intent_result.confidence,
-                    explanation=intent_result.explanation,
-                    method="ms_marco"
-                )
-            except Exception as e:
-                if self._require_slm:
-                    raise SLMNotAvailableError(f"MS-MARCO intent check failed: {e}")
-                logger.warning(f"MS-MARCO intent check failed, falling back to patterns: {e}")
-        elif self._require_slm:
-            raise SLMNotAvailableError("MS-MARCO intent model not available. Set require_slm=False to use pattern fallback.")
+        if not await self._ensure_msmarco_ready():
+            raise SLMNotAvailableError(
+                "MS-MARCO intent model not available. "
+                "FAIL-CLOSED: No pattern fallback. SLM models are REQUIRED."
+            )
         
-        return await self._check_intent_fallback(query, response)
-    
-    async def _check_intent_fallback(self, query: str, response: str) -> OVResult:
-        """Fallback intent checking using patterns when MS-MARCO is unavailable."""
-        response_lower = response.lower()
-        response_word_count = len(response.split())
+        if is_callback_flow:
+            return OVResult(
+                safeguard=OVSafeguard.INTENT_CHECKING,
+                score=0,
+                confidence=1.0,
+                explanation="Callback flow - intent validated by tool invocation (MS-MARCO ready)",
+                method="callback_tool_bypass"
+            )
         
-        refusal_patterns = [
-            (re.compile(r'\bi (?:cannot|can\'t|am unable to|refuse to)\b', re.I), 'refusal'),
-            (re.compile(r'\bdo not (?:possess|have)\s+(?:knowledge|access|information)\b', re.I), 'inability'),
-            (re.compile(r'\b(?:too complex|beyond my|outside my)\b', re.I), 'complexity'),
-            (re.compile(r'\bmisuse of\b', re.I), 'absurd_refusal'),
-        ]
-        
-        issues_found = []
-        for pattern, issue_type in refusal_patterns:
-            if pattern.search(response):
-                issues_found.append(issue_type)
-        
-        if 'absurd_refusal' in issues_found:
-            score = 4
-            explanation = "Absurd refusal detected"
-        elif 'refusal' in issues_found or 'inability' in issues_found:
-            has_alternative = 'but i can' in response_lower or 'however' in response_lower
-            if has_alternative:
-                score = 2
-                explanation = "Refusal with alternative offered"
-            else:
-                score = 3
-                explanation = "Refusal without alternative"
-        elif response_word_count < 10:
-            score = 2
-            explanation = "Very short response"
-        else:
-            score = 0
-            explanation = "Response appears to address query"
-        
-        return OVResult(
-            safeguard=OVSafeguard.INTENT_CHECKING,
-            score=score,
-            confidence=0.7,
-            explanation=explanation,
-            method="pattern_fallback"
-        )
+        try:
+            intent_result = await self._msmarco.check_intent(query, response)
+            return OVResult(
+                safeguard=OVSafeguard.INTENT_CHECKING,
+                score=intent_result.score,
+                confidence=intent_result.confidence,
+                explanation=intent_result.explanation,
+                method="ms_marco"
+            )
+        except Exception as e:
+            raise SLMNotAvailableError(f"MS-MARCO intent check failed: {e}")
     
     async def _check_ethics(self, response: str) -> OVResult:
         """
