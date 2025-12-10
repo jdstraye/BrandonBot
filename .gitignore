@@ -45,3 +45,4 @@ models/
 # HuggingFace cache directories
 huggingface/
 transformers_cache/
+tools/ollama/
