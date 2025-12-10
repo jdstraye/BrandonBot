@@ -1,54 +1,54 @@
 # Self-Hosting BrandonBot on Debian 13
+- [Self-Hosting BrandonBot on Debian 13](#self-hosting-brandonbot-on-debian-13)
   - [Overview](#overview)
   - [System Requirements](#system-requirements)
     - [Minimum Requirements](#minimum-requirements)
-    - [Recommended Requirements](#recommended-requirements)
-  - [Installation Steps](#installation-steps)
+    - [For LLM Judge (Validation Only)](#for-llm-judge-validation-only)
+  - [Detailed Setup](#detailed-setup)
     - [1. Install System Dependencies](#1-install-system-dependencies)
-    - [2. Clone/Copy Project Files](#2-clonecopy-project-files)
-      - [Option A: Clone from Git (if hosted)](#option-a-clone-from-git-if-hosted)
-      - [Option B: Copy from Replit](#option-b-copy-from-replit)
-    - [3. Set Up Python Environment](#3-set-up-python-environment)
-    - [4. Install Python Dependencies](#4-install-python-dependencies)
-    - [5. Download the local LLM and SLM models](#5-download-the-local-llm-and-slm-models)
-    - [6. Verify Safeguard Models (Optional)](#6-verify-safeguard-models-optional)
-    - [7. Configure Environment Variables](#7-configure-environment-variables)
-    - [8. Initialize Database and Weaviate](#8-initialize-database-and-weaviate)
+    - [2. Install Ollama (Optional, for Validation)](#2-install-ollama-optional-for-validation)
+    - [3. Clone/Copy Project Files](#3-clonecopy-project-files)
+    - [4. Set Up Python Environment](#4-set-up-python-environment)
+    - [5. Download Models (REQUIRED)](#5-download-models-required)
+    - [6. Initialize Databases (REQUIRED)](#6-initialize-databases-required)
+    - [7. Verify Safeguard Models (Optional)](#7-verify-safeguard-models-optional)
+    - [8. Configure Environment Variables](#8-configure-environment-variables)
+    - [9. Initialize Database and Weaviate](#9-initialize-database-and-weaviate)
   - [Running the Server](#running-the-server)
-    - [Production Mode (recommended)](#production-mode-recommended)
+    - [Testing mode and Production mode](#testing-mode-and-production-mode)
+    - [Command line](#command-line)
     - [Access the Application](#access-the-application)
-  - [Performance Tuning](#performance-tuning)
-    - [CPU Thread Configuration](#cpu-thread-configuration)
-    - [Expected Performance Benchmarks](#expected-performance-benchmarks)
-  - [Running as a System Service (Optional)](#running-as-a-system-service-optional)
-    - [Create systemd service file](#create-systemd-service-file)
-    - [Service configuration](#service-configuration)
-    - [Enable and start service](#enable-and-start-service)
-    - [Verify service is running correctly](#verify-service-is-running-correctly)
-    - [View logs](#view-logs)
-  - [Public Access](#public-access)
-    - [Tailscale Setup (Private Network Access)](#tailscale-setup-private-network-access)
-    - [Firewall Configuration (Tailscale Focus)](#firewall-configuration-tailscale-focus)
-    - [Reverse Proxy (Not Required for Tailscale)](#reverse-proxy-not-required-for-tailscale)
+    - [Performance Tuning](#performance-tuning)
+      - [CPU Thread Configuration](#cpu-thread-configuration)
+    - [Fail-Closed Design](#fail-closed-design)
+      - [SLM Safeguards](#slm-safeguards)
+      - [FEC Compliance (RAG)](#fec-compliance-rag)
+      - [Verification](#verification)
+    - [Running Validation with Local LLM Judge](#running-validation-with-local-llm-judge)
+    - [Running as a System Service](#running-as-a-system-service)
+      - [Create systemd service](#create-systemd-service)
+      - [Enable and start service](#enable-and-start-service)
+      - [Verify service is running correctly](#verify-service-is-running-correctly)
+      - [View logs](#view-logs)
+    - [Public Access](#public-access)
+      - [Tailscale Setup (Private Network Access)](#tailscale-setup-private-network-access)
+      - [Firewall Configuration (Tailscale Focus)](#firewall-configuration-tailscale-focus)
       - [A word on https](#a-word-on-https)
+      - [Deployment Setup on GitHub Pages (Frontend for Tailscale)](#deployment-setup-on-github-pages-frontend-for-tailscale)
+      - [Reverse Proxy (Not Required for Tailscale)](#reverse-proxy-not-required-for-tailscale)
       - [Reverse Proxy with Nginx (Future)](#reverse-proxy-with-nginx-future)
-      - [Install Nginx](#install-nginx)
-      - [Configure Nginx](#configure-nginx)
+        - [Install Nginx](#install-nginx)
+        - [Configure Nginx](#configure-nginx)
       - [Enable site and get SSL](#enable-site-and-get-ssl)
-      - [Verify nginx setup](#verify-nginx-setup)
-    - [Deployment Setup on GitHub Pages (Frontend for Tailscale)](#deployment-setup-on-github-pages-frontend-for-tailscale)
+        - [Verify nginx setup](#verify-nginx-setup)
   - [Troubleshooting](#troubleshooting)
-    - [Issue: Model fails to load](#issue-model-fails-to-load)
-    - [Issue: Out of memory errors](#issue-out-of-memory-errors)
-    - [Issue: Slow generation (\<5 tokens/sec)](#issue-slow-generation-5-tokenssec)
-    - [Issue: Weaviate initialization fails](#issue-weaviate-initialization-fails)
-    - [Issue: Port 5000 already in use](#issue-port-5000-already-in-use)
-  - [Monitoring and Maintenance](#monitoring-and-maintenance)
-    - [View real-time logs](#view-real-time-logs)
-    - [Monitor resource usage](#monitor-resource-usage)
-    - [Backup important data](#backup-important-data)
-  - [Migrating Back to Replit or Cloud](#migrating-back-to-replit-or-cloud)
-  - [Performance Comparison](#performance-comparison)
+    - [Ollama not responding](#ollama-not-responding)
+    - [FEC RAG errors](#fec-rag-errors)
+    - [Port 5000 in use](#port-5000-in-use)
+    - [Out of memory](#out-of-memory)
+  - [File Structure](#file-structure)
+  - [Database Schema](#database-schema)
+  - [Environment Modes](#environment-modes)
   - [Next Steps](#next-steps)
 
 ## Overview
@@ -58,14 +58,10 @@ This guide explains how to self-host BrandonBot on your own server with Python 3
 - **Weaviate**: Embedded vector database for RAG
 - **FEC Compliance**: Mandatory RAG-based compliance checking (system fails closed without it)
 - **Ollama + Llama 3.2**: Optional LLM judge for validation
+
 **Expected Performance Improvement**:
 - **Replit (shared)**: 1 token per 60-90 seconds (CPU starvation)
 - **Self-hosted (dedicated)**: 10-30 tokens per second (60-180x faster)
-This guide explains how to self-host BrandonBot on your own server with Python 3.12. The self-hosted version uses:
-- **SLM Models**: Required safeguards for vagueness detection, frustration detection, ethics, PII, and confidence
-- **Weaviate**: Embedded vector database for RAG
-- **FEC Compliance**: Mandatory RAG-based compliance checking (system fails closed without it)
-- **Ollama + Llama 3.2**: Optional LLM judge for validation
 ---
 
 ## System Requirements
@@ -103,22 +99,6 @@ nvme0n1      27.3G disk INTEL HBRPEKNX0202AO    0
 └─nvme0n1p1  27.2G part                         0
 
 ```
-
----
-
-## Quick Start (Two Steps)
-
-After cloning and setting up Python, the system is ready in two commands:
-
-```bash
-# Step 1: Download all required models
-python download_models.py
-
-# Step 2: Initialize databases and load FEC data
-python ingest_all.py
-```
-
-That's it! The system is now ready for operations.
 
 ---
 
@@ -180,10 +160,8 @@ pip install gunicorn 		# This is for production and may be missing from requirem
 
 ### 5. Download Models (REQUIRED)
 
-This downloads all SLM safeguard models and optionally sets up Ollama:
-
 ```bash
-python download_models.py
+cd backend && python download_models.py # installs all models by default
 ```
 
 **What gets downloaded:**
@@ -200,44 +178,16 @@ python download_models.py
 **Options:**
 ```bash
 # Download only SLM models (skip Ollama)
-python download_models.py --slm-only
+cd backend && python download_models.py --slm-only
 
 # Download only Ollama model
-python download_models.py --ollama-only
+cd backend && python download_models.py --ollama-only
 
 # Verify existing models
-python download_models.py --verify-only
+cd backend && python download_models.py --verify-only
 ```
-
-### 6. Initialize Databases (REQUIRED)
-
-This creates the SQLite database and loads FEC compliance data into Weaviate:
-
-```bash
-python ingest_all.py
+Expected Output:
 ```
-
-**What gets initialized:**
-- **SQLite** (`data/brandonbot.db`): User consent, interactions, callbacks, volunteers, compliance logs
-- **Weaviate** (embedded): FEC prohibited phrases, Brandon platform, previous Q&A
-
-**CRITICAL**: FEC compliance data is MANDATORY. The system will refuse to operate without it.
-
-**Options:**
-```bash
-# With custom documents directory
-python ingest_all.py documents/
-
-# Skip database initialization
-python ingest_all.py --skip-db
-
-# Custom database path
-python ingest_all.py --db-path /path/to/database.db
-```
-
-### 7. Configure Environment Variables (Optional)
->>>>>>> llm-first
-
 Checking dependencies...
   torch: 2.x.x
   transformers: 4.x.x
@@ -274,7 +224,34 @@ Cache size: 1105.2MB
 All models ready!
 ```
 
-### 6. Verify Safeguard Models (Optional)
+### 6. Initialize Databases (REQUIRED)
+
+This creates the SQLite database and loads FEC compliance data into Weaviate:
+
+```bash
+cd backend && python ingest_all.py
+```
+`ingest_all.py` is configured internally to use the optimal chunk and overlap sizes for the different collections.
+
+**What gets initialized:**
+- **SQLite** (`data/brandonbot.db`): User consent, interactions, callbacks, volunteers, compliance logs
+- **Weaviate** (embedded): FEC prohibited phrases, Brandon platform, previous Q&A
+
+**CRITICAL**: FEC compliance data is MANDATORY. The system will refuse to operate without it.
+
+**Options:**
+```bash
+# With custom documents directory
+python ingest_all.py documents/
+
+# Skip database initialization
+python ingest_all.py --skip-db
+
+# Custom database path
+python ingest_all.py --db-path /path/to/database.db
+```
+
+### 7. Verify Safeguard Models (Optional)
 
 Run the smoke test suite to confirm all safeguards are working:
 
@@ -284,7 +261,7 @@ python -m pytest tests/test_ov_*.py tests/test_pq.py -v
 
 **Expected**: 140+ tests pass (all 6 safeguards operational)
 
-### 7. Configure Environment Variables
+### 8. Configure Environment Variables
 
 Create a `.env` file in the `backend/` directory and put all the secrets here:
 
@@ -302,7 +279,7 @@ SENDGRID_API_KEY=your_key_here
 DATABASE_PATH=./data/brandonbot.db
 ```
 
-### 8. Initialize Database and Weaviate
+### 9. Initialize Database and Weaviate
 
 ```bash
 # First run will initialize SQLite database and Weaviate embeddings
@@ -323,8 +300,20 @@ This concludes the local setup instructions.
 ## Running the Server
 Now that the program is setup, we need to deploy it.
 
-### Production Mode (recommended)
-For production, we use **Gunicorn** as a process manager with its **UvicornWorker** class to ensure stability and reliable service management (like graceful restarts).
+### Testing mode and Production mode
+The program deploys in 2 modes, configured by the TEST_MODE environment variable.
+```bash
+export TESTING_MODE=true # Test mode for running validation tests
+#OR#
+export TESTING_MODE=false # Production mode for deployment
+```
+The **primary difference** is where volunteer registration and donation emails go.
+- Testing: jdstrayer@netzero.net
+- Production: campaign@brandonsowers.com
+
+### Command line
+As opposed to using systemd, this will run actively in a terminal.
+We use **Gunicorn** as a process manager with its **UvicornWorker** class to ensure stability and reliable service management (like graceful restarts).
 
 ```bash
 cd backend
@@ -335,7 +324,7 @@ gunicorn main:app \
     --bind 0.0.0.0:5000
 ```
 
-**Important**: Use `--workers 1` because Phi-3 model cannot be shared across processes. Each worker would load its own copy (4GB RAM per worker).
+**Important**: Use `--workers 1` because some models cannot be shared across processes. Each worker would load its own copy of all the models(4GB RAM per worker).
 
 ### Access the Application
 - **Local**: http://localhost:5000
@@ -344,9 +333,9 @@ gunicorn main:app \
 
 ---
 
-## Performance Tuning
+### Performance Tuning
 
-### CPU Thread Configuration
+#### CPU Thread Configuration
 
 Unlike Replit (where thread limits are needed to prevent contention), on dedicated hardware you can use **all available cores**:
 
@@ -373,20 +362,20 @@ Access at: http://localhost:5000
 
 ---
 
-## Fail-Closed Design
+### Fail-Closed Design
 
-BrandonBot is designed to fail closed for safety:
+BrandonBot is designed to fail closed for safety instead of using backups if model fail to run:
 
-### SLM Safeguards
+#### SLM Safeguards
 - **Required**: All 6 SLM models must be loaded for the system to operate
 - **Fail behavior**: System refuses to start if models don't load
 
-### FEC Compliance (RAG)
+#### FEC Compliance (RAG)
 - **Required**: FECProhibited collection must exist and be populated
 - **Fail behavior**: System refuses to process responses without FEC RAG
 - **No fallback**: Pattern matching is NOT used as a fallback
 
-### Verification
+#### Verification
 ```bash
 # Verify models are loaded
 python download_models.py --verify-only
@@ -409,7 +398,7 @@ asyncio.run(check())
 
 ---
 
-## Running Validation with Local LLM Judge
+### Running Validation with Local LLM Judge
 
 The validation suite uses Ollama + Llama 3.2 as the LLM judge:
 
@@ -423,21 +412,31 @@ export USE_LOCAL_JUDGE=true
 # Run validation
 cd backend/validation
 python3.12 -m validation.validator --phase <phase>
-python validator.py 
+
+#Examples:
+# python -m validation.validator             # Run all phases (default)
+# python -m validation.validator --phase all # Explicitly run everything
+# python -m validation.validator --phase pq  # Prequalifier tests only
+# python -m validation.validator --phase ov  # Output Validator tests (unit, E2E, repetition)
+# python -m validation.validator --phase mcp # Tool (MCP) verification + multi-turn + callback edge cases
+# python -m validation.validator --phase full# Full adversarial conversations with LLMjudge scoring 
+# python -m validation.validator --phase full --max-prompts 10 # Only do 10 prompts
+# python -m validation.validator --no-judge --phase ov # Only do Output Validator gray box tests without a judge
+# python -m validation.validator --output ./custom_results # Output results to the ./custom_results directory.
+
+#Phases:
+#  pq     → Pre-Qualifier gray box tests: Rate limiting, sanitization, frustration/vagueness detection
+#  ov     → Output Validator gray box tests: drift detection, repetition safeguard
+#  mcp    → Tool call verification, multi-turn logic, callback edge cases (incl. regression guards)
+#  full   → End-to-end adversarial conversations with persona simulation and scoring
+#  all    → Run pq + ov + mcp + full sequentially
+
+# Results are exported as CSV + JSON summary with aggregations by category, persona, model, and style.
 ```
-\<phase\> can be:
->
-- all - run all the tests available, ~6 PQ + ~4 OV + ~4 OV_E2E + ~10 MCP + ~210 prompts
-- pq - Run the PreQualifier gray box tests, which would include irritation and vagueness detection.
-- ov - Run the Output Validation gray box tests, which would include citation verification, DOS attack, PII redaction, and responding to the intent of the query.
-- mcp - Run the tests that check tool usage.
-- full - Run the prompts but not the pq, mcp, or ov gray box tests.
-
 ---
+### Running as a System Service
 
-## Running as a System Service
-
-### Create systemd service
+#### Create systemd service
 
 ```bash
 sudo emacs /etc/systemd/system/brandonbot.service
@@ -469,7 +468,7 @@ RestartSec=10
 WantedBy=multi-user.target
 ```
 
-### Enable and start service
+#### Enable and start service
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable brandonbot
@@ -477,7 +476,7 @@ sudo systemctl start brandonbot
 sudo systemctl status brandonbot
 ```
 
-### Verify service is running correctly
+#### Verify service is running correctly
 ```bash
 # Check service status
 sudo systemctl status brandonbot
@@ -497,7 +496,7 @@ curl -X POST http://localhost:5000/api/query \
 # Should return JSON with response and confidence
 ```
 
-### View logs
+#### View logs
 ```bash
 # Follow logs in real-time
 sudo journalctl -u brandonbot -f
@@ -511,10 +510,10 @@ sudo journalctl -u brandonbot --since today
 
 ---
 
-## Public Access
+### Public Access
 Solution to keep everything free. The public-facing address is going to be canaai.github.io/brandonbot. Going there simply redirects to a tailspace url, like debian13.<random>.ts.net, which provides https security and the other minimal services needed.
 
-### Tailscale Setup (Private Network Access)
+#### Tailscale Setup (Private Network Access)
 
 Tailscale provides a secure, zero-config VPN (a Tailnet) allowing your local frontend (or any authorized device) to securely connect to your self-hosted backend.
 
@@ -553,7 +552,7 @@ Example FQDN Format: debian13.yak-bebop.ts.net
 This is the address you will use for the redirect.
 
 **Next Step:** Once the service is running, you will access it using this Tailscale IP and the application port, e.g., `http://debian13.yak-bebop.ts.net:5000`.
-### Firewall Configuration (Tailscale Focus)
+#### Firewall Configuration (Tailscale Focus)
 
 **Crucial Note:** Since your service is accessed via **Tailscale**, you **DO NOT** need to open port 5000 to the public internet (WAN). The service should only be accessible locally or via the private Tailnet IP.
 
@@ -569,15 +568,6 @@ sudo ufw allow from 127.0.0.1 to any port 5000
 # Enable UFW
 sudo ufw enable
 ```
----
-### Reverse Proxy (Not Required for Tailscale)
-
-Since the public site `canaai.github.io/brandonbot` will redirect/proxy to your private **Tailscale IP** (e.g., `http://100.x.x.x:5000` or `http://debian13.yak-bebop.ts.net:5000`), you **DO NOT** need to install a reverse proxy like Nginx or configure Certbot on the Debian server.
-
-The connection will be:
-
-**User Browser** $\rightarrow$ **canaai.github.io/brandonbot** $\rightarrow$ **Tailscale Network** $\rightarrow$ **Your Debian Server (Gunicorn on 127.0.0.1:5000)**
-
 #### A word on https
 We use HTTP for the application port (:5000) because of a technical separation of duties on the self-hosted server:
 1. Tailscale's Security: Encryption and Identity
@@ -607,6 +597,58 @@ We use HTTP for the application port (:5000) because of a technical separation o
 
 Since the network is already secured by Tailscale, using the simple http://...:5000 is the easiest and most effective way to run your self-hosted application behind the Tailnet. Your connection is secure and private even without the "https" prefix.
 
+---
+#### Deployment Setup on GitHub Pages (Frontend for Tailscale)
+
+To connect your public canaai.github.io/brandonbot URL to your private Tailscale server, you need to create a simple HTML file in the frontend repository that redirects to the server's private Tailscale IP.
+
+1. Update the Frontend Repository
+This assumes you have a separate GitHub repository for your frontend that is published via GitHub Pages at the URL: https://canaai.github.io/brandonbot/ or, in this case, canaai.github.io with a a brandonbot subdirectory, containing a redirect index.html.
+```html
+<!DOCTYPE html>
+<html>
+<head>
+    <meta http-equiv="refresh" content="0; url=https://debian13.tail4cde2b.ts.net" />
+    <link rel="canonical" href="https://debian13.tail4cde2b.ts.net" />
+    <title>Redirecting to BrandonBot...</title>
+</head>
+<body>
+    <p>If you are not redirected automatically, follow this <a href="https://debian13.tail4cde2b.ts.net">link to BrandonBot</a>.</p>
+</body>
+</html>
+```
+Get the Server IP: On your Debian server, get the private Tailscale IP (e.g., 100.x.x.x):
+```Bash
+tailscale ip -4
+#Example output: 100.10.10.10
+```
+
+Create/Edit index.html: In your frontend repository (the one hosted by GitHub Pages), create or update the index.html file inside the brandonbot/ directory (or wherever your application entry point is).
+
+The file should contain a meta refresh tag that redirects the user's browser to the Tailscale IP and port 5000.
+
+Commit and Push: Commit this change to your frontend repository's main branch (or github-pages branch, depending on your GitHub Pages configuration) and push it to GitHub.
+
+1. User Experience Flow
+
+When a user visits https://canaai.github.io/brandonbot/:
+
+1. GitHub Pages loads the index.html.
+2. The <meta http-equiv="refresh" ...> tag immediately tells the browser to redirect to the Tailscale url.
+3. If the user is logged into the same Tailnet (Tailscale must be running on their machine): The connection is successful and the app loads.
+4. If the user is NOT logged into the same Tailnet: The connection will fail, and the user will see the message directing them to check their Tailscale client.
+
+This approach effectively uses your public GitHub URL as a permanent, easy-to-remember entry point that points to the secure, but private, backend IP.
+
+---
+#### Reverse Proxy (Not Required for Tailscale)
+Since the public site `canaai.github.io/brandonbot` will redirect/proxy to your private **Tailscale IP** (e.g., `http://100.x.x.x:5000` or `http://debian13.yak-bebop.ts.net:5000`), you **DO NOT** need to install a reverse proxy like Nginx or configure Certbot on the Debian server.
+
+The connection will be:
+
+**User Browser** $\rightarrow$ **canaai.github.io/brandonbot** $\rightarrow$ **Tailscale Network** $\rightarrow$ **Your Debian Server (Gunicorn on 127.0.0.1:5000)**
+
+
 #### Reverse Proxy with Nginx (Future)
 If you decide to expose the server publicly later using a domain, you would re-introduce the Nginx/Certbot configuration.
 
@@ -617,7 +659,7 @@ sudo apt install nginx certbot python3-certbot-nginx
 
 ##### Configure Nginx
 ```bash
-sudo nano /etc/nginx/sites-available/brandonbot
+sudo emacs /etc/nginx/sites-available/brandonbot
 ```
 
 ```nginx
@@ -669,68 +711,6 @@ sudo certbot certificates
 # Should show certificate details and expiry date
 ```
 ---
-### Deployment Setup on GitHub Pages (Frontend for Tailscale)
-
-To connect your public canaai.github.io/brandonbot URL to your private Tailscale server, you need to create a simple HTML file in the frontend repository that redirects to the server's private Tailscale IP.
-
-1. Update the Frontend Repository
-This assumes you have a separate GitHub repository for your frontend that is published via GitHub Pages at the URL: https://canaai.github.io/brandonbot/ or, in this case, canaai.github.io with a a brandonbot subdirectory, containing a redirect index.html.
-```html
-<!DOCTYPE html>
-<html>
-<head>
-    <meta http-equiv="refresh" content="0; url=https://debian13.tail4cde2b.ts.net" />
-    <link rel="canonical" href="https://debian13.tail4cde2b.ts.net" />
-    <title>Redirecting to BrandonBot...</title>
-</head>
-<body>
-    <p>If you are not redirected automatically, follow this <a href="https://debian13.tail4cde2b.ts.net">link to BrandonBot</a>.</p>
-</body>
-</html>
-```
-Get the Server IP: On your Debian server, get the private Tailscale IP (e.g., 100.x.x.x):
-```Bash
-tailscale ip -4
-#Example output: 100.10.10.10
-```
-
-Create/Edit index.html: In your frontend repository (the one hosted by GitHub Pages), create or update the index.html file inside the brandonbot/ directory (or wherever your application entry point is).
-
-The file should contain a meta refresh tag that redirects the user's browser to the Tailscale IP and port 5000.
-
-Example index.html content (Use your actual IP):
-```HTML
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta http-equiv="refresh" content="0; url=http://100.10.10.10:5000">
-        <title>Loading BrandonBot Self-Hosted Instance</title>
-        <style>
-            body { font-family: sans-serif; text-align: center; padding-top: 50px; }
-        </style>
-    </head>
-    <body>
-        <h1>Connecting to BrandonBot...</h1>
-        <p>If you are not redirected, please ensure you are logged into your <a href="https://tailscale.com/download" target="_blank">Tailscale client</a> and visit <a href="http://100.10.10.10:5000">http://100.10.10.10:5000</a> directly.</p>
-    </body>
-    </html>
-```
-Commit and Push: Commit this change to your frontend repository's main branch (or gh-pages branch, depending on your GitHub Pages configuration) and push it to GitHub.
-
-2. User Experience Flow
-
-When a user visits https://canaai.github.io/brandonbot/:
-
-1. GitHub Pages loads the index.html.
-2. The <meta http-equiv="refresh" ...> tag immediately tells the browser to redirect to the Tailscale url.
-3. If the user is logged into the same Tailnet (Tailscale must be running on their machine): The connection is successful and the app loads.
-4. If the user is NOT logged into the same Tailnet: The connection will fail, and the user will see the message directing them to check their Tailscale client.
-
-This approach effectively uses your public GitHub URL as a permanent, easy-to-remember entry point that points to the secure, but private, backend IP.
-
----
-
 ## Troubleshooting
 
 ### Ollama not responding

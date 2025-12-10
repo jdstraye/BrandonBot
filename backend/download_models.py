@@ -266,10 +266,16 @@ def download_transformers_model(model_id):
     from transformers import AutoTokenizer, AutoModel
     
     print(f"    Downloading tokenizer...")
+    # Tokenizer usually doesn't need trust_remote_code
     AutoTokenizer.from_pretrained(model_id)
     
     print(f"    Downloading model weights...")
-    AutoModel.from_pretrained(model_id)
+    # Special handling for models that require custom code
+    if "ME2-BERT" in model_id or model_id == "lorenzozan/ME2-BERT":
+        print("    WARNING: ME2-BERT requires trust_remote_code=True")
+        AutoModel.from_pretrained(model_id, trust_remote_code=True)
+    else:
+        AutoModel.from_pretrained(model_id)
     
     return True
 
@@ -308,7 +314,11 @@ def verify_slm_model(model_key, model_info):
         elif model_type == "transformers":
             from transformers import AutoTokenizer, AutoModel
             AutoTokenizer.from_pretrained(model_id)
-            AutoModel.from_pretrained(model_id)
+            if "ME2-BERT" in model_id or model_id == "lorenzozan/ME2-BERT":
+                print("    Loading ME2-BERT with trust_remote_code=True")
+                AutoModel.from_pretrained(model_id, trust_remote_code=True)
+            else:
+                AutoModel.from_pretrained(model_id)
             return True
         elif model_type == "ner":
             from transformers import AutoTokenizer, AutoModelForTokenClassification
@@ -398,56 +408,48 @@ def main():
         description="Download BrandonBot models for self-hosted deployment",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-This script downloads all models required for BrandonBot:
+    Usage examples:
+      python download_models.py                  # Download/verify ALL models (default)
+      python download_models.py --slm-only       # Only SLM safeguard models
+      python download_models.py --ollama-only    # Only Ollama + Llama 3.2 setup
+      python download_models.py --verify-only    # Check what's already installed (no download)
+      python download_models.py --model emotion  # Download/verify only one specific SLM
 
-SLM Models (Safeguards):
-  - all-MiniLM-L6-v2: Text embeddings for RAG
-  - ms-marco-MiniLM: Cross-encoder for intent/vagueness
-  - emotion-distilroberta: Frustration detection
-  - ME2-BERT: Ethics classification
-  - deberta-pii: PII detection
-  - bert-tiny: Confidence verification
+    This script sets up:
+    • 6 SLM safeguard models (~1.5 GB total)
+    • Ollama + llama3.2:3b (~2 GB) - optional LLM judge
 
-Ollama (LLM Judge):
-  - llama3.2:3b: Local LLM for validation scoring
-
-After running this script:
-  1. Run ingest_all.py to set up Weaviate and SQLite
-  2. System is ready for operations
+    After running, continue with: python ingest_all.py
         """
     )
-    parser.add_argument(
-        "--ollama-only",
-        action="store_true",
-        help="Only set up Ollama and Llama model"
-    )
-    parser.add_argument(
-        "--slm-only",
-        action="store_true",
-        help="Only download SLM safeguard models"
-    )
-    parser.add_argument(
-        "--verify-only",
-        action="store_true",
-        help="Only verify existing models, don't download"
-    )
-    parser.add_argument(
-        "--model",
-        choices=list(SLM_MODELS.keys()),
-        help="Download specific SLM model only"
-    )
-    args = parser.parse_args()
-    
+
+    # Remove the --all flag entirely
+    # Keep the others:
+    parser.add_argument("--ollama-only", 
+                        action="store_true", 
+                        help="Only set up Ollama and Llama 3.2 model")
+    parser.add_argument("--slm-only", 
+                        action="store_true",
+                        help="Only download/verify SLM safeguard models")
+    parser.add_argument("--verify-only",
+                        action="store_true",
+                        help="Only verify existing models (skip downloads)")
+    parser.add_argument("--model",
+                        choices=list(SLM_MODELS.keys()),
+                        help="Process only one specific SLM model (use with --slm-only or default mode)")    
     print("=" * 60)
     print("BrandonBot Model Downloader")
     print("=" * 60)
     
+    args = parser.parse_args()
+
     results = {}
-    
-    if not args.slm_only:
+    do_ollama = not args.slm_only and not args.verify_only  # Default: yes, unless SLM-only or verify-only
+    do_slm = not args.ollama_only                           # Default: yes, unless Ollama-only
+    if do_ollama:
         results["ollama"] = setup_ollama()
     
-    if not args.ollama_only:
+    if do_slm:
         results["slm"] = setup_slm_models(
             verify_only=args.verify_only,
             model_filter=args.model

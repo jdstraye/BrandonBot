@@ -1,7 +1,7 @@
 """
 BrandonBot Validation Script
+Implements the full "Adversarial Evaluator" loop with 5 phases:
 
-Implements the "Adversarial Evaluator" loop:
 1. Inject: Send prompt from the Test Suite
 2. Intercept: Capture internal logs (PQ Flags, Tool Calls, OV Decisions)
 3. Interact: If bot asks clarifying question, generate persona-based response
@@ -9,10 +9,19 @@ Implements the "Adversarial Evaluator" loop:
 5. Score: Judge LLM scores output (0-5) against Safety/Quality Rubric
 
 Execution:
-    python -m validation.validator --phase all
-    python -m validation.validator --phase pq
-    python -m validation.validator --phase ov
-    python -m validation.validator --phase full
+    python -m validation.validator                    # Run all phases (default)
+    python -m validation.validator --phase all        # Same as above
+    python -m validation.validator --phase pq         # Prequalifier only (rate limit, sanitization, frustration/vagueness)
+    python -m validation.validator --phase ov         # Output Validator: unit tests, E2E drift, repetition safeguard
+    python -m validation.validator --phase mcp        # Tool (MCP) verification, multi-turn, callback edge cases
+    python -m validation.validator --phase full       # Full adversarial conversations with LLM judge scoring
+
+Optional flags:
+    --max-prompts N     Limit number of full validation prompts
+    --no-judge          Run without Ollama judge (scores = 0)
+    --output DIR        Custom output directory for results
+
+Results: CSV + JSON summary with aggregations by category, persona, model, style
 """
 
 import os
@@ -1700,34 +1709,78 @@ class BrandonBotValidator:
 async def main():
     import argparse
     
-    parser = argparse.ArgumentParser(description="BrandonBot Validation Script")
-    parser.add_argument("--phase", choices=["pq", "ov", "mcp", "full", "all"], 
-                       default="all", help="Validation phase to run")
-    parser.add_argument("--max-prompts", type=int, default=None,
-                       help="Maximum number of prompts for full validation")
-    parser.add_argument("--no-judge", action="store_true",
-                       help="Run without Ollama Judge (scores will be 0)")
-    parser.add_argument("--output", type=str, default=None,
-                       help="Output directory for results")
+    parser = argparse.ArgumentParser(
+            description="BrandonBot Validation Script – Adversarial Evaluator",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+            epilog="""
+    Usage examples:
+      python -m validation.validator                     # Run all phases (default)
+      python -m validation.validator --phase all         # Explicitly run everything
+      python -m validation.validator --phase pq          # Prequalifier tests only
+      python -m validation.validator --phase ov          # Output Validator tests (unit, E2E, repetition)
+      python -m validation.validator --phase mcp         # Tool (MCP) verification + multi-turn + callback edge cases
+      python -m validation.validator --phase full        # Full adversarial conversations with LLMjudge scoring
     
+      python -m validation.validator --phase full --max-prompts 10
+      python -m validation.validator --no-judge --phase ov
+      python -m validation.validator --output ./custom_results
+    
+    Phases:
+      pq     → Rate limiting, sanitization, frustration/vagueness detection
+      ov     → Output Validator unit tests, drift detection, repetition safeguard
+      mcp    → Tool call verification, multi-turn logic, callback edge cases (incl. regression guards)
+      full   → End-to-end adversarial conversations with persona simulation and scoring
+      all    → Run pq + ov + mcp + full sequentially
+    
+    Results are exported as CSV + JSON summary with aggregations by category, persona, model, and style.
+            """
+        )
+    
+    parser.add_argument(
+        "--phase",
+        choices=["pq", "ov", "mcp", "full", "all"],
+        default="all",
+        help="Validation phase to run (default: %(default)s)"
+    )
+    parser.add_argument(
+        "--max-prompts",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Limit number of prompts in 'full' phase (useful for quick runs)"
+    )
+    parser.add_argument(
+        "--no-judge",
+        action="store_true",
+        help="Disable Ollama LLM judge – responses will not be scored (useful for debugging)"
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        metavar="DIR",
+        help="Custom output directory for results (default: ./validation/results)"
+    )
     args = parser.parse_args()
-    
-    phase = TestPhase(args.phase)
-    
-    print(f"\nStarting BrandonBot Validation - Phase: {phase.value}")
+    phase = TestPhase(args.phase.upper())
+    print(f"\nStarting BrandonBot Validation – Phase: {phase.value.upper()}")
     print(f"Testing mode: {TESTING_MODE}")
-    
-    use_agent = phase in [TestPhase.FULL, TestPhase.MCP, TestPhase.OV, TestPhase.ALL]
-    validator = BrandonBotValidator(use_judge=not args.no_judge, use_agent=use_agent)
-    
+    if args.no_judge:
+        print("Ollama judge disabled (--no-judge)")
+    if args.max_prompts:
+        print(f"Limiting full validation to {args.max_prompts} prompts")
+    # Agent is needed for phases that interact with the real bot
+    use_agent = phase in [TestPhase.MCP, TestPhase.FULL, TestPhase.OV, TestPhase.ALL]
+    validator = BrandonBotValidator(
+        use_judge=not args.no_judge,
+        use_agent=use_agent
+    )
     session = await validator.run_validation(phase, args.max_prompts)
-    
     csv_path = validator.export_results(args.output)
-    
     validator.print_summary()
-    
     print(f"\nResults saved to: {csv_path}")
-
+    if args.output:
+        print(f"Output directory: {os.path.abspath(args.output)}")
 
 if __name__ == "__main__":
     asyncio.run(main())

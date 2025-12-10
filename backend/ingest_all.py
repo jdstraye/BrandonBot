@@ -176,7 +176,7 @@ async def ingest_fec_from_files(weaviate: WeaviateManager, data_dir: str,
 
 
 async def ingest_standard_collections(weaviate: WeaviateManager, data_dir: str,
-                                       chunk_size: int, overlap: int) -> dict:
+                                       chunk_size: int = 128, overlap: int = 50) -> dict:
     """Ingest Brandon Platform, Party Platforms, and Previous Q&A"""
     stats = {"docs": 0, "chunks": 0}
     
