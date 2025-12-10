@@ -1,70 +1,139 @@
 # BrandonBot Project
 
 ## Overview
-BrandonBot is an open-source, RAG-based AI chatbot for a political candidate, designed to answer questions about Brandon's political positions. Its core features include a 5-tier confidence system, zero API costs, and a commitment to transparent, accurate information reflecting Brandon's stated views, all while leveraging marketing principles for effective communication. The project is a Replit-native application, emphasizing open-source components and local inference for cost-efficiency and performance.
+BrandonBot is an open-source, LLM-first agentic chatbot for a political candidate, designed to answer questions about Brandon's political positions. The system uses multi-provider LLM support with automatic failover, trust-based knowledge separation, and comprehensive intent/escalation detection for optimal user experience.
 
 ## User Preferences
 I prefer iterative development with clear, concise communication. When making changes, please explain the "why" behind them, not just the "what." I value performance and cost-efficiency. Do not make changes to the `replit.md` file without explicit instruction.
 
 ## System Architecture
-The system employs a FastAPI backend, an embedded Weaviate vector database, and a CPU-optimized Phi-3 Mini ONNX model for local inference. Embeddings are generated using Sentence-Transformers, and interaction logs are stored in SQLite. The frontend is built with vanilla HTML/CSS/JS.
 
-**Key Architectural Decisions & Features:**
--   **4-Stage Multi-Dimensional RAG Pipeline**: Dynamically adapts based on context and confidence, encompassing Question Analysis, Multi-Source Retrieval, Enhanced Response Generation, and Response Delivery.
--   **Retrieval-First Architecture**: Ensures consistent confidence evaluation by routing all questions through a retrieve → build context → Phi-3 generation path.
--   **RAG Pipeline Refactored**: Separates content search (BrandonPlatform, PreviousQA, PartyPlatform) from style guidance (MarketGurus), applying style only when content confidence is high.
--   **Smart Boundary-Aware Chunking**: Optimizes document ingestion for efficient retrieval.
--   **Trust Multiplier System**: Calculates response confidence as `Similarity × Trust Factor`.
--   **3-Tier Knowledge Base (Weaviate Collections)**: Organizes information into BrandonPlatform (1.0x trust), PreviousQA (1.0x trust), and PartyPlatform (0.6x trust).
--   **Marketing-Guided Communication**: Influences communication style using copywriting principles from the MarketGurus collection, adapted to question analysis and prospect awareness levels.
--   **Character-Breaking Behavior**: The bot maintains character for high-confidence policy questions but can break character for specific scenarios like comparisons, recent events, or low-confidence responses.
--   **Question Type Detection**: Identifies and frames responses for six types: comparison, statistics, truth-seeking, recent_event, policy, and low_confidence.
--   **Callback System**: Offers personal callbacks for low-confidence answers and scenarios requiring external search.
--   **Privacy-First**: Implements opt-in logging for ethical data collection.
--   **CPU-Optimized**: Designed to run efficiently in CPU-only environments using INT4 quantized models.
+### LLM-First Multi-Provider Architecture (Nov 27, 2025)
+The system uses an LLM-first agentic architecture with 5 commercial LLM providers (free tiers):
+
+**Provider Priority (highest to lowest):**
+1. Nvidia NIM (90) - 5 models (Llama-4-Maverick, Llama-4-Scout, DeepSeek-R1, Llama-3.3, Qwen2.5)
+2. Google Gemini (80) - 2 models (2.0-flash, 2.5-flash)
+3. Mistral AI (60) - 4 models (large, medium, small, pixtral)
+4. Cohere (55) - 3 models (command-a-03-2025, command-r-plus, command-r)
+5. HuggingFace (50) - 3 models (Qwen2.5-72B, DeepSeek-V3, Kimi-K2)
+
+**Key Features:**
+- **Session-Sticky Model Selection**: One model per conversation, switches only on failure
+- **Automatic Failover**: Rate limits/errors trigger switch to next provider
+- **Unified Interface**: All providers normalized to OpenAI-compatible interface
+- **Performance Tracking**: SQLite logs provider, model, latency, success rate, tokens
+
+### Core Components
+
+**Backend (FastAPI):**
+- `llm_providers.py` - Multi-provider LLM manager with failover
+- `agent_orchestrator.py` - LLM-first agentic pipeline with tool calling
+- `intent_detector.py` - Intent detection and escalation detection
+- `security.py` - Input sanitization and rate limiting
+- `agent_tools.py` - Tool definitions and schemas
+- `weaviate_manager.py` - Embedded vector database integration
+- `database.py` - SQLite for interactions, callbacks, model performance
+
+### Trust-Based Knowledge Separation
+
+**Authoritative Sources (Trust 1.0):**
+- BrandonPlatform: Brandon's official statements and platform
+- PreviousQA: Verified Q&A responses
+
+**Supplementary Sources (Trust 0.6):**
+- PartyPlatform: Republican and Independent platform context
+- Clearly labeled as "party position" NOT Brandon's views
+
+**Style Guidance (Trust 0.8):**
+- MarketGurus: Copywriting principles for effective communication
+
+### Intent Detection System
+Detects underlying user intent beyond surface questions:
+- `funding_sources` - "How will you pay for that?"
+- `verification` - "Is that really true?"
+- `scripture` - Faith/values-based questions
+- `personal_values` - Moral/ethical questions
+- `practical_impact` - "How does this affect me?"
+- `comparison` - Candidate/party comparisons
+- Plus: volunteer, donate, contact, timeline, etc.
+
+### Escalation Detection
+Monitors conversation patterns for frustration:
+- Frustration indicators (repeated questions, strong punctuation)
+- Urgency signals (need to talk to someone, time-sensitive)
+- Automatically offers callbacks when escalation detected
+
+### Security Features
+- Input sanitization (XSS, SQL injection, prompt injection)
+- Rate limiting per session (30 queries/minute, 5 web searches/minute)
+- Callback rate limiting (3 requests per 5 minutes)
+
+## API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | System health with provider status |
+| `/api/query` | POST | Main chat endpoint (rate limited) |
+| `/api/callback` | POST | Request callback (rate limited) |
+| `/api/consent` | POST | Update privacy consent |
+| `/api/stats` | GET | Usage statistics |
+| `/api/model-stats` | GET | Model performance metrics |
+| `/api/volunteer` | POST | Volunteer registration |
+
+## Environment Variables (Secrets)
+
+Required API keys:
+- `GOOGLE_API_KEY` - Gemini API
+- `MISTRAL_API_KEY` - Mistral AI
+- `COHERE_API_KEY` - Cohere
+- `HUGGINGFACE_API_KEY` - HuggingFace Inference
+- `REPLICATE_API_TOKEN` - Replicate
+- `Z_API_KEY` - Z.ai (Zhipu)
+- `NVIDIA_API_KEY_*` - 5 keys for different Nvidia models
 
 ## External Dependencies
--   **FastAPI**: Python web framework for the backend.
--   **Weaviate Embedded**: Local, embedded vector database for knowledge storage.
--   **Phi-3 Mini ONNX Runtime**: Local large language model for inference.
--   **Sentence-Transformers**: Used for generating text embeddings.
--   **SQLite**: Database for logging user interactions.
--   **DuckDuckGo Web Search**: Integrated for external search capabilities.
--   **OpenAI API (Planned)**: Future integration for enhanced performance and quality.
+- **FastAPI**: Python web framework
+- **Weaviate Embedded**: Local vector database
+- **Sentence-Transformers**: Text embeddings (all-MiniLM-L6-v2)
+- **SQLite**: Interaction and performance logging
+- **DuckDuckGo Search**: External web search
+- **OpenAI/httpx**: Provider API clients
 
-## Recent Changes & Known Issues (Nov 22, 2025)
+## File Structure
+```
+backend/
+├── main.py              # FastAPI app with routes
+├── llm_providers.py     # Multi-provider LLM manager
+├── agent_orchestrator.py# Agentic pipeline with tools
+├── intent_detector.py   # Intent and escalation detection
+├── security.py          # Input sanitization, rate limiting
+├── agent_tools.py       # Tool definitions
+├── weaviate_manager.py  # Vector database
+├── database.py          # SQLite operations
+├── web_search_service.py# DuckDuckGo integration
+└── query_expansion.py   # Question type detection
 
-### Production Issue: Phi-3 Performance Degradation
-**Status**: Active issue in Replit shared development environment
+frontend/
+├── index.html           # Chat interface
+├── style.css            # Styling
+└── app.js              # Frontend logic
+```
 
-**Symptoms**:
-- Phi-3 generates only 1 token per 60-90 seconds (vs expected 10-30 tokens/sec)
-- All queries timeout and show fallback message despite high retrieval confidence (70-80%)
-- Users see: "I'm having trouble generating a complete response. Would you like Brandon to call you back?"
+## Recent Changes (Nov 27, 2025)
+- Completed slot-based round-robin architecture: 9 API key slots across 5 providers, managing 17 unique models
+- Removed Z.ai provider (no free tier available)
+- Removed Replicate provider (no free tier available)
+- Fixed Nvidia Maverick with correct API key (NVIDIA_LLAMA4_128e)
+- Added Kimi K2 to HuggingFace slot (moonshotai/Kimi-K2-Instruct)
+- All 9/9 slots operational (100% success rate)
+- Session-sticky model selection with automatic failover on rate limits/errors
 
-**Root Cause**: 
-- CPU starvation due to resource contention in Replit's shared infrastructure
-- Load average: 20.3 on 6 cores (extreme CPU contention)
-- Python process competing with other Repls for CPU time
-
-**Temporary Workarounds Applied**:
-1. **ONNX Thread Limits** (Environment Variables):
-   - `OMP_NUM_THREADS=4` - Limits OpenMP threads
-   - `ORT_INTRA_OP_NUM_THREADS=4` - ONNX Runtime internal parallelism
-   - `ORT_INTER_OP_NUM_THREADS=1` - Prevents operator-level parallelism
-   - **Effect**: Reduced CPU usage from 220% → 109%, but speed issue persists
-   - **Note**: These should be removed when self-hosting on dedicated hardware
-
-2. **60-Second Timeout Safeguard** (`backend/phi3_client.py`):
-   - Prevents infinite generation loops using `time.monotonic()` wall-clock timer
-   - Aborts generation after 60 seconds and returns graceful fallback message
-   - Returns structured error flags: `truncated`, `error` for debugging
-   - Logs timing information for performance monitoring
-
-**Solutions**:
-- **Short-term**: Migrate to commercial LLM API (OpenAI/Gemini) - see `COMMERCIALAI_MIGRATION.md`
-- **Long-term**: Self-host on dedicated hardware - see `SELF_HOSTING.md`
-
-### Documentation Files
-- **COMMERCIALAI_MIGRATION.md**: Complete guide for migrating from Phi-3 to OpenAI or Google Gemini API
-- **SELF_HOSTING.md**: Instructions for running BrandonBot on Debian 13 or other dedicated hardware
+## Historical Changes (Nov 26, 2025)
+- Migrated from Phi-3 local inference to multi-provider LLM architecture
+- Added 7 LLM providers with automatic failover
+- Implemented intent detection separate from question type
+- Added escalation detection for frustrated users
+- Added security hardening (sanitization, rate limiting)
+- Added model performance tracking in database
+- Removed dual deployment mode (now API-based only)

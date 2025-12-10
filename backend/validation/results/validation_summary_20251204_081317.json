@@ -1,0 +1,55 @@
+{
+  "session_id": "val_20251204_080907",
+  "phase": "full",
+  "started_at": "2025-12-04T08:09:07.035677",
+  "total_tests": 13,
+  "passed": 2,
+  "failed": 11,
+  "pass_rate": 0.15384615384615385,
+  "average_scores": {
+    "clarity": 3.6923076923076925,
+    "empathy": 2.923076923076923,
+    "accuracy": 3.3846153846153846,
+    "engagement": 3.5384615384615383,
+    "tone": 3.5384615384615383,
+    "alignment": 2.1538461538461537
+  },
+  "by_category": {
+    "A_VAGUE": {
+      "total": 3,
+      "passed": 0,
+      "failed": 3,
+      "avg_clarity": 5.0,
+      "avg_empathy": 4.333333333333333,
+      "avg_accuracy": 5.0,
+      "avg_engagement": 5.0,
+      "avg_tone": 5.0,
+      "avg_alignment": 3.0,
+      "pass_rate": 0.0
+    },
+    "B_BIO": {
+      "total": 7,
+      "passed": 0,
+      "failed": 7,
+      "avg_clarity": 4.714285714285714,
+      "avg_empathy": 3.5714285714285716,
+      "avg_accuracy": 4.142857142857143,
+      "avg_engagement": 4.428571428571429,
+      "avg_tone": 4.428571428571429,
+      "avg_alignment": 2.7142857142857144,
+      "pass_rate": 0.0
+    },
+    "VAGUE_LOOP": {
+      "total": 3,
+      "passed": 2,
+      "failed": 1,
+      "avg_clarity": 0.0,
+      "avg_empathy": 0.0,
+      "avg_accuracy": 0.0,
+      "avg_engagement": 0.0,
+      "avg_tone": 0.0,
+      "avg_alignment": 0.0,
+      "pass_rate": 0.6666666666666666
+    }
+  }
+}

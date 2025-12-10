@@ -1,0 +1,249 @@
+{
+  "session_id": "val_20251203_040451",
+  "phase": "all",
+  "started_at": "2025-12-03T04:04:51.199427",
+  "total_tests": 191,
+  "passed": 13,
+  "failed": 0,
+  "pass_rate": 0.06806282722513089,
+  "average_scores": {
+    "intent": 0.0,
+    "tone": 0.0,
+    "fec": 0.0,
+    "safety": 0.0,
+    "tool": 0.0
+  },
+  "by_category": {
+    "PQ": {
+      "total": 6,
+      "passed": 6,
+      "failed": 0,
+      "avg_intent": 0.0,
+      "avg_tone": 0.0,
+      "avg_fec": 0.0,
+      "avg_safety": 0.0,
+      "avg_tool": 0.0,
+      "pass_rate": 1.0
+    },
+    "OV_UNIT": {
+      "total": 4,
+      "passed": 4,
+      "failed": 0,
+      "avg_intent": 0.0,
+      "avg_tone": 0.0,
+      "avg_fec": 0.0,
+      "avg_safety": 0.0,
+      "avg_tool": 0.0,
+      "pass_rate": 1.0
+    },
+    "A_VAGUE": {
+      "total": 3,
+      "passed": 0,
+      "failed": 0,
+      "avg_intent": 0.0,
+      "avg_tone": 0.0,
+      "avg_fec": 0.0,
+      "avg_safety": 0.0,
+      "avg_tool": 0.0,
+      "pass_rate": 0.0
+    },
+    "B_BIO": {
+      "total": 10,
+      "passed": 0,
+      "failed": 0,
+      "avg_intent": 0.0,
+      "avg_tone": 0.0,
+      "avg_fec": 0.0,
+      "avg_safety": 0.0,
+      "avg_tool": 0.0,
+      "pass_rate": 0.0
+    },
+    "C_POLICY": {
+      "total": 35,
+      "passed": 0,
+      "failed": 0,
+      "avg_intent": 0.0,
+      "avg_tone": 0.0,
+      "avg_fec": 0.0,
+      "avg_safety": 0.0,
+      "avg_tool": 0.0,
+      "pass_rate": 0.0
+    },
+    "D_TRANSACTIONAL": {
+      "total": 12,
+      "passed": 0,
+      "failed": 0,
+      "avg_intent": 0.0,
+      "avg_tone": 0.0,
+      "avg_fec": 0.0,
+      "avg_safety": 0.0,
+      "avg_tool": 0.0,
+      "pass_rate": 0.0
+    },
+    "E_SAFETY": {
+      "total": 4,
+      "passed": 0,
+      "failed": 0,
+      "avg_intent": 0.0,
+      "avg_tone": 0.0,
+      "avg_fec": 0.0,
+      "avg_safety": 0.0,
+      "avg_tool": 0.0,
+      "pass_rate": 0.0
+    },
+    "F_DIFFERENTIATION": {
+      "total": 12,
+      "passed": 0,
+      "failed": 0,
+      "avg_intent": 0.0,
+      "avg_tone": 0.0,
+      "avg_fec": 0.0,
+      "avg_safety": 0.0,
+      "avg_tool": 0.0,
+      "pass_rate": 0.0
+    },
+    "G_CRYPTO": {
+      "total": 6,
+      "passed": 0,
+      "failed": 0,
+      "avg_intent": 0.0,
+      "avg_tone": 0.0,
+      "avg_fec": 0.0,
+      "avg_safety": 0.0,
+      "avg_tool": 0.0,
+      "pass_rate": 0.0
+    },
+    "H_LOCAL": {
+      "total": 13,
+      "passed": 0,
+      "failed": 0,
+      "avg_intent": 0.0,
+      "avg_tone": 0.0,
+      "avg_fec": 0.0,
+      "avg_safety": 0.0,
+      "avg_tool": 0.0,
+      "pass_rate": 0.0
+    },
+    "I_PERSONAL": {
+      "total": 12,
+      "passed": 0,
+      "failed": 0,
+      "avg_intent": 0.0,
+      "avg_tone": 0.0,
+      "avg_fec": 0.0,
+      "avg_safety": 0.0,
+      "avg_tool": 0.0,
+      "pass_rate": 0.0
+    },
+    "J_TRUST": {
+      "total": 7,
+      "passed": 0,
+      "failed": 0,
+      "avg_intent": 0.0,
+      "avg_tone": 0.0,
+      "avg_fec": 0.0,
+      "avg_safety": 0.0,
+      "avg_tool": 0.0,
+      "pass_rate": 0.0
+    },
+    "K_FAITH": {
+      "total": 3,
+      "passed": 0,
+      "failed": 0,
+      "avg_intent": 0.0,
+      "avg_tone": 0.0,
+      "avg_fec": 0.0,
+      "avg_safety": 0.0,
+      "avg_tool": 0.0,
+      "pass_rate": 0.0
+    },
+    "L_FOLLOWUP": {
+      "total": 7,
+      "passed": 0,
+      "failed": 0,
+      "avg_intent": 0.0,
+      "avg_tone": 0.0,
+      "avg_fec": 0.0,
+      "avg_safety": 0.0,
+      "avg_tool": 0.0,
+      "pass_rate": 0.0
+    },
+    "M_EDGE_CASES": {
+      "total": 16,
+      "passed": 0,
+      "failed": 0,
+      "avg_intent": 0.0,
+      "avg_tone": 0.0,
+      "avg_fec": 0.0,
+      "avg_safety": 0.0,
+      "avg_tool": 0.0,
+      "pass_rate": 0.0
+    },
+    "N_DEMOGRAPHICS": {
+      "total": 8,
+      "passed": 0,
+      "failed": 0,
+      "avg_intent": 0.0,
+      "avg_tone": 0.0,
+      "avg_fec": 0.0,
+      "avg_safety": 0.0,
+      "avg_tool": 0.0,
+      "pass_rate": 0.0
+    },
+    "O_ECONOMIC": {
+      "total": 8,
+      "passed": 0,
+      "failed": 0,
+      "avg_intent": 0.0,
+      "avg_tone": 0.0,
+      "avg_fec": 0.0,
+      "avg_safety": 0.0,
+      "avg_tool": 0.0,
+      "pass_rate": 0.0
+    },
+    "P_ARIZONA_SPECIFIC": {
+      "total": 7,
+      "passed": 0,
+      "failed": 0,
+      "avg_intent": 0.0,
+      "avg_tone": 0.0,
+      "avg_fec": 0.0,
+      "avg_safety": 0.0,
+      "avg_tool": 0.0,
+      "pass_rate": 0.0
+    },
+    "Q_GOVERNMENT_INTEGRITY": {
+      "total": 5,
+      "passed": 0,
+      "failed": 0,
+      "avg_intent": 0.0,
+      "avg_tone": 0.0,
+      "avg_fec": 0.0,
+      "avg_safety": 0.0,
+      "avg_tool": 0.0,
+      "pass_rate": 0.0
+    },
+    "R_SOCIAL_DOMESTIC": {
+      "total": 10,
+      "passed": 0,
+      "failed": 0,
+      "avg_intent": 0.0,
+      "avg_tone": 0.0,
+      "avg_fec": 0.0,
+      "avg_safety": 0.0,
+      "avg_tool": 0.0,
+      "pass_rate": 0.0
+    },
+    "VAGUE_LOOP": {
+      "total": 3,
+      "passed": 3,
+      "failed": 0,
+      "avg_intent": 0.0,
+      "avg_tone": 0.0,
+      "avg_fec": 0.0,
+      "avg_safety": 0.0,
+      "avg_tool": 0.0,
+      "pass_rate": 1.0
+    }
+  }
+}

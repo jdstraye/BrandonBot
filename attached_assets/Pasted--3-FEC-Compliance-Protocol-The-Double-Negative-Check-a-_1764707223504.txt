@@ -1,0 +1,18 @@
+         3. FEC Compliance Protocol (The Double-Negative Check)
+             a. This is a two-step process conducted by the Orchestrator using a Small LLM Classifier (e.g., a 1B−2B model) for speed.
+                 1. Step 1: Retrieval of Relevant Violations (RAG)
+                    ◦ The Orchestrator queries the dedicated FEC Prohibited Statements RAG Collection using the final LLM Answer as the query.
+                    ◦ RAG Query: The system asks, "Based on this final answer: [LLM Final Answer], retrieve all similar or relevant prohibited statements from our compliance documents."
+                    ◦ RAG Output: The system retrieves the top N most similar prohibited chunks (e.g., "Do not offer legal or tax advice," "All fundraising appeals must include a paid-for-by disclaimer," etc.).
+                 2. Step 2: Binary Violation Classification (Small LLM)
+                    ◦ The Orchestrator sends the retrieved compliance rules and the LLM's final answer to the small, fast classifier.
+                    ◦ Classifier Prompt: 
+                        ▪ "You are a Compliance Auditor. Your task is to check the Final Answer against the Prohibited Rules. Final Answer: [LLM's Proposed Output] Prohibited Rules: [Retrieved FEC Chunks]”
+                        ▪ “Does the Final Answer, in its entirety, constitute a VIOLATION of any of the rules provided? Your response must be a single word: YES or NO."
+                    ◦ This is a high-confidence classification task that an SLM can execute very quickly and reliably because the relevant rules are explicitly retrieved and provided in the prompt context.
+         4. Remediation and Logging
+             a. If the Small LLM classifier returns VIOLATION (YES):
+                 1. Block: The Orchestrator blocks the response from reaching the user.
+                 2. Log: The system logs the entire transaction: the original query, the final output, the retrieved prohibited rule, and the reason for failure. This creates an audit trail for the compliance team.
+                 3. Remediate: The Orchestrator sends the violation back to the main LLM allowing for a clean-up (e.g., stripping specific phrases) or, for high-severity violations, send a safe, canned response like, "That topic falls under strict campaign finance regulations. Please refer to the official campaign website's legal page for guidance," and flag the incident for human review.
+                 4. This structure ensures that legal compliance is treated as a hard rule enforced by deterministic lookups and high-confidence classification, providing a necessary layer of safety for your political agent.

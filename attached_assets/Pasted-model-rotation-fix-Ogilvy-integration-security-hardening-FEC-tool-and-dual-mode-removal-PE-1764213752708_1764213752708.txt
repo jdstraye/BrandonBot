@@ -1,0 +1,15 @@
+model rotation fix, Ogilvy integration, security hardening, FEC tool, and dual-mode removal)? 
+
+PENDING
+- In the prior RAG-first architecture, we calculated confidence as trust * similarity. We need to do something similar in LLM-first. Not all data sources are the same. Things in BrandonPlatform and PreviousQA are very solid and should be trusted, but things in PartyPlatform may not actually represent Brandon's views. brandonsowers.com should also be fairly well-trusted while other internet sources should not be trusted when representing Brandon's perspective.
+- Do we really want to be telling the LLM the WORKFLOW, or should we just let it call tools in the order it sees fit?
+- Instead of offering to have Brandon call them back, offer for someone from the team to call back.
+- What should we do to improve security, e.g., sanitize all inputs to prevent injection attacks (e.g., SQL, XSS), rate limit some tools (like web_search)?
+- I am concerned that the current logging is insufficient to debug where a conversation broke down or where bottlenecks are. Perhaps we should consider structured logging, database storage, and tracing.
+- I want to do everything possible to avoid hallucinations. Some ideas:
+   - Should we implement confidence thresholds to avoid hallucinations? For example, if the LLM's confidence in its answer is low (e.g., based on internal metrics or a "confidence score" from the LLM), the orchestrator should prompt the LLM to verify. 
+   - Should we add explicit instructions in the system prompt telling the LLM to always verify recent information with tools.
+   - Do we need to implement a tool, check_fec_rules(), to make sure any answers are not violating campaign laws or if the user asks regulatory questions, like “how much can I donate?”
+   - If the question is vague, it would be good for the LLM to prompt the user for more details, especially if we have specific content to deliver but don’t want to overwhelm the user.
+   - If the question is sensitive, should we insist on a callback to put a human in the loop?
+   - Should we implement a tool (e.g., analyze_user_intent) to classify the user's intent before answering. If the intent is unclear, the LLM should ask for clarification or use a tool to fetch relevant policy details. We want to avoid answering a question that wasn’t asked or missing the point of the question, such as answering “how is Brandon proposing to fund X” with “X is designed to be cost-effective.” To implement Intent Detection, we could use a pre-processing tool

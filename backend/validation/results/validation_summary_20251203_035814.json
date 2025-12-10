@@ -1,0 +1,29 @@
+{
+  "session_id": "val_20251203_035758",
+  "phase": "ov",
+  "started_at": "2025-12-03T03:57:58.177127",
+  "total_tests": 4,
+  "passed": 2,
+  "failed": 2,
+  "pass_rate": 0.5,
+  "average_scores": {
+    "intent": 0.0,
+    "tone": 0.0,
+    "fec": 0.0,
+    "safety": 0.0,
+    "tool": 0.0
+  },
+  "by_category": {
+    "OV_UNIT": {
+      "total": 4,
+      "passed": 2,
+      "failed": 2,
+      "avg_intent": 0.0,
+      "avg_tone": 0.0,
+      "avg_fec": 0.0,
+      "avg_safety": 0.0,
+      "avg_tool": 0.0,
+      "pass_rate": 0.5
+    }
+  }
+}

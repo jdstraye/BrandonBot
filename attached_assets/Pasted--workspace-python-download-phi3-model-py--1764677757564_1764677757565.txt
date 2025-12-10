@@ -1,0 +1,41 @@
+~/workspace$ python download_phi3_model.py 
+======================================================================
+Downloading Phi-3 Mini ONNX Model (CPU-Optimized, INT4 Quantized)
+======================================================================
+Model: microsoft/Phi-3-mini-4k-instruct-onnx
+Size: ~2GB (INT4 quantized)
+Target: ./backend/phi3_model
+
+Installing huggingface-cli if needed...
+Downloading model files (this may take 5-10 minutes)...
+
+⚠️  Warning: 'huggingface-cli download' is deprecated. Use 'hf download' instead.
+Fetching 10 files:   0%|                                                       | 0/10 [00:00<?, ?it/s]Downloading 'cpu_and_mobile/cpu-int4-rtn-block-32-acc-level-4/phi3-mini-4k-instruct-cpu-int4-rtn-block-32-acc-level-4.onnx' to 'backend/phi3_model/.cache/huggingface/download/cpu_and_mobile/cpu-int4-rtn-block-32-acc-level-4/mkw8dqRh0YVrNOvtQ6G3r5Cx07E=.385cd1b908a0d2f8634e86d30236f6dbb7ae660eb3943fd1ef5bdc3847326480.incomplete'
+Downloading 'cpu_and_mobile/cpu-int4-rtn-block-32-acc-level-4/phi3-mini-4k-instruct-cpu-int4-rtn-block-32-acc-level-4.onnx.data' to 'backend/phi3_model/.cache/huggingface/download/cpu_and_mobile/cpu-int4-rtn-block-32-acc-level-4/M3NJtgK1WYy-uNnsBnid7_Tce3U=.5db30ce699aee1123cf9045742488db5928006fa618a42cb3c0840322a85ad0f.incomplete'
+cpu_and_mobile/cpu-int4-rtn-block-32-acc(…): 100%|██████████████████| 231k/231k [00:00<00:00, 397kB/s]
+Download complete. Moving file to backend/phi3_model/cpu_and_mobile/cpu-int4-rtn-block-32-acc-level-4/phi3-mini-4k-instruct-cpu-int4-rtn-block-32-acc-level-4.onnx              | 0.00/2.72G [00:00<?, ?B/s]
+cpu_and_mobile/cpu-int4-rtn-block-32-acc(…): 100%|████████████████| 2.72G/2.72G [00:13<00:00, 199MB/s]
+Download complete. Moving file to backend/phi3_model/cpu_and_mobile/cpu-int4-rtn-block-32-acc-level-4/phi3-mini-4k-instruct-cpu-int4-rtn-block-32-acc-level-4.onnx.data█| 2.72G/2.72G [00:13<00:00, 133MB/s]
+Fetching 10 files: 100%|██████████████████████████████████████████████| 10/10 [00:13<00:00,  1.39s/it]
+/home/runner/workspace/backend/phi3_model
+Moving model files to root directory...
+
+======================================================================
+✓ Phi-3 model downloaded successfully!
+======================================================================
+~/workspace$ ls b
+backend/                      brandonbot_conversations.csv  
+~/workspace$ ls b
+backend/                      brandonbot_conversations.csv  
+~/workspace$ ls backend/phi3_model/
+added_tokens.json
+config.json
+configuration_phi3.py
+cpu_and_mobile
+genai_config.json
+phi3-mini-4k-instruct-cpu-int4-rtn-block-32-acc-level-4.onnx
+phi3-mini-4k-instruct-cpu-int4-rtn-block-32-acc-level-4.onnx.data
+special_tokens_map.json
+tokenizer_config.json
+tokenizer.json
+tokenizer.model

@@ -1,6 +1,8 @@
 let userId = localStorage.getItem('userId') || generateUserId();
-let consentGiven = localStorage.getItem('consentGiven') === 'true';
+let loggingConsentGiven = localStorage.getItem('loggingConsentGiven') === 'true';
+let aiDisclosureAccepted = localStorage.getItem('aiDisclosureAccepted') === 'true';
 let currentQuestion = '';
+let conversationHistory = [];
 
 function generateUserId() {
     const id = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
@@ -8,25 +10,81 @@ function generateUserId() {
     return id;
 }
 
-if (consentGiven) {
-    document.getElementById('consent-banner').style.display = 'none';
+function initConsentModal() {
+    const consentModal = document.getElementById('consent-modal');
+    const aiCheckbox = document.getElementById('ai-consent-checkbox');
+    const continueBtn = document.getElementById('consent-continue-btn');
+    
+    if (!consentModal) {
+        console.log('Consent modal element not found');
+        enableChat();
+        return;
+    }
+    
+    if (aiDisclosureAccepted) {
+        consentModal.style.display = 'none';
+        enableChat();
+    } else {
+        consentModal.style.display = 'flex';
+        disableChat();
+    }
+    
+    if (aiCheckbox && continueBtn) {
+        aiCheckbox.addEventListener('change', function() {
+            continueBtn.disabled = !this.checked;
+        });
+    }
 }
 
-async function handleConsent(consent) {
-    consentGiven = consent;
-    localStorage.setItem('consentGiven', consent);
-    document.getElementById('consent-banner').style.display = 'none';
+function disableChat() {
+    const queryInput = document.getElementById('query-input');
+    const sendBtn = document.getElementById('send-btn');
+    queryInput.disabled = true;
+    queryInput.placeholder = 'Please accept the terms above to continue...';
+    sendBtn.disabled = true;
+}
+
+function enableChat() {
+    const queryInput = document.getElementById('query-input');
+    const sendBtn = document.getElementById('send-btn');
+    queryInput.disabled = false;
+    queryInput.placeholder = 'Type your question...';
+    sendBtn.disabled = false;
+}
+
+async function handleConsentSubmit() {
+    const aiCheckbox = document.getElementById('ai-consent-checkbox');
+    const loggingCheckbox = document.getElementById('logging-consent-checkbox');
+    
+    if (!aiCheckbox.checked) {
+        return;
+    }
+    
+    aiDisclosureAccepted = true;
+    loggingConsentGiven = loggingCheckbox.checked;
+    
+    localStorage.setItem('aiDisclosureAccepted', 'true');
+    localStorage.setItem('loggingConsentGiven', loggingConsentGiven.toString());
+    
+    document.getElementById('consent-modal').style.display = 'none';
+    enableChat();
     
     try {
         await fetch('/api/consent', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user_id: userId, consent_given: consent })
+            body: JSON.stringify({ 
+                user_id: userId, 
+                ai_disclosure_accepted: true,
+                logging_consent_given: loggingConsentGiven 
+            })
         });
     } catch (error) {
         console.error('Failed to update consent:', error);
     }
 }
+
+document.addEventListener('DOMContentLoaded', initConsentModal);
 
 function addMessage(content, isUser = false, data = {}) {
     const messagesDiv = document.getElementById('messages');
@@ -53,13 +111,31 @@ function addMessage(content, isUser = false, data = {}) {
         messageHTML += `</div>`;
     }
     
-    if (!isUser && data.offer_callback) {
+    if (!isUser && data.escalation_level === 'high') {
+        messageHTML += `
+            <div class="escalation-offer">
+                <p><strong>I sense this is important to you.</strong> Would you like someone from Brandon's team to give you a call directly?</p>
+                <button onclick="openCallbackModal()">Yes, please call me</button>
+            </div>
+        `;
+    } else if (!isUser && data.escalation_level === 'medium') {
         messageHTML += `
             <div class="callback-offer">
-                <p><strong>Would you like Brandon to call you back?</strong></p>
+                <p><strong>Would you like to speak with someone from the team?</strong></p>
+                <button onclick="openCallbackModal()">Request a callback</button>
+            </div>
+        `;
+    } else if (!isUser && data.offer_callback) {
+        messageHTML += `
+            <div class="callback-offer">
+                <p><strong>Would you like someone from the team to call you back?</strong></p>
                 <button onclick="openCallbackModal()">Yes, request a callback</button>
             </div>
         `;
+    }
+    
+    if (!isUser) {
+        messageHTML += `<span class="ai-generated-tag">AI-generated response</span>`;
     }
     
     messageHTML += `</div>`;
@@ -67,6 +143,11 @@ function addMessage(content, isUser = false, data = {}) {
     
     messagesDiv.appendChild(messageDiv);
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    
+    conversationHistory.push({
+        role: isUser ? 'user' : 'assistant',
+        content: content
+    });
 }
 
 function escapeHtml(text) {
@@ -96,14 +177,19 @@ async function sendQuery() {
             body: JSON.stringify({
                 query: query,
                 user_id: userId,
-                consent_given: consentGiven
+                logging_consent_given: loggingConsentGiven,
+                conversation_history: conversationHistory.slice(-10)
             })
         });
         
         const data = await response.json();
-        addMessage(data.response, false, data);
+        addMessage(data.response, false, {
+            ...data,
+            escalation_level: data.escalation_level,
+            offer_callback: data.offer_callback
+        });
     } catch (error) {
-        addMessage('Sorry, I encountered an error. Please try again.', false);
+        addMessage('Sorry, I encountered an error. Please try again or request a callback if you need immediate assistance.', false);
         console.error('Error:', error);
     } finally {
         sendBtn.disabled = false;
@@ -124,6 +210,22 @@ function openCallbackModal() {
 
 function closeCallbackModal() {
     document.getElementById('callback-modal').classList.remove('active');
+}
+
+function openVolunteerModal() {
+    document.getElementById('volunteer-modal').classList.add('active');
+}
+
+function closeVolunteerModal() {
+    document.getElementById('volunteer-modal').classList.remove('active');
+}
+
+function openDonateModal() {
+    document.getElementById('donate-modal').classList.add('active');
+}
+
+function closeDonateModal() {
+    document.getElementById('donate-modal').classList.remove('active');
 }
 
 document.getElementById('callback-form').addEventListener('submit', async (e) => {
@@ -153,4 +255,75 @@ document.getElementById('callback-form').addEventListener('submit', async (e) =>
         alert('Failed to submit callback request. Please try again.');
         console.error('Error:', error);
     }
+});
+
+document.getElementById('volunteer-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    
+    const interests = [];
+    document.querySelectorAll('input[name="interests"]:checked').forEach(cb => {
+        interests.push(cb.value);
+    });
+    
+    const formData = {
+        name: document.getElementById('volunteer-name').value,
+        email: document.getElementById('volunteer-email').value,
+        phone: document.getElementById('volunteer-phone').value || '',
+        zip_code: document.getElementById('volunteer-zip').value || '',
+        interests: interests,
+        availability: document.getElementById('volunteer-availability').value || 'flexible'
+    };
+    
+    try {
+        const response = await fetch('/api/volunteer', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(formData)
+        });
+        
+        const data = await response.json();
+        closeVolunteerModal();
+        addMessage(data.message || 'Thank you for volunteering! Someone from the team will be in touch soon.', false);
+        
+        document.getElementById('volunteer-form').reset();
+    } catch (error) {
+        alert('Failed to submit volunteer registration. Please try again.');
+        console.error('Error:', error);
+    }
+});
+
+document.getElementById('donate-interest-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    
+    const formData = {
+        name: document.getElementById('donate-name').value,
+        email: document.getElementById('donate-email').value,
+        phone: document.getElementById('donate-phone').value || '',
+        message: document.getElementById('donate-message').value || ''
+    };
+    
+    try {
+        const response = await fetch('/api/donate-interest', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(formData)
+        });
+        
+        const data = await response.json();
+        closeDonateModal();
+        addMessage(data.message || 'Thank you for your interest in supporting the campaign! Someone from the team will reach out with secure donation options.', false);
+        
+        document.getElementById('donate-interest-form').reset();
+    } catch (error) {
+        alert('Failed to submit donation interest. Please try again.');
+        console.error('Error:', error);
+    }
+});
+
+document.querySelectorAll('.modal').forEach(modal => {
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            modal.classList.remove('active');
+        }
+    });
 });

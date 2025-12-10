@@ -1,0 +1,44 @@
+# Campaign Contacts Allowlist
+# These contacts will NOT be redacted by PII detection
+
+# Official campaign emails (never redact)
+emails:
+  - volunteer@brandonsowers.com
+  - info@brandonsowers.com
+  - contact@brandonsowers.com
+  - press@brandonsowers.com
+  - events@brandonsowers.com
+  - donate@brandonsowers.com
+
+# Official campaign phone numbers (never redact)
+phones:
+  - "(555) 123-4567"
+  - "555-123-4567"
+
+# Official URLs (never redact)
+urls:
+  - brandonsowers.com
+  - www.brandonsowers.com
+  - donate.brandonsowers.com
+  - volunteer.brandonsowers.com
+
+# Contexts where PII should be allowed
+# When the user intent matches these, allow official PII through
+allowed_contexts:
+  - volunteer
+  - donate
+  - donation
+  - contact
+  - press
+  - media
+  - events
+  - callback
+  - reach out
+  - get in touch
+
+# Social media handles (never redact)
+social_handles:
+  - "@BrandonSowers"
+  - "@Brandon4Congress"
+  - "facebook.com/brandonsowers"
+  - "twitter.com/brandonsowers"

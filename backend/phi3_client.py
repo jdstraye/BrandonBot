@@ -17,12 +17,12 @@ class Phi3Client:
 IMPORTANT GUIDELINES:
 - You represent Brandon's views based on his public statements and platform
 - Always strive for accuracy, but acknowledge when you're uncertain
-- If you don't have enough information or confidence is low, offer to have Brandon call back personally
+- If you don't have enough information or confidence is low, offer to have someone from the team call back
 - Keep responses clear, concise, and conversational (like texting)
 - Avoid political jargon when possible
 - For controversial topics, present Brandon's position thoughtfully
 
-DISCLAIMER: While I've been trained on Brandon's positions, I may make mistakes. For critical questions or when I'm unsure, I'll offer to have Brandon contact you personally."""
+DISCLAIMER: While I've been trained on Brandon's positions, I may make mistakes. For critical questions or when I'm unsure, I'll offer to have someone from the team contact you."""
     
     async def ensure_model_ready(self):
         try:
@@ -47,7 +47,7 @@ DISCLAIMER: While I've been trained on Brandon's positions, I may make mistakes.
                 ready = await self.ensure_model_ready()
                 if not ready:
                     return {
-                        "response": "I'm having trouble loading the AI model. Would you like Brandon to call you back?",
+                        "response": "I'm having trouble loading the AI model. Would you like someone from the team to call you back?",
                         "model": "error-model-not-loaded",
                         "error": "Phi-3 model not available"
                     }
@@ -78,16 +78,16 @@ Provide a clear, conversational answer as BrandonBot. Keep it concise (2-4 sente
             logger.info(f"Encoded {len(tokens)} tokens")
             
             params = og.GeneratorParams(self.model)
-            params.input_ids = tokens
             params.set_search_options(
                 max_length=4096,
                 temperature=0.7,
                 top_p=0.9
             )
             
-            logger.info(f"Input tokens: {len(tokens)}, max_length: 4096, available for generation: {4096 - len(tokens)}")
-            
             generator = og.Generator(self.model, params)
+            generator.append_tokens(tokens)
+            
+            logger.info(f"Input tokens: {len(tokens)}, max_length: 4096, available for generation: {4096 - len(tokens)}")
             
             response_text = ""
             token_count = 0
@@ -105,7 +105,6 @@ Provide a clear, conversational answer as BrandonBot. Keep it concise (2-4 sente
                     break
                 
                 try:
-                    generator.compute_logits()
                     generator.generate_next_token()
                     new_tokens = generator.get_next_tokens()
                     
@@ -129,7 +128,7 @@ Provide a clear, conversational answer as BrandonBot. Keep it concise (2-4 sente
             
             if timeout_triggered:
                 return {
-                    "response": "I'm having trouble generating a complete response. Would you like Brandon to call you back?",
+                    "response": "I'm having trouble generating a complete response. Would you like someone from the team to call you back?",
                     "model": "phi-3-mini-onnx",
                     "error": "generation_timeout",
                     "truncated": True
@@ -138,7 +137,7 @@ Provide a clear, conversational answer as BrandonBot. Keep it concise (2-4 sente
             if not response_text.strip():
                 logger.error("Generation produced empty response")
                 return {
-                    "response": "I'm having trouble processing your question right now. Would you like Brandon to call you back?",
+                    "response": "I'm having trouble processing your question right now. Would you like someone from the team to call you back?",
                     "model": "phi-3-mini-onnx",
                     "error": "empty_generation"
                 }
@@ -150,7 +149,7 @@ Provide a clear, conversational answer as BrandonBot. Keep it concise (2-4 sente
         except Exception as e:
             logger.error(f"Failed to generate response: {str(e)}")
             return {
-                "response": "I'm having trouble processing your question right now. Would you like Brandon to call you back?",
+                "response": "I'm having trouble processing your question right now. Would you like someone from the team to call you back?",
                 "model": "error",
                 "error": str(e)
             }

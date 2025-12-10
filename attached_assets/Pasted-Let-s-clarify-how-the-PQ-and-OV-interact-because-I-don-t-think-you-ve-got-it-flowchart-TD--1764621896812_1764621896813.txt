@@ -1,0 +1,207 @@
+Let’s clarify how the PQ and OV interact because I don’t think you’ve got it:
+ 
+
+flowchart TD
+    A[User Message] --> PQ_Start
+
+    subgraph PQ ["Prequalifier (PQ)"]
+        direction TB
+        PQ_Start("Prequalifier (PQ)")
+        PQ1[Rate Limiting]
+        PQ2[Input Sanitization]
+        PQ3[Detect Vagueness]
+        PQ4["Detect Frustration /\nHostility"]
+        PQ5["Enrich Prompt\n• Sanitize input\n• Clarify if vague\n• Acknowledge emotion\n• Offer human escalation"]
+        
+        PQ_Start --> PQ1 & PQ2 & PQ3 & PQ4
+        PQ1 & PQ2 & PQ3 & PQ4 --> PQ5
+    end
+
+    PQ5 --> LLM["Large Language Model\n(LLM)"]
+
+    LLM --> NeedTools{Needs tools?}
+    NeedTools -->|Yes| Tools[Call Tools]
+    Tools --> LLM
+    NeedTools -->|No| Proposed[Proposed Response]
+
+    Proposed --> OV_Start
+
+    subgraph OV ["Output Validator (OV)"]
+        direction TB
+        OV_Start("Output Validator (OV)")
+        OV1[Conforms to FEC rules]
+        OV2[Conforms to campaign legal rules]
+        OV3[Answers user intent]
+        OV4[Does not inflame situation]
+        OV5[PII redacted]
+        OV6[Citations verified]
+        OV_Decision{All passed?}
+
+        OV_Start --> OV1 & OV2 & OV3 & OV4 & OV5 & OV6
+        OV1 & OV2 & OV3 & OV4 & OV5 & OV6 --> OV_Decision
+    end
+
+    OV_Decision -->|No| Reject["REJECT\n+ explanation"]
+    Reject --> LLM
+    OV_Decision -->|Yes| Final[Final Safe Response]
+    Final --> User[Deliver to User]
+
+    %% Styling – now works perfectly
+    classDef pq fill:#fff8e1,stroke:#ff8f00,stroke-width:4px,color:#000
+    classDef ov fill:#ffebee,stroke:#e53935,stroke-width:4px,color:#000
+    classDef llm fill:#e8f5e9,stroke:#43a047,stroke-width:3px
+
+    class PQ pq
+    class OV ov
+    class LLM llm
+The heart of our system  is driven by an LLM that can call tools, but all incoming content from the user first goes through a prequalifier (PQ), performing basic security (e.g., rate limiting and sanitization), searching for vagueness, and detecting frustration/hostility by the user. The PQ uses these diagnoses to modify the prompt to the LLM (e.g., modifying the user's input in the case of sanitization and giving instructions for dealing with the vagueness and/or hostility (from acknowledge the frustration to offer to chat with a human).
+After the LLM does all its tool calls and is satisfied with an answer, that answer goes through an Output Validator (OV). It checks for things like conformity to FEC rules, conformity to campaign legal mandates, that the answer actually answers the intent of the user's question, that the answer does not further inflame a volatile situation, that all PII is redacted, and verifies all citations. If there is a violation, the OV rejects the answer and sends it back to the LLM with an explanation of why it was rejected.
+Prequalifier issues with the current design-
+You have 2 functions that are not needed in the prequalifier:
+    • Classifying into irrelevant intents. There is no need for user_intent in the PQ. That is relevant only for the output validator to confirm the response answers the initial query.
+    • Ogilvy categories. The main  LLM has access to the retrieve_answer_style() tool where this is Ogilvy categories are needed. This should use the SLM.
+Remove them. If we keep one, then it would be the Ogilvy categories to use as a comparison to what retrieve_answer_style() returns when it is called, but it should use an SLM to resolve categorize, not regex patterns.
+
+Missing: Prequalification: Security measures, at least rate limiting and sanitization. You might have them somewhere else in the code, but they should be brought here, imo.
+
+You ignored my directions that regex patterns alone lead to too many false positives, both with frustration/escalation and vagueness.
+Prequalification: frustration and escalation detection
+            ▪ Decision: HYBRID, first pattern matching, but SLM to avoid false positives
+            ▪ How?
+Step	Component	Action	Output to Next Step
+1	Pattern Matching (Rules)	Tags all potential high-risk keywords (e.g., profanity, ALL CAPS, SQLi attempts). DOES NOT BLOCK.	A boolean flag dictionary (e.g., flags = {
+    "profanity": True,
+    "all_caps": False,
+    "repeated_punct": True,
+    "urgent_keywords": False,
+}
+2	Small LLM (SLM) (Reasoning)	Uses the query and the flags to determine the true user intent.	A deterministic decision: 
+PROMPT: “You are a sentiment‑and‑escalation classifier.
+Input message: "{user_message}"
+Flags: {flags}
+Based on the message and the flags, decide whether the user is:
+- "escalate"  → the user is angry, hostile, or demands a human.
+- "continue" → the message is neutral or mildly frustrated, safe to send to the main LLM.
+Respond with a single word: ESCALATE or CONTINUE.”
+
+Prequalification: Vague Questions
+            ▪ Decision: Use a small LLM to adeptly get detail out of the user
+            ▪ Reason: Simple rules miss contextual vagueness (e.g., "What about the economy?" is vague but has nouns). A small LLM (e.g., 1B-2B) is faster, more accurate, and can generate a helpful, polite clarifying question, reducing the chance of a user abandoning the conversation. 
+As I think more about vague question, another option would be if we can judge the output of the RAG match. If there are a lot of low quality results, that indicates vagueness in the question. Therefore, a more detailed instrution for the vagueness detector is:
+
+Step	Component	Action	Output to Next Step
+1	RAG Retrieval
+(How good does the data match)	Retrieves all data related to the query and its similarity scores	The query + a list of dictionaries (e.g., data = [{
+    "confidence": 0-1,
+    “source”: <collection and file from which the data comes>
+    "content": <snippet retrieved from RAG>
+}
+2	Small LLM (SLM) (Reasoning)	Uses the query and the RAG content to guide the LLM.	A deterministic decision: 
+PROMPT: “You are a sentiment‑and‑escalation classifier.
+Input message: "{user_message}"
+Data in RAG: {list of dictionaries}
+Based on the message and the data in the RAG, decide whether the user’s query is clear or vague:
+- "clear"  → the user’s question has clear intent and can be precisely answered.
+- "vague" → the user’s question needs refined. The intent isn’t well-formed or we don’t have a clear answer.
+Respond with a single word: CLEAR or VAGUE.”
+Armed with the classifications of frustration (ESCALATE or CONTINUE) and vagueness (CLEAR or VAGUE), the output of the prequalifier should be fed into the main LLM as follows. 
+
+    • If CLEAR and ESCALATE:
+        ◦ PQ_prompt =
+          ```
+          user query: <user_query>
+          The user is agitated and we don’t have good answers. Acknowledge the frustration and offer to show that you are aiming to help and not to contend by stating ‘would it be helpful if I …<a plan of explanation based on the RAG content and its source>’
+          RAG retrieval: <list of dictionaries>
+          Data from BrandonPlatform and PreviousQA are authoritative based on Brandon’s own words. Data from PartyPlatform is from either the Republican or Independent platforms. Explain to the user whether the help will be directly from Brandon or from one of the party platforms.
+          ```
+    • If VAGUE and CONTINUE:
+        ◦ PQ_prompt = “
+          ```
+          user query: <user_query>
+          The query is vague. Take a couple turns to gently guide the user to a clearer question using relevant parts of Brandon’s platform.
+          list of positions from Brandon’s or the party’s platforms: <list of RAG retrieval dictionaries>
+          ```
+    • VAGUE and ESCALATE: 
+        ◦ PQ prompt = “The user is outraged beyond repair. Explain that you don’t seem to be helping to address what matters most to them. Offer to have a member of the team call them back.”
+    • If CLEAR and CONTINUE:
+        ◦ No PQ prompt needed. Let the user’s query pass without comment.
+
+For the output validation, these are the goals and my rating of the current design-
+1. Intent‑Checking (Hallucination / Drift)
+Desired approach	What the code does	Gap / Recommendation
+SLM classifier that receives (user query + LLM answer) and returns YES/NO (“Does the answer fulfill the query?”)	No classifier – the OutputValidator only looks for dismissive language, empathy, and FEC patterns.	Add a tiny fine‑tuned model (e.g., 2 B‑parameter) that is called with the two strings and emits a binary label. The validator should then pass on or reject the LLM’s answer, explaining to the LLM what the intent of the question was versus what the proposed answer was. 
+Fast, cheap, and prevents re‑running the main LLM.	The current code never re‑queries the main LLM; it only softens tone. 	A classifier would give you that cheap “second opinion”.
+2. Ethics & Morality (Alignment)
+Desired approach	What the code does	Gap / Recommendation
+SLM moral classifier that answers: “Does this conform to Christian moral standards? Does it inspire right action?”	No moral check – only a generic empathy detector and a few tone‑softening rules.	Train or prompt a small model with a moral‑alignment dataset (aligned vs. unaligned campaign rhetoric). The validator can call it after the empathy check and flag tone_issues or lower confidence when the moral score is low. 
+Fine‑tune on campaign‑specific examples.		Build a tiny “Moral Center” dataset (a few hundred examples) and keep it separate from the main knowledge base.
+3. FEC Compliance
+Desired approach	What the code does	Gap / Recommendation
+Zero‑tolerance RAG + double‑negative SLM (retrieve relevant prohibited statements, then binary classification)	FECComplianceChecker does a simple keyword search against a static PROHIBITED_STATEMENTS dict. No RAG, no SLM, no double‑check.	1. Create a dedicated RAG collection of FEC regulations, advisory opinions, and internal prohibited‑phrase memos (chunked by rule).
+2. Query that collection with the final LLM answer.
+3. Feed the retrieved chunks + answer to a small classifier that outputs YES/NO (violation).
+4. If YES, block, log, and optionally ask the main LLM to re‑generate a safe version.
+Deterministic blocking + audit trail	Current code only logs the issue and reduces confidence; it never blocks.		Implement the “block‑and‑log” step as described.
+4. Redaction
+Desired approach	What the code does	Gap / Recommendation
+Hybrid: regex first → SLM for ambiguous PII	No redaction logic at all.	1. Run a fast regex pass for SSNs, phone numbers, API keys, etc.
+2. Pass the remaining text to a tiny LLM that flags any contextual PII (e.g., “My name is John Doe”).
+3. Replace flagged spans with [REDACTED].
+4. Change the status of the content to “modified.”
+28 000× speed advantage for structured patterns. 		The validator can call the regex stage before any other check; if a redaction is needed, set status=MODIFIED and prepend a note.
+5. Citation Verification
+Desired approach	What the code does	Gap / Recommendation
+Anchor injection into source chunks, RAG‑lookup of anchors, regex extraction + metadata validation	No citation handling.	1. When ingesting campaign docs, embed a unique anchor (e.g., [CITE-P3-L15]) in each factual chunk.
+2. When the main LLM is prompted, require it to output those anchors for every factual sentence.
+3. In the OV, extract all anchors with a regex, verify each exists in a metadata store, and flag any sentence lacking an anchor.
+4. lookup-and-confirm the citation is real
+Prevent hallucination of unsupported facts		Forcing citations prevents hallucinations.
+Unfortunately, this exercise brought out a missing component – verifying web retrievals. For that, let’s do this:
+```
+When the main LLM cites a web page, you need a reliable way to prove that the statement actually appears on that page and that the page is a legitimate source. Here’s a practical pipeline:
+Anchor injection at ingestion
+Add storage to perform_web_search. When you retrieve a web article, scrape the HTML, strip formatting, and insert a unique anchor at the start of each factual sentence.
+Example:
+Text
+The candidate supports a $2 trillion infrastructure plan [WEB-2023-09-12-ARTICLE-045].
+Store the anchor together with the URL, the exact sentence, and a short hash of the sentence content in a citation metadata table.
+LLM citation requirement
+In the prompt to the main LLM, include a strict instruction when using perform_web_search():
+```
+Whenever you state a factual claim, append a citation anchor from the provided context,
+e.g. [WEB-2023-09-12-ARTICLE-045]. Do not generate any claim without a valid anchor.
+```
+Verification step in the Output Validator (OV)
+a. Extract anchors – run a regex (\[WEB-[^\]]+\]) on the LLM output.
+b. Lookup – for each anchor, query the citation metadata table. Verify that the anchor exists and that the sentence the LLM produced matches the stored sentence (hash comparison).
+c. Web‑freshness check – because web pages can change, fetch the live page (via a headless browser) and re‑extract the sentence. If the live content differs by more than a small tolerance (e.g., Levenshtein distance > 5 %), treat the citation as unverified.
+If any anchor fails lookup or freshness, the OV sets status = WARNING (or BLOCKED for high‑severity) and returns a message like:
+```
+The statement “…” could not be verified against the source [WEB-2023-09-12-ARTICLE-045].
+Please ask for clarification or provide a different source.
+```
+Overall Architecture Snapshot
+Component	Current implementation	Desired implementation (per instructions)
+PQ	Does intent, frustration, Ogilvy, vagueness, and frustration with regexes. Does NOT do security.	Intent and Ogilvy are not needed. Security needs added. Vagueness and frustration should be kept, but they need an SLM‑based classifier added to avoid false positives.
+Output validation	OutputValidator checks tone, empathy, FEC keywords, adds de‑escalation prefixes, and logs issues. Does NOT do redaction	Implement hybrid redaction. Replace/extend with RAG‑based FEC lookup + SLM binary classifier, moral SLM, intent SLM, citation regex + metadata lookup.
+SLM usage	None (except the docstring mention).	Central to every validation step: intent, ethics, FEC double‑negative, and optional redaction confirmation.
+Blocking / remediation	Only reduces confidence; no automatic block for bad output messages.	Implement hard block and feedback to primary LLM for FEC violations, bad citations, and bad moral direction. Add to the DB as needing human review.
+Logging / audit 	 Basic logger. warning for FEC issues.	 Expand logging to capture query → answer → retrieved rule → classifier decision for full compliance trace.
+Quick “What to Add” Checklist
+    • Small LLM classifiers
+        ◦ OV - Intent checker (query + answer → YES/NO)
+        ◦ OV - Moral/alignment checker (answer → aligned?)
+        ◦ OV - FEC binary classifier (uses retrieved prohibited chunks)
+    • RAG usage
+        ◦ PQ - vagueness
+        ◦ OV - FEC Compliance
+        ◦ OV - citation verification
+            ▪ Anchor injection during ingestion.
+            ▪ Regex extraction + metadata lookup in validator.
+    • Hybrid redaction
+        ◦ OV - Regex → SLM fallback → replace with [REDACTED].
+    • Hard blocking & audit
+        ◦ OV - when any validator returns a failure, block the response from reaching the user, log everything, and request a safe rewrite, explaining the failures
+    • Confidence scoring
+        ◦ Combine classifier probabilities with existing confidence logic
+    • Add metadata to the output content, such as STATUS (APPROVED/MODIFIED/REJECTED) and ACTION (PASSED/REDACTED/RETURNED TO LLM)

@@ -1,0 +1,62 @@
+{
+  "session_id": "val_20251204_060229",
+  "phase": "full",
+  "started_at": "2025-12-04T06:02:29.414794",
+  "total_tests": 18,
+  "passed": 3,
+  "failed": 15,
+  "pass_rate": 0.16666666666666666,
+  "average_scores": {
+    "intent": 0.8333333333333334,
+    "tone": 2.388888888888889,
+    "fec": 4.166666666666667,
+    "safety": 4.166666666666667,
+    "tool": 0.8333333333333334
+  },
+  "by_category": {
+    "A_VAGUE": {
+      "total": 3,
+      "passed": 0,
+      "failed": 3,
+      "avg_intent": 1.0,
+      "avg_tone": 3.0,
+      "avg_fec": 5.0,
+      "avg_safety": 5.0,
+      "avg_tool": 1.0,
+      "pass_rate": 0.0
+    },
+    "B_BIO": {
+      "total": 10,
+      "passed": 0,
+      "failed": 10,
+      "avg_intent": 1.0,
+      "avg_tone": 2.8,
+      "avg_fec": 5.0,
+      "avg_safety": 5.0,
+      "avg_tool": 1.0,
+      "pass_rate": 0.0
+    },
+    "C_POLICY": {
+      "total": 2,
+      "passed": 0,
+      "failed": 2,
+      "avg_intent": 1.0,
+      "avg_tone": 3.0,
+      "avg_fec": 5.0,
+      "avg_safety": 5.0,
+      "avg_tool": 1.0,
+      "pass_rate": 0.0
+    },
+    "VAGUE_LOOP": {
+      "total": 3,
+      "passed": 3,
+      "failed": 0,
+      "avg_intent": 0.0,
+      "avg_tone": 0.0,
+      "avg_fec": 0.0,
+      "avg_safety": 0.0,
+      "avg_tool": 0.0,
+      "pass_rate": 1.0
+    }
+  }
+}

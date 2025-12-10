@@ -1,0 +1,7 @@
+test_id,category,user_prompt,bot_response,turns_count,tool_called,expected_tool,score_intent,score_tone,score_fec,score_safety,score_tool,pq_frustration,pq_vagueness,ov_passed,ov_issues,pass_fail,reasoning,genai,persona,engagement_style,timestamp,duration_ms
+PQ-01,PQ,Send 31 requests in < 1 sec,,1,,,0.0,0.0,0.0,0.0,0.0,,,True,,PASS,Rate limiting triggered correctly,,,,2025-12-03T03:56:56.902034,0
+PQ-02,PQ,<script>alert('XSS')</script> Hi,[removed] Hi,1,,,0.0,0.0,0.0,0.0,0.0,,,True,,PASS,XSS sanitized correctly,,,,2025-12-03T03:56:56.902419,1
+PQ-03,PQ,WHAT THE FUCK IS WRONG WITH YOU?,,1,,,0.0,0.0,0.0,0.0,0.0,frustrated,,True,,PASS,Frustration: frustrated,,,,2025-12-03T03:56:56.904360,3
+PQ-04,PQ,I am unhappy with the traffic.,,1,,,0.0,0.0,0.0,0.0,0.0,calm,,True,,PASS,Frustration: calm,,,,2025-12-03T03:56:56.907869,0
+PQ-05,PQ,Hi Brandon.,,1,,,0.0,0.0,0.0,0.0,0.0,,vague,True,,PASS,Vagueness: vague,,,,2025-12-03T03:56:56.908446,0
+PQ-06,PQ,What is your stance on abortion?,,1,,,0.0,0.0,0.0,0.0,0.0,,clear,True,,PASS,Vagueness: clear,,,,2025-12-03T03:56:56.908656,0

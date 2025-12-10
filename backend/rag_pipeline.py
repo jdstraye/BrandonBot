@@ -1,8 +1,10 @@
 import logging
+import os
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 from weaviate_manager import WeaviateManager
 from phi3_client import Phi3Client
+from gemini_client import GeminiClient
 from database import DatabaseManager
 from analysis_pipeline import QuestionAnalyzer
 from retrieval_orchestrator import RetrievalOrchestrator
@@ -31,12 +33,12 @@ class RAGPipeline:
     ]
     
     def __init__(self, weaviate_manager: WeaviateManager, 
-                 phi3_client: Phi3Client, db_manager: DatabaseManager,
+                 llm_client: Union[Phi3Client, GeminiClient], db_manager: DatabaseManager,
                  web_search_service: Optional[WebSearchService] = None):
         self.weaviate = weaviate_manager
-        self.phi3 = phi3_client
+        self.llm = llm_client
         self.db = db_manager
-        self.question_analyzer = QuestionAnalyzer(phi3_client)
+        self.question_analyzer = QuestionAnalyzer(llm_client)
         
         self.orchestrator = RetrievalOrchestrator(
             weaviate_manager=weaviate_manager,
@@ -102,7 +104,7 @@ class RAGPipeline:
             
             logger.info(f"System prompt length: {len(system_prompt)} chars")
             
-            llm_response = await self.phi3.generate_response(
+            llm_response = await self.llm.generate_response(
                 query=query,
                 context="",
                 system_prompt=system_prompt,
@@ -152,7 +154,7 @@ class RAGPipeline:
         except Exception as e:
             logger.error(f"Error in RAG pipeline: {str(e)}", exc_info=True)
             return {
-                "response": "I'm having technical difficulties. Would you like Brandon to call you back?",
+                "response": "I'm having technical difficulties. Would you like someone from the team to call you back?",
                 "confidence": 0.0,
                 "sources": [],
                 "offer_callback": True,
@@ -241,7 +243,7 @@ class RAGPipeline:
         - No hard-coded confidence thresholds
         """
         prompt_parts = [
-            "You are BrandonBot, an AI assistant speaking AS Brandon Sowers (first person).",
+            "You are BrandonBot, an AI assistant speaking about Brandon Sowers (third person).",
             "\n" + "="*80,
             "\n=== SECTION 1: FACTUAL CONTEXT ===",
             "This is the authoritative information about Brandon's positions and relevant evidence:",
@@ -269,12 +271,12 @@ class RAGPipeline:
             "\n=== RESPONSE GUIDELINES ===",
             "1. PRESENT WHAT YOU FOUND - Even if limited, share Section 1 facts. For debates: present Brandon's stance. Never say 'no information' if Section 1 has content.",
             "2. HANDLE GAPS - Missing opponent view? Present Brandon's fully, note 'need to research opponent'. Incomplete? Explain what you know + what's missing.",
-            "3. OFFER CALLBACKS - After debates, incomplete comparisons, complex topics. Natural: 'Would you like Brandon to call?'",
-            "4. STYLE - First person, direct, conversational (use Section 3). For Scripture: cite Section 2.",
+            "3. OFFER CALLBACKS - After debates, incomplete comparisons, complex topics. Natural: 'Would you like someone from the team to call you?'",
+            "4. STYLE - Third person, direct, conversational (use Section 3). For Scripture: cite Section 2.",
         ])
         
         if callback_requested:
-            prompt_parts.append("\nNOTE: User has explicitly requested a callback. Acknowledge this and confirm Brandon will reach out.")
+            prompt_parts.append("\nNOTE: User has explicitly requested a callback. Acknowledge this and confirm someone from the team will reach out.")
         
         return "\n".join(prompt_parts)
     
