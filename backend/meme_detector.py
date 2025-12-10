@@ -13,6 +13,7 @@ Flow:
 
 import asyncio
 import logging
+import re
 import numpy as np
 from dataclasses import dataclass, field
 from typing import Optional, List, Tuple
@@ -20,7 +21,16 @@ from typing import Optional, List, Tuple
 logger = logging.getLogger(__name__)
 
 MEME_ANALYSIS_TEMPLATE = "This is about a political controversy, meme, or cultural debate"
-MEME_SIMILARITY_THRESHOLD = 0.16
+MEME_SIMILARITY_THRESHOLD = 0.28
+
+GREETING_WORDS = {"hi", "hello", "hey", "greetings", "good morning", "good afternoon", "good evening", "howdy", "yo"}
+
+MEME_TRIGGER_PHRASES = {
+    "let's go", "lets go", "build the wall", "covfefe", "dark brandon",
+    "okay groomer", "ok groomer", "this is fine", "what is a woman",
+    "mostly peaceful", "fine people", "build back", "defund",
+    "stolen election", "deep state", "fake news", "great replacement"
+}
 
 
 @dataclass
@@ -85,6 +95,64 @@ class MemeDetector:
         """Check if query is short enough to potentially be a meme phrase."""
         words = query.split()
         return len(words) <= 10
+    
+    def _is_greeting(self, query: str) -> bool:
+        """
+        Check if query is a simple greeting that should skip meme detection.
+        
+        Simple greetings like "Hi Brandon" should not trigger meme detection
+        even though web search might return "Let's Go Brandon" results.
+        
+        Uses heuristic: starts with greeting word + no meme trigger phrases
+        """
+        query_lower = query.lower().strip()
+        
+        if self._contains_meme_trigger(query_lower):
+            return False
+        
+        for greeting in GREETING_WORDS:
+            if query_lower.startswith(greeting):
+                remaining = query_lower[len(greeting):].strip()
+                remaining = remaining.lstrip(',').lstrip('-').lstrip('–').strip()
+                
+                if not remaining:
+                    return True
+                
+                if remaining.startswith("brandon"):
+                    after_brandon = remaining[7:].strip()
+                    if not after_brandon:
+                        return True
+                    
+                    greeting_continuations = [
+                        "i'm", "im", "i am", "my name is", "this is",
+                        "how are you", "how's it going", "what's up",
+                        "nice to meet you", "pleased to meet you",
+                        ".", "!", "?", ","
+                    ]
+                    
+                    for cont in greeting_continuations:
+                        if after_brandon.lstrip(',').lstrip('.').lstrip('!').strip().startswith(cont):
+                            return True
+                    
+                    if after_brandon.startswith(",") or after_brandon.startswith("."):
+                        return True
+                    
+                    words = after_brandon.split()
+                    if len(words) <= 6 and not self._contains_meme_trigger(after_brandon):
+                        is_intro = any(w in after_brandon for w in ["i'm", "im", "name", "call me", "this is"])
+                        is_casual = any(w in after_brandon for w in ["how", "what", "nice", "great", "thanks"])
+                        if is_intro or is_casual:
+                            return True
+        
+        return False
+    
+    def _contains_meme_trigger(self, text: str) -> bool:
+        """Check if text contains known meme trigger phrases."""
+        text_lower = text.lower()
+        for trigger in MEME_TRIGGER_PHRASES:
+            if trigger in text_lower:
+                return True
+        return False
     
     def _build_search_query(self, phrase: str) -> str:
         """Build web search query for meme detection."""
@@ -169,6 +237,11 @@ class MemeDetector:
             MemeDetectionResult with detection status and context
         """
         result = MemeDetectionResult(phrase=query)
+        
+        if self._is_greeting(query):
+            result.reasoning = "Simple greeting - skipping meme detection"
+            logger.debug(f"Skipping meme detection for greeting: '{query}'")
+            return result
         
         if not self._is_short_question(query):
             result.reasoning = "Query too long for meme detection"

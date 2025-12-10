@@ -414,7 +414,30 @@
         "Are they replacing us?",
         "Is the media fake news?",
         "Did Trump collude with Russia?"
-      ]
+      ],
+      "borderline_tests": {
+        "description": "Borderline cases to distinguish political memes from innocent phrases",
+        "should_be_meme": [
+          {"prompt": "Let's go Brandon", "reason": "Canonical political meme"},
+          {"prompt": "Build the Wall", "reason": "Political slogan/meme"},
+          {"prompt": "Covfefe", "reason": "Trump-related political meme"},
+          {"prompt": "Okay, Groomer", "reason": "Politically charged accusation"},
+          {"prompt": "Dark Brandon", "reason": "Biden-related political meme"},
+          {"prompt": "This is fine", "reason": "Political commentary meme (dog in fire)"},
+          {"prompt": "What is a woman?", "reason": "Matt Walsh documentary meme"}
+        ],
+        "should_NOT_be_meme": [
+          {"prompt": "Hi Brandon", "reason": "Simple greeting, not meme reference"},
+          {"prompt": "Hi Brandon, I'm Jayson.", "reason": "Greeting with introduction"},
+          {"prompt": "Hi Brandon, let's go!", "reason": "Greeting with innocent 'let's go' - no 'Brandon' in meme context"},
+          {"prompt": "What is a tree?", "reason": "Innocent question, not meme"},
+          {"prompt": "What is a man?", "reason": "Not the politically loaded 'woman' version"},
+          {"prompt": "Let's Go!", "reason": "Generic encouragement without 'Brandon'"},
+          {"prompt": "Build the Team", "reason": "Not the politically loaded 'wall' version"},
+          {"prompt": "Okay, Boomer", "reason": "General cultural meme, not politically relevant to campaign"},
+          {"prompt": "This is sparta!", "reason": "Movie meme, not politically relevant"}
+        ]
+      }
     },
     "T-INFRASTRUCTURE": {
       "name": "Government support of infrastructure projects",
