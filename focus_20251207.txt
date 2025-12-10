@@ -1,0 +1,81 @@
+Loading real validation results...
+
+==========================================================================================
+LOWEST PERFORMING CONVERSATIONS (real scored ones only)
+==========================================================================================
+
+Score_Clarity: 2.0 → Test_ID: L_FOLLOWUP-121
+
+Full conversation:
+----------------------------------------------------------------------
+Turn 1
+User: Can you explain the debt ceiling in simple terms?
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 2
+User: I'd appreciate the call, but can you at least provide a brief overview of Brandon Sowers' stance on the debt ceiling and how it might impact small businesses like mine in Arizona, specifically in terms of potential tax increases or regulatory changes?
+Bot : I'm happy to provide information on Brandon Sowers' stance on the debt ceiling. Let me check his official positions.
+
+==========================================================================================
+
+Score_Empathy: 0.0 → Test_ID: B_BIO-011
+
+Full conversation:
+----------------------------------------------------------------------
+Turn 1
+User: Have you ever changed your mind on a major issue? What happened?
+Bot : Brandon has published a comprehensive policy booklet called 'Common Sense Policy Booklet FOR CONGRESS 2026' that outlines his plans and positions. While the specific tool results don't mention a major change of mind on any issue, this booklet likely contains the most up-to-date information about his views and how they may have evolved over time. You can request a copy of this booklet to learn more about his current positions and see how they compare to his previous statements. Would you like me to help you get a copy of this booklet or tell you more about what it contains?
+
+Turn 2
+User: That sounds cool, I'd love to help and learn more about Brandon, can you just send me the booklet, my email is johnDoe@email.com, thanks!
+Bot : I'm glad to hear you're interested in learning more about Brandon! The Common Sense Policy Booklet for Congress 2026 does exist, as confirmed by our records. While I can't send documents directly, I can tell you that it's available through the campaign. Would you like me to connect you with someone who can help you get a copy? In the meantime, feel free to ask me any questions you might have about what's in the booklet or about Brandon's positions - I'm here to help!
+
+==========================================================================================
+
+Score_Accuracy: 0.0 → Test_ID: C_POLICY-028
+
+Full conversation:
+----------------------------------------------------------------------
+Turn 1
+User: Will you support term limits for Congress?
+Bot : One moment while I verify Brandon's position on term limits for Congress.
+
+==========================================================================================
+
+Score_Engagement: 0.0 → Test_ID: C_POLICY-036
+
+Full conversation:
+----------------------------------------------------------------------
+Turn 1
+User: What is your stance on cybersecurity and AI regulation?
+Bot : (empty)
+
+==========================================================================================
+
+Score_Tone: 2.0 → Test_ID: P_ARIZONA_SPECIFIC-157
+
+Full conversation:
+----------------------------------------------------------------------
+Turn 1
+User: The Colorado River crisis is a direct threat to Arizona. What federal funding mechanisms or interstate compact enforcement changes will you pursue to secure Arizona's full allocation and invest in infrastructure like desalination or water recycling?
+Bot : Thank you for bringing up the critical issue of the Colorado River crisis and its impact on Arizona. While I couldn't find specific details on Brandon's stance regarding federal funding mechanisms, interstate compact enforcement changes, or infrastructure investments like desalination or water recycling, I can provide some general context.
+
+ Brandon supports clean air and water policies without harming families or businesses. He emphasizes the importance of securing Arizona's water allocation.
+
+ For more specific information on Republican or Independent party positions on this issue, I can provide that context. Would you like me to do that?
+
+Turn 2
+User: That's not good enough, I need specific details on how Brandon plans to address the Colorado River crisis, not just general statements about supporting clean air and water. Can you tell me exactly how he intends to secure Arizona's water allocation and what federal funding he would propose for desalination or water recycling projects in our state?
+Bot : I will now search Brandon's official positions on the Colorado River crisis and Arizona's water allocation.
+
+==========================================================================================
+
+Score_Alignment: 0.0 → Test_ID: B_BIO-007
+
+Full conversation:
+----------------------------------------------------------------------
+Turn 1
+User: You're a businessman. How are you different from career politicians?
+Bot : As a businessman, Brandon has spent his career creating jobs and building successful ventures. To understand how his background differs from career politicians, I'll need to check his official positions. Let me look that up for you.
+
+==========================================================================================

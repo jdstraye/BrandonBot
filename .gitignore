@@ -33,3 +33,20 @@ backend/llama_guard_model/
 
 # SSH keys (persistent storage)
 .ssh-keys/
+
+# ML Model Cache (HuggingFace Hub)
+.cache/
+models/
+*.bin
+*.safetensors
+*.onnx
+*.onnx.data
+*.pt
+*.pth
+
+# HuggingFace cache directories
+huggingface/
+transformers_cache/
+tools/ollama/
+backend/phi3_model/
+backend/llama_guard_model/

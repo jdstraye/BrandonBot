@@ -1,0 +1,44 @@
+Why are you so focused on damn brittle patterns?!! Those are never the right solution! You should have tried other models if Phi3 wasn't performing well enough. If you are using pattern matching for Confidence Verification, I suggest you move that to an SLM as well. 
+As for scores, remember, if the input sheet is 0, then that OV safeguard should pass. If it is anything else, it can fail. The classifiers do not have to match the numeric output. We are looking for a boolean output from the classifier. If we get anything more than that, it should be the reason for the fail so that the main LLM agent knows what to fix when the agent's reply is rejected and resubmitted (with an explanation).
+The testing should ignore meta-commentary (e.g., case 16) as they won't exist in regular use.
+When optimizing the OV, confirm that you are never compromising the good results that we got in the PQ. I am concerned that you might try to combine/tune models for both cases instead of just the 1 for which it is already tuned.
+The API challenges you encountered might be best addressed as in the following code snippet.
+            params = og.GeneratorParams(self.model)
+            params.input_ids = tokens
+            params.set_search_options(
+                max_length=4096,
+                temperature=0.7,
+                top_p=0.9
+            )
+            
+            logger.info(f"Input tokens: {len(tokens)}, max_length: 4096, available for generation: {4096 - len(tokens)}")
+            
+            generator = og.Generator(self.model, params)
+            
+            response_text = ""
+            token_count = 0
+            max_new_tokens = min(4096 - len(tokens), 2048)
+            generation_timeout = 60.0
+            start_time = time.monotonic()
+            timeout_triggered = False
+            truncated_by_limit = False
+            
+            while not generator.is_done() and token_count < max_new_tokens:
+                elapsed = time.monotonic() - start_time
+                if elapsed > generation_timeout:
+                    logger.error(f"Generation timeout after {elapsed:.1f}s, aborting")
+                    timeout_triggered = True
+                    break
+                
+                try:
+                    generator.compute_logits()
+                    generator.generate_next_token()
+                    new_tokens = generator.get_next_tokens()
+                    
+                    if not new_tokens or len(new_tokens) == 0:
+                        logger.error("Generator returned empty tokens, aborting")
+                        break
+                    
+                    new_token = new_tokens[0]
+                    response_text += self.tokenizer.decode([new_token])
+                    token_count += 1

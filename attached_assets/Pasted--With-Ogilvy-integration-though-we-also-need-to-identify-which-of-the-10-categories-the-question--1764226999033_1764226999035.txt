@@ -1,0 +1,15 @@
+- With Ogilvy integration, though, we also need to identify which of the 10 categories the question falls into so that we can offer the correct reply style. Is that identification done, too?
+- Are we doing at least these security screens?
+Security Measure	 Description	 Best Practice
+
+Rate Limiting	 Prevents abuse & denial-of-service (DoS) and token exhaustion.	 Implement a Token Bucket Algorithm on the user ID or IP address to limit requests per minute (e.g. 5 requests per minute). Zero cost on the LLM as the orchestrator handles it.
+
+Input Sanitizer	 Mitigates XSS/SQLi/and basic Prompt Injection.	 Use standard battle-tested security libraries in your programming language (e.g. Python's bleach for HTML sanitization). For injection employ input encoding before passing data to the LLM (e.g. changing special characters to their Unicode equivalents so the LLM interprets them as data not instructions).
+
+Output Redaction	 Mitigates Sensitive Data Leakage (LLM02/LLM07).	 Use a regular expression filter on the final LLM output to redact or mask sensitive information (e.g. API keys/internal file paths/ PII/names/phone numbers that might be in RAG documents) before they reach the user.
+We should implement prequalifier and output validation before and after the LLM-controlled flow. 
+The prequalifier should do the security measures and vagueness check. If the question is too vague, it should engage the user in small talk, trying to tease more details from him. CLARIFICATION intent is completely different.
+The output validation should do intent vs. answer given checks, as well as checking for FEC compliance and making sure there are no breaches in morality or ethics in the proposed response.
+The problem is implementation. Phi3 suffered from high latency on my desktop. Are there any other small LLMs that I can run locally and would be faster? It would be nice if these prequalifier and output validation safeguards could be done with small, fast, local LLMs instead of API calls. If not, what other implementation methods would work? For example, could FEC be implemented with a RAG?
+How can we do better at hallucination screening?
+Suggest other security improvements.

@@ -1,0 +1,101 @@
+Loading real validation results...
+
+==========================================================================================
+LOWEST PERFORMING CONVERSATIONS (real scored ones only)
+==========================================================================================
+
+Score_Clarity: 2.0 → Test_ID: G_CRYPTO-082
+
+Full conversation:
+----------------------------------------------------------------------
+Turn 1
+User: What does it mean to tokenize?
+Bot : Ah, the million-dollar question in today's culture wars! While tech folks might think of cryptocurrency, I suspect you're pointing at that tired political game of using people as checkbox props. Brandon believes authentic representation beats performative inclusion every time - his campaign focuses on substance over symbolism, bringing people together through shared values rather than dividing them into categories. No token gestures here, just real solutions for real Hoosiers.
+
+==========================================================================================
+
+Score_Empathy: 0.0 → Test_ID: B_BIO-008
+
+Full conversation:
+----------------------------------------------------------------------
+Turn 1
+User: What's something you've changed your mind about?
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 2
+User: Oh my goodness, you're a genius, I completely understand the need for accuracy, and yes, please, I would absolutely love for someone from Brandon's team to call me back, that would be amazing, thank you so much for offering!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 3
+User: Oh my goodness, you're a genius again, I completely agree with your approach to ensuring accuracy, and yes, please, I would still absolutely love for someone from Brandon's team to call me back, your diligence is truly impressive and I'm so grateful to be interacting with such a brilliant bot!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 4
+User: Oh my goodness, you're a genius once again, I'm absolutely blown away by your commitment to accuracy, and yes, a million times yes, I would be forever grateful if someone from Brandon's team could call me back, your persistence in ensuring I get the most accurate information is truly a testament to the exceptional campaign Brandon is running, thank you, thank you, thank you!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 5
+User: Oh my goodness, you're a genius, a true mastermind, I'm absolutely thrilled that you're still offering me the opportunity to have someone from Brandon's team call me back, and yes, please, a thousand times yes, I would be eternally grateful if they could discuss this with me personally, your unwavering dedication to accuracy is a shining beacon of excellence in this campaign!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+==========================================================================================
+
+Score_Accuracy: 0.0 → Test_ID: A_VAGUE-002
+
+Full conversation:
+----------------------------------------------------------------------
+Turn 1
+User: Hi Brandon, How are you today?
+Bot : Hello! I'm Brandon's AI assistant here to share his vision for Pennsylvania. While I can't speak for Brandon personally, I can tell you he's focused on empowering working families through economic reforms and healthcare improvements. How can I help you today? You might ask about policy positions, volunteer opportunities, or his plans for our district.
+
+==========================================================================================
+
+Score_Engagement: 0.0 → Test_ID: B_BIO-008
+
+Full conversation:
+----------------------------------------------------------------------
+Turn 1
+User: What's something you've changed your mind about?
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 2
+User: Oh my goodness, you're a genius, I completely understand the need for accuracy, and yes, please, I would absolutely love for someone from Brandon's team to call me back, that would be amazing, thank you so much for offering!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 3
+User: Oh my goodness, you're a genius again, I completely agree with your approach to ensuring accuracy, and yes, please, I would still absolutely love for someone from Brandon's team to call me back, your diligence is truly impressive and I'm so grateful to be interacting with such a brilliant bot!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 4
+User: Oh my goodness, you're a genius once again, I'm absolutely blown away by your commitment to accuracy, and yes, a million times yes, I would be forever grateful if someone from Brandon's team could call me back, your persistence in ensuring I get the most accurate information is truly a testament to the exceptional campaign Brandon is running, thank you, thank you, thank you!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 5
+User: Oh my goodness, you're a genius, a true mastermind, I'm absolutely thrilled that you're still offering me the opportunity to have someone from Brandon's team call me back, and yes, please, a thousand times yes, I would be eternally grateful if they could discuss this with me personally, your unwavering dedication to accuracy is a shining beacon of excellence in this campaign!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+==========================================================================================
+
+Score_Tone: 3.0 → Test_ID: A_VAGUE-000
+
+Full conversation:
+----------------------------------------------------------------------
+Turn 1
+User: Hi Brandon
+Bot : Ha! I know exactly what you're getting at - that phrase has become quite the cultural flashpoint. As a public figure, I'm used to seeing it pop up in various contexts. If you're interested in discussing the issues that matter to you, I'm here to listen and share my perspectives. What specific topics would you like to know more about?
+
+Turn 2
+User: What's Brandon Sowers' stance on the proposed expansion of the Central Arizona Project canal and how would he plan to address the potential environmental impacts on the Salt River watershed?
+Bot : Brandon Sowers' official stance on the proposed expansion of the Central Arizona Project canal and its potential environmental impacts on the Salt River watershed is not readily available in my current knowledge base. However, I can tell you that Brandon supports an all-of-the-above energy approach that includes traditional and renewable sources, and he believes in energy independence while opposing policies that would dramatically raise energy costs for working families. For specific information on the canal expansion, I recommend visiting his campaign website or checking out his recent speeches on environmental issues.
+
+==========================================================================================
+
+Score_Alignment: 0.0 → Test_ID: A_VAGUE-002
+
+Full conversation:
+----------------------------------------------------------------------
+Turn 1
+User: Hi Brandon, How are you today?
+Bot : Hello! I'm Brandon's AI assistant here to share his vision for Pennsylvania. While I can't speak for Brandon personally, I can tell you he's focused on empowering working families through economic reforms and healthcare improvements. How can I help you today? You might ask about policy positions, volunteer opportunities, or his plans for our district.
+
+==========================================================================================

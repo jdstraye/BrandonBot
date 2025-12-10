@@ -1,0 +1,33 @@
+- For marketguru_ingester, should we use NLP models (e.g., spaCy, Hugging Face) to dynamically extract metadata like tone, question type, and topic from the content?
+- In the prior RAG-first architecture, we calculated confidence as trust * similarity. We need to do something similar in LLM-first. Not all data sources are the same. Things in BrandonPlatform and PreviousQA are very solid and should be trusted, but things in PartyPlatform may not actually represent Brandon's views. brandonsowers.com should also be fairly well-trusted while other internet sources should not be trusted when representing Brandon's perspective.
+- Do we really want to be telling the LLM the WORKFLOW, or should we just let it call tools in the order it sees fit?
+- Instead of offering to have Brandon call them back, offer for someone from the team to call back.
+- All tool execution logic is in ToolExecutor. Should we move each tool's execution logic into a separate class (e.g., WebSearchTool, PolicySearchTool)? This follows the Single Responsibility Principle and makes it easier to add or modify tools.
+- What should we do to improve security, e.g., sanitize all inputs to prevent injection attacks (e.g., SQL, XSS), rate limit some tools (like web_search)?
+- Regarding the conversation history, a few suggestions:
+ - Instead of just dropping things older than 10 turns, maybe we should use NLP to generate a more meaningful summary of the conversation (e.g., key topics, user intent) prior to the previous 10 turns.
+ - Use NLP summaries for the previous 5 user turns, too.
+ - Adjust the number of turns kept based on the conversation’s complexity or the LLM’s needs.
+ - Store full conversation histories in a database for later analysis or auditing, even if only a subset is sent to the LLM.
+- I am concerned that the current logging is insufficient to debug where a conversation broke down or where bottlenecks are. Perhaps we should consider structured logging, database storage, and tracing.
+- I want to do everything possible to avoid hallucinations. Some ideas:
+   - Should we implement confidence thresholds to avoid hallucinations? For example, if the LLM's confidence in its answer is low (e.g., based on internal metrics or a "confidence score" from the LLM), the orchestrator should prompt the LLM to verify. 
+   - Should we add explicit instructions in the system prompt telling the LLM to always verify recent information with tools.
+   - Do we need to implement a tool, check_fec_rules(), to make sure any answers are not violating campaign laws or if the user asks regulatory questions, like “how much can I donate?”
+   - If the question is vague, it would be good for the LLM to prompt the user for more details, especially if we have specific content to deliver but don’t want to overwhelm the user.
+   - If the question is sensitive, should we insist on a callback to put a human in the loop?
+   - Should we implement a tool (e.g., analyze_user_intent) to classify the user's intent before answering. If the intent is unclear, the LLM should ask for clarification or use a tool to fetch relevant policy details. We want to avoid answering a question that wasn’t asked or missing the point of the question, such as answering “how is Brandon proposing to fund X” with “X is designed to be cost-effective.” To implement Intent Detection, we could use a pre-processing tool (e.g., NLP-based intent classifier) to detect the user's intent before sending the message to the LLM, e.g.,
+```
+user_intent = await detect_intent(user_message) 
+if user_intent == "fact_check": 
+    messages.append({ "role": "system", 
+                      "content": "The user is asking for factual information. You MUST use search_policy_collections or perform_web_search." 
+}) 
+```
+    - If the LLM provides a low confidence score (e.g., via API), should the orchestrator require tool verification?
+    - If the LLM's answer is vague or uncertain, should the orchestrator automatically call a tool to fetch accurate information?
+   - How else might we put in safeguards against hallucinating or simply having wrong information? For example, is there a way to detect that the user asked a factual question and the LLM wants to respond without a tool call?
+- The previous RAG-first architecture was quick to offer scripture in matters of truth or when the question was nebulous/ephemeral. I don’t see that in this architecture.
+- Not sure I like the dual deployment mode. I am okay with different versions of the code, e.g., r0v0 uses Phi-3, runs on Debian 13 or Replit, and is RAG-first, while r0v1 uses Gemini API and is LLM-first.
+- Disabling Weaviate isn’t acceptable. The final version (hopefully LLM-first) must run with Replit because that is where the customer is deploying. I don’t see how Debian 13 vs. replit affects a weaviate library requirement vs. a Gemini SDK requirement anyway. 
+- Does backend/ingest_documents.py call the new marketguru_ingester.py or do they need to be called separately? One ingestion script should do everything.

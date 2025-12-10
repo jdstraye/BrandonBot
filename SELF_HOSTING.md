@@ -53,27 +53,32 @@
 
 ## Overview
 
-This guide explains how to self-host BrandonBot on your own Debian 13 system, which will eliminate the CPU resource contention issues present in Replit's shared development environment. To keep the deployment free, it uses a the github.io free static domain with redirection to a TailScale private url.
-
+This guide explains how to self-host BrandonBot on your own server with Python 3.12. The self-hosted version uses:
+- **SLM Models**: Required safeguards for vagueness detection, frustration detection, ethics, PII, and confidence
+- **Weaviate**: Embedded vector database for RAG
+- **FEC Compliance**: Mandatory RAG-based compliance checking (system fails closed without it)
+- **Ollama + Llama 3.2**: Optional LLM judge for validation
 **Expected Performance Improvement**:
 - **Replit (shared)**: 1 token per 60-90 seconds (CPU starvation)
 - **Self-hosted (dedicated)**: 10-30 tokens per second (60-180x faster)
-
+This guide explains how to self-host BrandonBot on your own server with Python 3.12. The self-hosted version uses:
+- **SLM Models**: Required safeguards for vagueness detection, frustration detection, ethics, PII, and confidence
+- **Weaviate**: Embedded vector database for RAG
+- **FEC Compliance**: Mandatory RAG-based compliance checking (system fails closed without it)
+- **Ollama + Llama 3.2**: Optional LLM judge for validation
 ---
 
 ## System Requirements
 
 ### Minimum Requirements
-- **OS**: Debian 13 (or Ubuntu 22.04+, other Debian-based distros)
-- **CPU**: 4+ cores (Intel/AMD x86_64)
-- **RAM**: 6GB available (4GB for model, 1-2GB for system/embeddings)
-- **Storage**: 10GB free space (2.6GB for Phi-3 model, ~5GB for Weaviate data, 2GB for dependencies)
-- **Python**: 3.12 or higher (included in Debian 13)
+- **OS**: Debian 13, Ubuntu 22.04+, or other Linux distribution
+- **Python**: 3.12
+- **RAM**: 8GB available (4GB for models, 4GB for system)
+- **Storage**: 15GB free space
 
-### Recommended Requirements
-- **CPU**: 6+ cores, 3.0+ GHz
-- **RAM**: 8GB+ available
-- **Storage**: SSD for faster model loading
+### For LLM Judge (Validation Only)
+- **Ollama**: Required for running Llama 3.2 locally
+- **Model**: llama3.2:3b (~2GB)
 
 On CustomJacob:
 ```
@@ -101,83 +106,68 @@ nvme0n1      27.3G disk INTEL HBRPEKNX0202AO    0
 
 ---
 
-## Installation Steps
+## Quick Start (Two Steps)
+
+After cloning and setting up Python, the system is ready in two commands:
+
+```bash
+# Step 1: Download all required models
+python download_models.py
+
+# Step 2: Initialize databases and load FEC data
+python ingest_all.py
+```
+
+That's it! The system is now ready for operations.
+
+---
+
+## Detailed Setup
 
 ### 1. Install System Dependencies
 
 ```bash
 sudo apt update
 sudo apt install -y \
-    python3 \
+    python3.12 \
+    python3.12-venv \
     python3-pip \
-    python3-venv \
     git \
     build-essential \
-    libopenblas-dev \
-    ffmpeg
-
-# Verify installations
-python3 --version  # Should show 3.11 or higher
-gcc --version      # Should show GCC compiler
+    curl
 ```
 
-**Why these packages?**
-- `python3-pip`, `python3-venv`: Python package management
-- `build-essential`: C/C++ compilers needed by some Python packages
-- `libopenblas-dev`: Optimized BLAS library for faster matrix operations (sentence-transformers)
-- `ffmpeg`: Required by some audio/video processing dependencies
+### 2. Install Ollama (Optional, for Validation)
 
-### 2. Clone/Copy Project Files
-
-#### Option A: Clone from Git (if hosted)
 ```bash
-git clone <your-repo-url>
-cd <repo-directory>
+curl -fsSL https://ollama.com/install.sh | sh
 ```
 
-#### Option B: Copy from Replit
-
-**Files/Directories to Copy from Replit**:
-```
-/home/runner/workspace/
-├── backend/               # All Python code (REQUIRED)
-│   ├── main.py
-│   ├── phi3_client.py
-│   ├── rag_pipeline.py
-│   ├── retrieval_orchestrator.py
-│   ├── weaviate_manager.py
-│   ├── database.py
-│   ├── requirements.txt
-│   └── data/             # Knowledge base documents (REQUIRED)
-├── weaviate_data/        # Pre-computed embeddings (OPTIONAL - speeds up first start)
-├── frontend/             # HTML/CSS/JS (REQUIRED if using web UI)
-└── .env                  # Environment variable template (if exists)
+Start the Ollama server:
+```bash
+ollama serve
 ```
 
-**Download methods**:
-- Via Replit's download feature (right-click folders)
-- Using `rsync` if you have SSH access
-- Via Replit's deployment export
+### 3. Clone/Copy Project Files
 
-### 3. Set Up Python Environment
-Python3.12 is the expected version, as it is common to Replit and Debian13.
+```bash
+git clone <your-repo-url/ssh> BrandonBot.git
+cd BrandonBot.git
+```
+
+Or ccopy these directories from Replit:
+```
+backend/           # All Python code
+documents/         # Knowledge base documents
+frontend/          # Web UI (if using)
+```
+
+### 4. Set Up Python Environment
+
 ```bash
 cd backend
-
-# Use the explicit python3.12 executable for a robust setup.
-# If the python3.12 command is not found, use the generic python3 command.
 python3.12 -m venv .venv_brandonbot
-
-# Activate the environment
-source venv/bin/activate
-
-# Verify the version is 3.12.x
-python --version
-```
-
-### 4. Install Python Dependencies
-
-```bash
+source .venv_brandonbot/bin/activate
 pip install --upgrade pip
 
 # Get the CPU-only version of Torch, which is much smaller than the CUDA version:
@@ -188,30 +178,65 @@ pip install gunicorn 		# This is for production and may be missing from requirem
 ```
 **Torch** can be HUGE if you get the CUDA version. If that is a problem, the command to get the CPU-only version is `pip install torch --extra-index-url https://download.pytorch.org/whl/cpu`
 
-**Expected installation time**: 5-10 minutes (downloads PyTorch CPU, ONNX Runtime, transformers, sentence-transformers, etc.)
+### 5. Download Models (REQUIRED)
 
-### 5. Download the local LLM and SLM models
-BrandonBot uses 4 specialized SLM (Small Language Models) for the 6-safeguard validation pipeline and 1 LLM for validation to be the judge and user persona:
-
-| Model | Purpose | Size |
-|-------|---------|------|
-| ME2-BERT | Ethics checking (Moral Foundations) | ~420MB |
-| MS-MARCO Cross-Encoder | Intent/response alignment | ~120MB |
-| DeBERTa-PII | PII detection | ~550MB |
-| BERT-tiny | Confidence verification | ~15MB |
-
-**Total: ~1.1GB disk space**
+This downloads all SLM safeguard models and optionally sets up Ollama:
 
 ```bash
-# Download all safeguard models
 python download_models.py
 ```
 
-**Expected output**:
+**What gets downloaded:**
+| Model | Size | Purpose |
+|-------|------|---------|
+| all-MiniLM-L6-v2 | 90MB | Text embeddings for RAG |
+| ms-marco-MiniLM | 120MB | Intent/vagueness scoring |
+| j-hartmann/emotion-english-distilroberta-base | 320MB | Frustration detection |
+| ME2-BERT | 420MB | Ethics classification |
+| deberta-pii | 550MB | PII detection |
+| bert-tiny | 15MB | Confidence verification |
+| llama3.2:3b | 2GB | LLM judge (optional) |
+
+**Options:**
+```bash
+# Download only SLM models (skip Ollama)
+python download_models.py --slm-only
+
+# Download only Ollama model
+python download_models.py --ollama-only
+
+# Verify existing models
+python download_models.py --verify-only
 ```
-============================================================
-BrandonBot SLM Model Downloader
-============================================================
+
+### 6. Initialize Databases (REQUIRED)
+
+This creates the SQLite database and loads FEC compliance data into Weaviate:
+
+```bash
+python ingest_all.py
+```
+
+**What gets initialized:**
+- **SQLite** (`data/brandonbot.db`): User consent, interactions, callbacks, volunteers, compliance logs
+- **Weaviate** (embedded): FEC prohibited phrases, Brandon platform, previous Q&A
+
+**CRITICAL**: FEC compliance data is MANDATORY. The system will refuse to operate without it.
+
+**Options:**
+```bash
+# With custom documents directory
+python ingest_all.py documents/
+
+# Skip database initialization
+python ingest_all.py --skip-db
+
+# Custom database path
+python ingest_all.py --db-path /path/to/database.db
+```
+
+### 7. Configure Environment Variables (Optional)
+>>>>>>> llm-first
 
 Checking dependencies...
   torch: 2.x.x
@@ -264,14 +289,17 @@ python -m pytest tests/test_ov_*.py tests/test_pq.py -v
 Create a `.env` file in the `backend/` directory and put all the secrets here:
 
 ```bash
-# Optional configurations
-DATABASE_PATH=./data/brandonbot.db
-WEAVIATE_DATA_PATH=../weaviate_data
-LOG_LEVEL=INFO
+# Required for commercial LLM providers (Replit mode)
+GOOGLE_API_KEY=your_key_here
+MISTRAL_API_KEY=your_key_here
+COHERE_API_KEY=your_key_here
+NVIDIA_API_KEY=your_key_here
 
-# For commercial API migration (if using)
-# OPENAI_API_KEY=your_key_here
-# GOOGLE_API_KEY=your_key_here
+# Optional: SendGrid for email notifications
+SENDGRID_API_KEY=your_key_here
+
+# Database (defaults to data/brandonbot.db)
+DATABASE_PATH=./data/brandonbot.db
 ```
 
 ### 8. Initialize Database and Weaviate
@@ -287,14 +315,6 @@ python3 main.py
 **Expected startup logs**:
 ```
 INFO:main:Starting BrandonBot (100% Open Source - No Docker Required)...
-INFO:main:Initializing database...
-INFO:database:Database initialized successfully
-INFO:main:Initializing Weaviate (embedded mode)...
-INFO:weaviate_manager:Starting Weaviate in embedded mode (no Docker required)...
-INFO:weaviate_manager:Weaviate initialized successfully in embedded mode
-INFO:main:Loading Phi-3 model (CPU-optimized)...
-INFO:phi3_client:Loading Phi-3 model from ./phi3_model...
-INFO:phi3_client:Phi-3 model loaded successfully
 INFO:main:BrandonBot ready! Running entirely on open-source software.
 INFO:     Uvicorn running on http://0.0.0.0:5000 (Press CTRL+C to quit)
 ```
@@ -349,29 +369,80 @@ gunicorn main:app \
     --bind 0.0.0.0:5000
 ```
 
-### Expected Performance Benchmarks
-
-**Query Processing Time** (on typical 6-core CPU @ 3.0GHz):
-- Retrieval (RAG): 0.3-0.8 seconds
-- Phi-3 Generation: 3-10 seconds (100-300 tokens)
-- **Total**: 3-11 seconds per query
-
-**Token Generation Speed**:
-- Expected: 10-30 tokens/second
-- vs Replit shared: 0.01 tokens/second (1000-3000x faster!)
+Access at: http://localhost:5000
 
 ---
 
-## Running as a System Service (Optional)
+## Fail-Closed Design
 
-To run BrandonBot automatically on system boot:
+BrandonBot is designed to fail closed for safety:
 
-### Create systemd service file
+### SLM Safeguards
+- **Required**: All 6 SLM models must be loaded for the system to operate
+- **Fail behavior**: System refuses to start if models don't load
+
+### FEC Compliance (RAG)
+- **Required**: FECProhibited collection must exist and be populated
+- **Fail behavior**: System refuses to process responses without FEC RAG
+- **No fallback**: Pattern matching is NOT used as a fallback
+
+### Verification
+```bash
+# Verify models are loaded
+python download_models.py --verify-only
+
+# Verify Weaviate collections
+python -c "
+import asyncio
+from weaviate_manager import WeaviateManager
+
+async def check():
+    wm = WeaviateManager()
+    await wm.initialize()
+    count = await wm.get_collection_count('FECProhibited')
+    print(f'FECProhibited: {count} documents')
+    await wm.close()
+
+asyncio.run(check())
+"
+```
+
+---
+
+## Running Validation with Local LLM Judge
+
+The validation suite uses Ollama + Llama 3.2 as the LLM judge:
+
+```bash
+# Ensure Ollama is running
+ollama serve &
+
+# Set environment variable
+export USE_LOCAL_JUDGE=true
+
+# Run validation
+cd backend/validation
+python3.12 -m validation.validator --phase <phase>
+python validator.py 
+```
+\<phase\> can be:
+>
+- all - run all the tests available, ~6 PQ + ~4 OV + ~4 OV_E2E + ~10 MCP + ~210 prompts
+- pq - Run the PreQualifier gray box tests, which would include irritation and vagueness detection.
+- ov - Run the Output Validation gray box tests, which would include citation verification, DOS attack, PII redaction, and responding to the intent of the query.
+- mcp - Run the tests that check tool usage.
+- full - Run the prompts but not the pq, mcp, or ov gray box tests.
+
+---
+
+## Running as a System Service
+
+### Create systemd service
+
 ```bash
 sudo emacs /etc/systemd/system/brandonbot.service
 ```
 
-### Service configuration
 ```ini
 [Unit]
 Description=BrandonBot AI Chatbot
@@ -397,6 +468,7 @@ RestartSec=10
 [Install]
 WantedBy=multi-user.target
 ```
+
 ### Enable and start service
 ```bash
 sudo systemctl daemon-reload
@@ -559,7 +631,6 @@ server {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
         proxy_set_header Host $host;
-        proxy_cache_bypass $http_upgrade;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
@@ -662,143 +733,129 @@ This approach effectively uses your public GitHub URL as a permanent, easy-to-re
 
 ## Troubleshooting
 
-### Issue: Model fails to load
-**Symptoms**: `FileNotFoundError: phi3_model not found`
-
-**Solution**:
+### Ollama not responding
 ```bash
-# Verify model files exist
-ls -lh phi3_model/
+# Check if Ollama is running
+curl http://localhost:11434/api/tags
 
-# Should see:
-# - phi3-mini-4k-instruct-cpu-int4-rtn-block-32-acc-level-4.onnx (226KB)
-# - phi3-mini-4k-instruct-cpu-int4-rtn-block-32-acc-level-4.onnx.data (2.6GB)
-# - tokenizer.model, config.json, etc.
+# Start Ollama if not running
+ollama serve
 
-# If missing, download again
-python3 download_phi3_model.py
+# Pull Llama model if missing
+ollama pull llama3.2:3b
 ```
 
-### Issue: Out of memory errors
-**Symptoms**: `RuntimeError: Unable to allocate tensor`
+### FEC RAG errors
+```bash
+# Re-run ingestion to load FEC data
+python ingest_all.py
 
-**Solution**:
+# Verify FEC collection
+python -c "
+import asyncio
+from weaviate_manager import WeaviateManager
+
+async def check():
+    wm = WeaviateManager()
+    await wm.initialize()
+    count = await wm.get_collection_count('FECProhibited')
+    if count == 0:
+        print('ERROR: FECProhibited is empty!')
+    else:
+        print(f'OK: {count} FEC documents loaded')
+    await wm.close()
+
+asyncio.run(check())
+"
+```
+
+### Port 5000 in use
+```bash
+sudo lsof -i :5000
+sudo kill -9 <PID>
+
+# Or use different port
+uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+### Out of memory
 ```bash
 # Check available RAM
 free -h
 
-# Close other applications
-# Reduce system RAM usage
-# Or upgrade to 8GB+ RAM
-```
-
-### Issue: Slow generation (<5 tokens/sec)
-**Symptoms**: Still slow despite dedicated hardware
-
-**Solution**:
-```bash
-# Check CPU usage
-htop  # Should see uvicorn using 100-400% CPU during generation
-
-# Verify no thread limits are set
-env | grep -E "OMP|ORT"  # Should return nothing
-
-# If set, unset them:
-unset OMP_NUM_THREADS
-unset ORT_INTRA_OP_NUM_THREADS
-unset ORT_INTER_OP_NUM_THREADS
-
-# Restart server
-```
-
-### Issue: Weaviate initialization fails
-**Symptoms**: `Connection refused` or Weaviate errors
-
-**Solution**:
-```bash
-# Check if Weaviate data is corrupted
-rm -rf weaviate_data/
-
-# Let it reinitialize (takes 2-5 minutes)
-python3 main.py
-```
-
-### Issue: Port 5000 already in use
-**Symptoms**: `Address already in use`
-
-**Solution**:
-```bash
-# Find process using port 5000
-sudo lsof -i :5000
-
-# Kill it
-sudo kill -9 <PID>
-
-# Or use a different port
-uvicorn main:app --host 0.0.0.0 --port 8000
+# SLM models require ~2GB RAM
+# Llama 3.2:3b requires ~4GB RAM additional
+# Close other applications or use smaller Llama model
+ollama pull llama3.2:1b
 ```
 
 ---
 
-## Monitoring and Maintenance
+## File Structure
 
-### View real-time logs
-```bash
-tail -f backend/logs/*.log  # If logging to file
-# Or use systemd journal if running as service
 ```
-
-### Monitor resource usage
-```bash
-# Install htop
-sudo apt install htop
-
-# Run
-htop
-# Look for python3 process, observe CPU/RAM usage
-```
-
-### Backup important data
-```bash
-# Backup databases and logs
-tar -czf brandonbot-backup-$(date +%Y%m%d).tar.gz \
-    backend/data/brandonbot.db \
-    backend/data/brandonbot_conversations.csv \
-    weaviate_data/
+brandonbot/
+├── backend/
+│   ├── main.py                 # FastAPI application
+│   ├── agent_orchestrator.py   # LLM agent pipeline
+│   ├── llm_providers.py        # Multi-provider LLM manager
+│   ├── weaviate_manager.py     # Vector database
+│   ├── database.py             # SQLite operations
+│   ├── fec_compliance_checker.py # FEC compliance (fail-closed)
+│   ├── slm_manager.py          # SLM safeguard models
+│   ├── ov_slm_models.py        # Output validation models
+│   ├── download_models.py      # Model downloader
+│   ├── ingest_all.py           # Database & Weaviate setup
+│   ├── requirements.txt        # Full dependencies
+│   └── validation/
+│       ├── validator.py        # Validation suite
+│       └── debug.db            # Debug logs
+├── data/
+│   └── brandonbot.db           # SQLite database
+├── documents/                  # Knowledge base source docs
+│   ├── brandon_platform/       # Brandon's policy documents
+│   ├── party_platforms/        # Party platform documents
+│   ├── previous_qa/            # Verified Q&A pairs
+│   ├── market_gurus/           # Marketing guidance
+│   └── fec_prohibited/         # Additional FEC docs (optional)
+└── frontend/                   # Web UI
 ```
 
 ---
 
-## Migrating Back to Replit or Cloud
+## Database Schema
 
-To move your self-hosted instance back to Replit:
+The SQLite database (`data/brandonbot.db`) includes:
 
-1. Copy `weaviate_data/` to preserve embeddings
-2. Copy `backend/data/` to preserve conversation logs
-3. Upload to Replit
-4. Re-add ONNX thread limits (see COMMERCIALAI_MIGRATION.md)
+| Table | Purpose |
+|-------|---------|
+| user_consent | User consent tracking |
+| interactions | Query/response pairs |
+| callback_requests | Callback requests |
+| new_questions | Unique questions tracking |
+| conversation_history | Full conversation turns |
+| request_logs | Complete request logging |
+| model_performance | Model performance metrics |
+| volunteers | Volunteer registrations |
+| donation_interests | Donation interest (FEC compliant) |
+| compliance_log | Compliance audit trail |
 
 ---
 
-## Performance Comparison
+## Environment Modes
 
-| Metric | Replit (Shared) | Self-Hosted (Dedicated 6-core) |
-|--------|----------------|-------------------------------|
-| **Token generation** | 0.01 tokens/sec | 10-30 tokens/sec |
-| **Query latency** | 60-90 seconds | 3-11 seconds |
-| **CPU load** | 20+ (contention) | 1-4 (normal) |
-| **Response quality** | Same | Same |
-| **Reliability** | Timeouts common | Stable |
-| **Cost** | Replit subscription | Self-hosted compute |
+| Mode | LLM Provider | SLM Models | FEC RAG | Use Case |
+|------|-------------|------------|---------|----------|
+| Replit | Commercial APIs | Required | Required | Development/Demo |
+| Self-Hosted | Commercial APIs | Required | Required | Production |
+| Fully Local | Ollama | Required | Required | Offline/Privacy |
 
 ---
 
 ## Next Steps
 
-After successful self-hosting, consider:
-
-1. **Set up monitoring** (Prometheus + Grafana)
-2. **Add HTTPS** (via nginx + certbot)
-3. **Implement backup automation** (cron jobs)
-4. **Scale horizontally** (multiple instances with load balancer)
-5. **Migrate to commercial API** for even better performance (see COMMERCIALAI_MIGRATION.md)
+1. **Run validation** to test response quality
+2. **Add your documents** to `documents/` directories
+3. **Configure email notifications** via SendGrid
+4. **Set up monitoring** (logs, health checks)
+5. **Add SSL** via nginx + certbot

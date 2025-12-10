@@ -1,0 +1,53 @@
+~/workspace$ source scripts/validate.sh 
+~/workspace/backend ~/workspace
+
+Starting BrandonBot Validation - Phase: all
+Testing mode: true
+INFO:ollama_judge:LLM Judge detected Replit environment - using Nvidia API backend
+INFO:__main__:Running PQ tests...
+INFO:__main__:Running PQ test: PQ-01
+INFO:__main__:Rate limit triggered at request 31
+INFO:__main__:Running PQ test: PQ-02
+INFO:security:Input sanitized: 1 issues found
+INFO:__main__:Running PQ test: PQ-03
+INFO:__main__:Running PQ test: PQ-04
+INFO:__main__:Running PQ test: PQ-05
+INFO:__main__:Running PQ test: PQ-06
+INFO:__main__:Running OV unit tests...
+INFO:__main__:Running OV unit test: OV-01A
+WARNING:ov_slm_models:PyTorch not available, using pattern fallback
+INFO:output_validator:MS-MARCO intent checker initialized
+WARNING:ov_slm_models:PyTorch or Transformers not available, using pattern fallback
+INFO:output_validator:ME2-BERT ethics checker initialized
+WARNING:ov_slm_models:PyTorch or Transformers not available, using pattern fallback
+INFO:output_validator:DeBERTa PII checker initialized
+WARNING:ov_slm_models:PyTorch or Transformers not available, using pattern fallback
+INFO:output_validator:BERT-tiny confidence checker initialized
+INFO:__main__:Running OV unit test: OV-03A
+INFO:__main__:Running OV unit test: OV-05A
+INFO:__main__:Running OV unit test: OV-06A
+INFO:__main__:Running full validation...
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/runner/workspace/backend/validation/validator.py", line 1036, in <module>
+    asyncio.run(main())
+  File "/nix/store/h097imm3w6dpx10qynrd2sz9fks2wbq8-python3-3.12.11/lib/python3.12/asyncio/runners.py", line 195, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/nix/store/h097imm3w6dpx10qynrd2sz9fks2wbq8-python3-3.12.11/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/nix/store/h097imm3w6dpx10qynrd2sz9fks2wbq8-python3-3.12.11/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/home/runner/workspace/backend/validation/validator.py", line 1026, in main
+    session = await validator.run_validation(phase, args.max_prompts)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/workspace/backend/validation/validator.py", line 805, in run_validation
+    results = await self.run_full_validation(max_prompts)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/workspace/backend/validation/validator.py", line 521, in run_full_validation
+    raise RuntimeError("AgentOrchestrator not available - cannot run full validation without real agent")
+RuntimeError: AgentOrchestrator not available - cannot run full validation without real agent
+~/workspace

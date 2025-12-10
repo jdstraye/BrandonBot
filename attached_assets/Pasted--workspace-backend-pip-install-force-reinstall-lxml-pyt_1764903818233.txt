@@ -1,0 +1,44 @@
+~/workspace/backend$ pip install --force-reinstall lxml python-docx
+Collecting lxml
+  Downloading lxml-6.0.2-cp311-cp311-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl.metadata (3.6 kB)
+Collecting python-docx
+  Downloading python_docx-1.2.0-py3-none-any.whl.metadata (2.0 kB)
+Collecting typing_extensions>=4.9.0 (from python-docx)
+  Using cached typing_extensions-4.15.0-py3-none-any.whl.metadata (3.3 kB)
+Downloading lxml-6.0.2-cp311-cp311-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl (5.2 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 5.2/5.2 MB 19.5 MB/s eta 0:00:00
+Downloading python_docx-1.2.0-py3-none-any.whl (252 kB)
+Using cached typing_extensions-4.15.0-py3-none-any.whl (44 kB)
+Installing collected packages: typing_extensions, lxml, python-docx
+  Attempting uninstall: typing_extensions
+    Found existing installation: typing_extensions 4.15.0
+    Uninstalling typing_extensions-4.15.0:
+      Successfully uninstalled typing_extensions-4.15.0
+  Attempting uninstall: lxml
+    Found existing installation: lxml 6.0.2
+    Uninstalling lxml-6.0.2:
+      Successfully uninstalled lxml-6.0.2
+  Attempting uninstall: python-docx
+    Found existing installation: python-docx 1.1.0
+    Uninstalling python-docx-1.1.0:
+      Successfully uninstalled python-docx-1.1.0
+Successfully installed lxml-6.0.2 python-docx-1.2.0 typing_extensions-4.15.0
+~/workspace/backend$ python ingest_all.py 
+Traceback (most recent call last):
+  File "/home/runner/workspace/backend/ingest_all.py", line 24, in <module>
+    from ingest_documents import (
+  File "/home/runner/workspace/backend/ingest_documents.py", line 14, in <module>
+    import docx
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/docx/__init__.py", line 11, in <module>
+    from docx.api import Document
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/docx/api.py", line 12, in <module>
+    from docx.package import Package
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/docx/package.py", line 9, in <module>
+    from docx.opc.package import OpcPackage
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/docx/opc/package.py", line 9, in <module>
+    from docx.opc.part import PartFactory
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/docx/opc/part.py", line 9, in <module>
+    from docx.opc.oxml import serialize_part_xml
+  File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/docx/opc/oxml.py", line 14, in <module>
+    from lxml import etree
+ImportError: cannot import name 'etree' from 'lxml' (/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/lxml/__init__.py)

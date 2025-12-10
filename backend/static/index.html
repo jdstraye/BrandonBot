@@ -3,33 +3,77 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BrandonBot</title>
+    <title>BrandonBot - AI Campaign Assistant</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <div class="chat-container">
         <div class="chat-header">
-            <h1>BrandonBot</h1><h5>v0r0</h5>
-            <p class="subtitle">Ask about Brandon's positions and platform</p>
+            <h1>BrandonBot</h1><h5>v0r1</h5>
+            <p class="subtitle">AI Campaign Assistant for Brandon Sowers</p>
         </div>
         
-        <div id="consent-banner" class="consent-banner">
-            <p><strong>Privacy Notice:</strong> Would you like to help improve BrandonBot? Your questions and our conversations can be logged to help us provide better answers.</p>
-            <div class="consent-buttons">
-                <button onclick="handleConsent(true)" class="btn-primary">Yes, I consent to logging</button>
-                <button onclick="handleConsent(false)" class="btn-secondary">No thanks</button>
+        <div id="consent-modal" class="consent-modal">
+            <div class="consent-modal-content">
+                <h2>Before We Begin</h2>
+                
+                <div class="consent-section">
+                    <h3>AI Disclosure</h3>
+                    <p>This is an <strong>AI-powered automated assistant</strong>, not a human representative. My responses are AI-generated and may not be perfect. This is a volunteer project created by campaign supporters.</p>
+                    <p class="disclosure-note">I cannot provide legal, tax, or professional advice. If you need personal assistance, I can connect you with someone from the team.</p>
+                </div>
+                
+                <div class="consent-section">
+                    <h3>Conversation Logging</h3>
+                    <p>To help improve BrandonBot, your questions and our conversations may be logged. This helps us provide better, more accurate answers to future visitors.</p>
+                </div>
+                
+                <div class="consent-checkbox-group">
+                    <label class="consent-checkbox">
+                        <input type="checkbox" id="ai-consent-checkbox" required>
+                        <span>I understand this is an AI assistant and accept its limitations</span>
+                    </label>
+                    <label class="consent-checkbox">
+                        <input type="checkbox" id="logging-consent-checkbox">
+                        <span>I consent to conversation logging to help improve the service (optional)</span>
+                    </label>
+                </div>
+                
+                <div class="consent-buttons">
+                    <button id="consent-continue-btn" class="btn-primary" disabled onclick="handleConsentSubmit()">Continue</button>
+                </div>
+                
+                <p class="consent-footer">You can still use BrandonBot without logging consent. Your AI acknowledgment is required to proceed.</p>
             </div>
         </div>
         
         <div class="messages" id="messages">
             <div class="message bot-message">
                 <div class="message-content">
-                    <p><strong>👋 Hi! I'm BrandonBot.</strong></p>
-                    <p>I've been trained on Brandon's public positions and statements. I'll do my best to answer your questions accurately, but I may make mistakes.</p>
-                    <p>If I'm unsure about something or you need a detailed answer, I'll offer to have Brandon or a team member call you back personally.</p>
+                    <p><strong>Hi! I'm BrandonBot, an AI-powered automated assistant.</strong></p>
+                    <p>I'm here to help answer your questions about Brandon Sowers' campaign and positions. I was created by campaign volunteers (not a paid service) to help you learn more about Brandon's platform.</p>
+                    <p><strong>Please note:</strong></p>
+                    <ul class="disclosure-list">
+                        <li>I am an AI, not a human representative</li>
+                        <li>My responses are AI-generated based on Brandon's public positions</li>
+                        <li>I cannot provide legal, tax, or professional advice</li>
+                        <li>If you need to speak with a real person, just ask!</li>
+                    </ul>
                     <p>What would you like to know about Brandon's positions?</p>
                 </div>
             </div>
+        </div>
+        
+        <div class="action-buttons">
+            <button onclick="openVolunteerModal()" class="btn-action btn-volunteer" title="Sign up to volunteer">
+                <span class="btn-icon">🙋</span> Volunteer
+            </button>
+            <button onclick="openDonateModal()" class="btn-action btn-donate" title="Learn about donating">
+                <span class="btn-icon">💝</span> Donate
+            </button>
+            <button onclick="openCallbackModal()" class="btn-action btn-callback" title="Request a callback">
+                <span class="btn-icon">📞</span> Callback
+            </button>
         </div>
         
         <div class="input-container">
@@ -40,15 +84,12 @@
                 autocomplete="off"
             />
             <button id="send-btn" onclick="sendQuery()">Send</button>
-            <button id="callback-btn" onclick="openCallbackModal()" class="btn-callback" title="Request a personal callback from Brandon">
-                📞 Request Callback
-            </button>
         </div>
         
         <div id="callback-modal" class="modal">
             <div class="modal-content">
-                <h2>Request a Personal Call from Brandon</h2>
-                <p class="modal-subtitle">Brandon will personally call you back to discuss your question.</p>
+                <h2>Request a Call Back</h2>
+                <p class="modal-subtitle">Someone from the team will call you back to discuss your question.</p>
                 <form id="callback-form">
                     <input type="text" id="callback-name" placeholder="Your Name" required />
                     <input type="tel" id="callback-phone" placeholder="Phone Number" required />
@@ -59,6 +100,68 @@
                         <button type="button" onclick="closeCallbackModal()" class="btn-secondary">Cancel</button>
                     </div>
                 </form>
+            </div>
+        </div>
+        
+        <div id="volunteer-modal" class="modal">
+            <div class="modal-content">
+                <h2>Volunteer for the Campaign</h2>
+                <p class="modal-subtitle">Thank you for your interest in volunteering! Please provide your information and someone from the team will reach out.</p>
+                <form id="volunteer-form">
+                    <input type="text" id="volunteer-name" placeholder="Your Name *" required />
+                    <input type="email" id="volunteer-email" placeholder="Email Address *" required />
+                    <input type="tel" id="volunteer-phone" placeholder="Phone Number (optional)" />
+                    <input type="text" id="volunteer-zip" placeholder="Zip Code (optional)" />
+                    <div class="checkbox-group">
+                        <p><strong>Areas of Interest:</strong></p>
+                        <label><input type="checkbox" name="interests" value="canvassing" /> Door-to-door canvassing</label>
+                        <label><input type="checkbox" name="interests" value="phone_banking" /> Phone banking</label>
+                        <label><input type="checkbox" name="interests" value="events" /> Event support</label>
+                        <label><input type="checkbox" name="interests" value="social_media" /> Social media</label>
+                        <label><input type="checkbox" name="interests" value="other" /> Other</label>
+                    </div>
+                    <select id="volunteer-availability">
+                        <option value="">Availability...</option>
+                        <option value="weekdays">Weekdays</option>
+                        <option value="weekends">Weekends</option>
+                        <option value="evenings">Evenings only</option>
+                        <option value="flexible">Flexible</option>
+                    </select>
+                    <div class="modal-buttons">
+                        <button type="submit" class="btn-primary">Sign Up to Volunteer</button>
+                        <button type="button" onclick="closeVolunteerModal()" class="btn-secondary">Cancel</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        
+        <div id="donate-modal" class="modal">
+            <div class="modal-content">
+                <h2>Support the Campaign</h2>
+                <div class="donation-notice">
+                    <p><strong>Important Notice:</strong></p>
+                    <p>I'm an AI assistant and <strong>cannot process donations directly</strong>. This is to ensure full FEC compliance and protect your financial information.</p>
+                    <p>To make a contribution, please:</p>
+                    <ol>
+                        <li>Visit the official campaign donation page, OR</li>
+                        <li>Provide your contact info below and someone from the team will reach out with secure donation options</li>
+                    </ol>
+                </div>
+                <div class="donation-options">
+                    <a href="#" class="btn-primary btn-wide" onclick="alert('Official donation page coming soon!'); return false;">Visit Official Donation Page</a>
+                    <p class="or-divider">— OR —</p>
+                    <form id="donate-interest-form">
+                        <input type="text" id="donate-name" placeholder="Your Name *" required />
+                        <input type="email" id="donate-email" placeholder="Email Address *" required />
+                        <input type="tel" id="donate-phone" placeholder="Phone Number (optional)" />
+                        <textarea id="donate-message" placeholder="Any message or questions about donating? (optional)"></textarea>
+                        <p class="fec-notice">By submitting, you confirm you are a U.S. citizen or permanent resident and are not a federal contractor.</p>
+                        <div class="modal-buttons">
+                            <button type="submit" class="btn-primary">Request Donation Info</button>
+                            <button type="button" onclick="closeDonateModal()" class="btn-secondary">Cancel</button>
+                        </div>
+                    </form>
+                </div>
             </div>
         </div>
     </div>
