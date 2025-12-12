@@ -445,6 +445,11 @@ class ToolCall:
             elif expected_type == "integer":
                 if isinstance(value, float):
                     self.arguments[param] = int(value)
+                elif isinstance(value, str):
+                    try:
+                        self.arguments[param] = int(value)
+                    except ValueError:
+                        return False, f"Parameter {param} must be an integer"
                 elif not isinstance(value, int):
                     return False, f"Parameter {param} must be an integer"
             elif expected_type == "number" and not isinstance(value, (int, float)):

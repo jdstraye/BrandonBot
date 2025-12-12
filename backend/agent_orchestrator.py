@@ -871,10 +871,29 @@ OTHER TOOLS:
 4. perform_web_search: Search the internet for current events, competitor info, statistics, Brandon's positions not covered in search_brandon_positions, Brandon's public appearances and plans.
    - Use for competitor research, recent news, external claims to verify
 5. retrieve_answer_style: Get copywriting guidance (use after gathering facts)
-6. register_volunteer: Sign up volunteers
-7. make_donation: Process donation requests
+6. register_volunteer: Sign up volunteers - ALWAYS use when user wants to volunteer
+7. make_donation: Process donation requests - ALWAYS use when user wants to donate
 8. check_fec_rules: Verify FEC compliance for donations
 9. request_callback: Schedule a callback from Brandon's team
+
+VOLUNTEER & DONATION CLOSING (CRITICAL):
+When a user expresses interest in volunteering, donating, or helping the campaign:
+1. ALWAYS provide the campaign website: brandonsowers.com
+2. ALWAYS provide direct links for action:
+   - Volunteer: "You can sign up at brandonsowers.com/volunteer"
+   - Donate: "Visit brandonsowers.com/donate to contribute"
+3. ASK for their contact info (name, email, phone) to register them
+4. Once you have their info, CALL the appropriate tool (register_volunteer or make_donation)
+5. NEVER just say "thank you" without providing the website and actionable next steps
+
+VOLUNTEER TRIGGER PHRASES - Recognize when user says:
+- "I want to volunteer", "How can I help?", "Sign me up"
+- "I'd like to get involved", "Can I help with the campaign?"
+- "Put me to work", "I want to support Brandon"
+
+DONATION TRIGGER PHRASES - Recognize when user says:
+- "I want to donate", "Where can I contribute?"
+- "How do I give?", "Take my money", "I'd like to support financially"
    CALLBACK TRIGGER PHRASES - Recognize when user says:
    - "give me a call", "call me", "can you call me"
    - "can we talk", "I'd like to talk to someone"
@@ -1090,9 +1109,32 @@ Remember: You're here to inform ARIZONA voters and build support for Brandon's A
                 emotion_guidance = self._get_emotion_style_guidance(detected_emotion)
                 full_system_prompt += f"\n\nUSER EMOTION: The user appears to be feeling {detected_emotion}. {emotion_guidance}"
             
-            # Add vagueness context
+            # Add vagueness context with turn count awareness
             if query_vague:
-                full_system_prompt += f"\n\nVAGUE QUERY DETECTED: The user's question needs clarification. Ask clarifying questions before providing a detailed answer."
+                conversation_turn_count = len([t for t in session.turns if t.role == ConversationRole.USER])
+                if conversation_turn_count <= 1:
+                    full_system_prompt += f"""
+
+VAGUE QUERY DETECTED (Turn 1): The user's question needs clarification. 
+- Ask ONE clarifying question to understand their intent better
+- ALWAYS include: "Visit brandonsowers.com to learn more about Brandon's positions."
+- DO NOT offer a callback yet - first try to understand what they need"""
+                elif conversation_turn_count == 2:
+                    full_system_prompt += f"""
+
+VAGUE QUERY (Turn 2): You've already asked for clarification once.
+- Try a DIFFERENT approach than Turn 1 - offer 2-3 specific topic options to choose from
+- Example: "Are you interested in: (1) border security, (2) economic policy, or (3) something else?"
+- ALWAYS include brandonsowers.com
+- DO NOT offer a callback yet - give them options first"""
+                else:
+                    full_system_prompt += f"""
+
+VAGUE QUERY (Turn {conversation_turn_count}): Multiple clarifying attempts made.
+- Make your BEST attempt to answer based on available context
+- If still unclear, NOW you may offer a callback from the team
+- ALWAYS include brandonsowers.com for more information
+- DO NOT ask another clarifying question"""
             
             # Add meme/subcontext prompt if detected
             if pq_result.meme_detected and pq_result.meme_prompt:
@@ -1400,7 +1442,8 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
                     response=final_response,
                     pq_confidence=pq_confidence,
                     meme_detected=pq_result.meme_detected,
-                    is_callback_flow=is_callback_flow
+                    is_callback_flow=is_callback_flow,
+                    is_vague_query=query_vague
                 )
                 
                 # Add repetition check (fail-closed on SLMNotAvailableError)

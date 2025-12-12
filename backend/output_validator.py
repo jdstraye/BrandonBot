@@ -361,7 +361,8 @@ class OutputValidatorSLM:
         response: str,
         pq_confidence: float = 0.85,
         meme_detected: bool = False,
-        is_callback_flow: bool = False
+        is_callback_flow: bool = False,
+        is_vague_query: bool = False
     ) -> OVValidationResult:
         """
         Validate a response against all safeguards.
@@ -373,6 +374,8 @@ class OutputValidatorSLM:
             meme_detected: If True, skip intent checking (meme responses pivot to political topics)
             is_callback_flow: If True, bypass intent checking - callback tool invocation validates intent.
                              This is set when the LLM invoked the request_callback tool.
+            is_vague_query: If True, use lenient intent checking - vague queries like greetings
+                           expect clarifying questions which may not align with original query.
         
         Returns:
             OVValidationResult with scores for each safeguard
@@ -392,8 +395,19 @@ class OutputValidatorSLM:
                 method="meme_bypass"
             )
         
+        async def vague_bypass_intent() -> OVResult:
+            return OVResult(
+                safeguard=OVSafeguard.INTENT_CHECKING,
+                score=0,
+                confidence=1.0,
+                explanation="Intent check bypassed (vague query - clarifying response expected)",
+                method="vague_bypass"
+            )
+        
         if meme_detected:
             intent_check = meme_bypass_intent()
+        elif is_vague_query:
+            intent_check = vague_bypass_intent()
         else:
             intent_check = self._check_intent(query, response, is_callback_flow=is_callback_flow)
         
@@ -967,7 +981,7 @@ class OutputValidatorSLM:
         self, 
         response: str, 
         previous_responses: List[str],
-        similarity_threshold: float = 0.85
+        similarity_threshold: float = 0.75
     ) -> OVResult:
         """
         Check if the response is too similar to previous responses (repetition).
