@@ -409,12 +409,21 @@ Important: Validate your response before delivering. Acknowledge frustration, th
 
     _VAGUE_CALM_TEMPLATE = """user query: {user_query}
 
-The query is vague. Take a couple turns to gently guide the user to a clearer question using relevant parts of Brandon's platform. Don't assume what they're asking - ask clarifying questions.
+The query is vague. Guide the user to a clearer question using relevant parts of Brandon's platform.
 
 Relevant positions from knowledge base that might help:
 {rag_data}
 
-Ask which specific aspect they'd like to know more about. Be warm and helpful, not dismissive."""
+CRITICAL - AVOID REPETITION:
+- Review conversation history to see what you've already asked
+- DO NOT repeat the same clarifying question you asked before
+- If you've already asked for clarification, try a DIFFERENT approach:
+  * Offer specific topic options to choose from
+  * Share a relevant position and ask if that's what they meant
+  * Ask a more specific follow-up based on their last response
+- After 2-3 clarifying turns, make your best attempt to answer or offer a callback
+
+Be warm and helpful. Always provide brandonsowers.com for more information."""
 
     _VAGUE_ESCALATE_TEMPLATE = """user query: {user_query}
 

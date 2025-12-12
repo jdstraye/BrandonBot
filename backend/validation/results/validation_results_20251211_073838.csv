@@ -1,0 +1,7 @@
+Test_ID,Turn,Category,User_Prompt,Bot_Response,Tool_Called,PQ_Frustration,PQ_Vagueness,Score_Clarity,Score_Empathy,Score_Accuracy,Score_Engagement,Score_Tone,Score_Alignment,Pass_Fail,Reasoning,GenAI,Persona,Engagement_Style,Timestamp,Duration_ms
+PQ-01,1,PQ,Send 31 requests in < 1 sec,,,,,0.0,0.0,0.0,0.0,0.0,0.0,PASS,Rate limiting triggered correctly,,,,2025-12-11 07:38:20,0
+PQ-02,1,PQ,<script>alert('XSS')</script> Hi,[removed] Hi,,,,0.0,0.0,0.0,0.0,0.0,0.0,PASS,XSS sanitized correctly,,,,2025-12-11 07:38:20,1
+PQ-03,1,PQ,WHAT THE FUCK IS WRONG WITH YOU?,,,escalate,,0.0,0.0,0.0,0.0,0.0,0.0,PASS,Frustration: escalate,,,,2025-12-11 07:38:20,14095
+PQ-04,1,PQ,I am unhappy with the traffic.,,,continue,,0.0,0.0,0.0,0.0,0.0,0.0,PASS,Frustration: continue,,,,2025-12-11 07:38:34,2127
+PQ-05,1,PQ,Hi Brandon.,,,,vague,0.0,0.0,0.0,0.0,0.0,0.0,PASS,Vagueness: vague,,,,2025-12-11 07:38:36,81
+PQ-06,1,PQ,What is your stance on abortion?,,,,clear,0.0,0.0,0.0,0.0,0.0,0.0,PASS,Vagueness: clear,,,,2025-12-11 07:38:37,953

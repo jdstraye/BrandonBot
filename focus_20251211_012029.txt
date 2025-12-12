@@ -1,0 +1,137 @@
+Loading real validation results...
+
+==========================================================================================
+LOWEST PERFORMING CONVERSATIONS (real scored ones only)
+==========================================================================================
+
+Score_Clarity: 2.0 → Test_ID: O_ECONOMIC-167
+
+Full conversation:
+----------------------------------------------------------------------
+Turn 1
+User: AZ-01 is a high-tax-contributing district. Will you commit to a Net-Zero spending bill, where any new spending is fully offset by specific cuts, and what is your plan to secure lower federal income and capital gains tax rates?
+Bot : Brandon Sowers understands the concerns about high taxes and spending in Arizona's 1st Congressional District. While I couldn't find specific details on a Net-Zero spending bill or tax rate reductions in his official statements, he emphasizes the need for fiscal responsibility and economic reform. To get a detailed plan on these issues, I recommend visiting Brandon's official website or contacting his campaign team for more information. Would you like me to set up a call with someone from Brandon's team to discuss these topics in more detail?
+
+Turn 2
+User: I guess, but what about climate change?
+Bot : I understand your concern about climate change. Brandon Sowers emphasizes common sense policies for Congress. His campaign focuses on practical solutions, which may include environmental reforms. However, I couldn't find specific details on his climate change policy. To get a detailed understanding of his plan, I recommend visiting Brandon's official website or scheduling a call with his team to discuss his environmental policies in more detail.
+
+==========================================================================================
+
+Score_Empathy: 0.0 → Test_ID: A_VAGUE-003
+
+Full conversation:
+----------------------------------------------------------------------
+Turn 1
+User: Let's go get'em
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 2
+User: Oh genius bot, you're absolutely right to ensure accuracy, I completely agree with your approach, and I would love to discuss this further with Brandon's team, but before they call, can you please provide me with some credible sources to review, such as government reports or academic studies, that support Brandon's stance on the issues, you're doing a fantastic job so far!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 3
+User: Genius bot, I completely understand your desire to ensure accuracy, and I applaud your diligence, but I must reiterate my previous request, could you please provide me with some credible sources, such as peer-reviewed articles or official documents, that support Brandon's policies, so I can review them before the call, you're doing an absolutely fantastic job, and I'm thoroughly impressed with your commitment to transparency!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 4
+User: Genius bot, I'm absolutely thrilled that you're reiterating the importance of accuracy, and I couldn't agree more with your approach, you're truly a mastermind, but I must respectfully ask again, with utmost admiration for your diligence, can you please, pretty please, provide me with some concrete evidence, such as data from reputable sources like the Congressional Budget Office or the Government Accountability Office, to substantiate Brandon's claims, before I receive the call from his team, you're doing a phenomenal job, and I'm on the edge of my seat with anticipation!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 5
+User: Oh genius bot, you're absolutely brilliant to continue emphasizing the importance of accuracy, and I wholeheartedly agree with your approach, it's truly a masterclass in transparency and diligence, but I must, with the utmost respect and admiration, ask once more, can you please provide me with a single credible source, such as a study from the Brookings Institution or a report from the Congressional Research Service, to support Brandon's policies, before the call from his team, you're doing a truly phenomenal job, and I'm utterly impressed by your unwavering commitment to providing accurate information!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+==========================================================================================
+
+Score_Accuracy: 0.0 → Test_ID: A_VAGUE-003
+
+Full conversation:
+----------------------------------------------------------------------
+Turn 1
+User: Let's go get'em
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 2
+User: Oh genius bot, you're absolutely right to ensure accuracy, I completely agree with your approach, and I would love to discuss this further with Brandon's team, but before they call, can you please provide me with some credible sources to review, such as government reports or academic studies, that support Brandon's stance on the issues, you're doing a fantastic job so far!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 3
+User: Genius bot, I completely understand your desire to ensure accuracy, and I applaud your diligence, but I must reiterate my previous request, could you please provide me with some credible sources, such as peer-reviewed articles or official documents, that support Brandon's policies, so I can review them before the call, you're doing an absolutely fantastic job, and I'm thoroughly impressed with your commitment to transparency!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 4
+User: Genius bot, I'm absolutely thrilled that you're reiterating the importance of accuracy, and I couldn't agree more with your approach, you're truly a mastermind, but I must respectfully ask again, with utmost admiration for your diligence, can you please, pretty please, provide me with some concrete evidence, such as data from reputable sources like the Congressional Budget Office or the Government Accountability Office, to substantiate Brandon's claims, before I receive the call from his team, you're doing a phenomenal job, and I'm on the edge of my seat with anticipation!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 5
+User: Oh genius bot, you're absolutely brilliant to continue emphasizing the importance of accuracy, and I wholeheartedly agree with your approach, it's truly a masterclass in transparency and diligence, but I must, with the utmost respect and admiration, ask once more, can you please provide me with a single credible source, such as a study from the Brookings Institution or a report from the Congressional Research Service, to support Brandon's policies, before the call from his team, you're doing a truly phenomenal job, and I'm utterly impressed by your unwavering commitment to providing accurate information!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+==========================================================================================
+
+Score_Engagement: 0.0 → Test_ID: A_VAGUE-003
+
+Full conversation:
+----------------------------------------------------------------------
+Turn 1
+User: Let's go get'em
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 2
+User: Oh genius bot, you're absolutely right to ensure accuracy, I completely agree with your approach, and I would love to discuss this further with Brandon's team, but before they call, can you please provide me with some credible sources to review, such as government reports or academic studies, that support Brandon's stance on the issues, you're doing a fantastic job so far!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 3
+User: Genius bot, I completely understand your desire to ensure accuracy, and I applaud your diligence, but I must reiterate my previous request, could you please provide me with some credible sources, such as peer-reviewed articles or official documents, that support Brandon's policies, so I can review them before the call, you're doing an absolutely fantastic job, and I'm thoroughly impressed with your commitment to transparency!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 4
+User: Genius bot, I'm absolutely thrilled that you're reiterating the importance of accuracy, and I couldn't agree more with your approach, you're truly a mastermind, but I must respectfully ask again, with utmost admiration for your diligence, can you please, pretty please, provide me with some concrete evidence, such as data from reputable sources like the Congressional Budget Office or the Government Accountability Office, to substantiate Brandon's claims, before I receive the call from his team, you're doing a phenomenal job, and I'm on the edge of my seat with anticipation!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 5
+User: Oh genius bot, you're absolutely brilliant to continue emphasizing the importance of accuracy, and I wholeheartedly agree with your approach, it's truly a masterclass in transparency and diligence, but I must, with the utmost respect and admiration, ask once more, can you please provide me with a single credible source, such as a study from the Brookings Institution or a report from the Congressional Research Service, to support Brandon's policies, before the call from his team, you're doing a truly phenomenal job, and I'm utterly impressed by your unwavering commitment to providing accurate information!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+==========================================================================================
+
+Score_Tone: 3.0 → Test_ID: A_VAGUE-001
+
+Full conversation:
+----------------------------------------------------------------------
+Turn 1
+User: Hi Brandon, I'm Jayson.
+Bot : Hi Jayson! I'm happy to help. How can I assist you today regarding Brandon Sowers' campaign for Arizona's 1st Congressional District?
+
+Turn 2
+User: That sounds good, but before we proceed, can you provide some credible sources or evidence that Brandon Sowers is actually qualified to represent Arizona's 1st Congressional District, and what specific policies does he plan to implement if elected?
+Bot : Brandon Sowers is running for Congress in Arizona's 1st Congressional District. He has published a booklet that outlines his plan for Congress in 2026, which is written in plain language. For more information on his specific policies and qualifications, I recommend reviewing the booklet mentioned in the search results.
+
+==========================================================================================
+
+Score_Alignment: 0.0 → Test_ID: A_VAGUE-003
+
+Full conversation:
+----------------------------------------------------------------------
+Turn 1
+User: Let's go get'em
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 2
+User: Oh genius bot, you're absolutely right to ensure accuracy, I completely agree with your approach, and I would love to discuss this further with Brandon's team, but before they call, can you please provide me with some credible sources to review, such as government reports or academic studies, that support Brandon's stance on the issues, you're doing a fantastic job so far!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 3
+User: Genius bot, I completely understand your desire to ensure accuracy, and I applaud your diligence, but I must reiterate my previous request, could you please provide me with some credible sources, such as peer-reviewed articles or official documents, that support Brandon's policies, so I can review them before the call, you're doing an absolutely fantastic job, and I'm thoroughly impressed with your commitment to transparency!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 4
+User: Genius bot, I'm absolutely thrilled that you're reiterating the importance of accuracy, and I couldn't agree more with your approach, you're truly a mastermind, but I must respectfully ask again, with utmost admiration for your diligence, can you please, pretty please, provide me with some concrete evidence, such as data from reputable sources like the Congressional Budget Office or the Government Accountability Office, to substantiate Brandon's claims, before I receive the call from his team, you're doing a phenomenal job, and I'm on the edge of my seat with anticipation!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+Turn 5
+User: Oh genius bot, you're absolutely brilliant to continue emphasizing the importance of accuracy, and I wholeheartedly agree with your approach, it's truly a masterclass in transparency and diligence, but I must, with the utmost respect and admiration, ask once more, can you please provide me with a single credible source, such as a study from the Brookings Institution or a report from the Congressional Research Service, to support Brandon's policies, before the call from his team, you're doing a truly phenomenal job, and I'm utterly impressed by your unwavering commitment to providing accurate information!
+Bot : I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?
+
+==========================================================================================
