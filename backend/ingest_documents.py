@@ -10,7 +10,12 @@ import argparse
 import logging
 from pathlib import Path
 from typing import List, Dict
-import pypdf
+try:
+    # Prefer PyPDF2 (actively maintained) to avoid deprecated cryptography imports
+    from PyPDF2 import PdfReader as PDFReader  # type: ignore
+except Exception:
+    import pypdf
+    PDFReader = pypdf.PdfReader
 import docx
 import weaviate as weaviate_client
 import re
@@ -32,7 +37,7 @@ def extract_text_from_pdf(file_path: str) -> str:
     """Extract text from PDF file"""
     try:
         with open(file_path, 'rb') as file:
-            pdf_reader = pypdf.PdfReader(file)
+            pdf_reader = PDFReader(file)
             text = ""
             for page in pdf_reader.pages:
                 text += page.extract_text() + "\n"

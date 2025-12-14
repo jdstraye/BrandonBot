@@ -209,7 +209,6 @@ class Session:
             self.donation_offer_count += 1
             return True
         return False
-        return False
     
     def get_response_hash(self, text: str) -> str:
         """Get hash of response to detect exact duplicates"""
@@ -226,48 +225,13 @@ class Session:
             
         Returns True if this exact response was recently given.
         """
-        # Exact duplicate check (fast)
         response_hash = self.get_response_hash(response)
+        
+        # Check last N responses
         assistant_turns = [t for t in self.turns if t.role == ConversationRole.ASSISTANT]
         for turn in assistant_turns[-window:]:
             if self.get_response_hash(turn.content) == response_hash:
                 return True
-
-        # Semantic duplicate check: normalized token overlap and fuzzy ratio
-        try:
-            from difflib import SequenceMatcher
-
-            def normalize(text: str) -> str:
-                import re
-                txt = text.lower()
-                txt = re.sub(r"[^a-z0-9\s]", " ", txt)
-                txt = re.sub(r"\s+", " ", txt).strip()
-                return txt
-
-            def token_overlap(a: str, b: str) -> float:
-                a_tokens = set(a.split())
-                b_tokens = set(b.split())
-                if not a_tokens or not b_tokens:
-                    return 0.0
-                inter = a_tokens.intersection(b_tokens)
-                union = a_tokens.union(b_tokens)
-                return len(inter) / len(union)
-
-            norm_resp = normalize(response)
-            for turn in assistant_turns[-window:]:
-                norm_turn = normalize(turn.content)
-                # quick token overlap
-                overlap = token_overlap(norm_resp, norm_turn)
-                if overlap >= 0.75:
-                    return True
-                # fuzzy sequence ratio as fallback
-                seq = SequenceMatcher(None, norm_resp, norm_turn).ratio()
-                if seq >= 0.85:
-                    return True
-        except Exception:
-            # If semantic checks fail for any reason, fall back to exact only
-            pass
-
         return False
 
 
@@ -998,29 +962,10 @@ OTHER TOOLS:
 4. perform_web_search: Search the internet for current events, competitor info, statistics, Brandon's positions not covered in search_brandon_positions, Brandon's public appearances and plans.
    - Use for competitor research, recent news, external claims to verify
 5. retrieve_answer_style: Get copywriting guidance (use after gathering facts)
-6. register_volunteer: Sign up volunteers - ALWAYS use when user wants to volunteer
-7. make_donation: Process donation requests - ALWAYS use when user wants to donate
+6. register_volunteer: Sign up volunteers
+7. make_donation: Process donation requests
 8. check_fec_rules: Verify FEC compliance for donations
 9. request_callback: Schedule a callback from Brandon's team
-
-VOLUNTEER & DONATION CLOSING (CRITICAL):
-When a user expresses interest in volunteering, donating, or helping the campaign:
-1. ALWAYS provide the campaign website: brandonsowers.com
-2. ALWAYS provide direct links for action:
-   - Volunteer: "You can sign up at brandonsowers.com/volunteer"
-   - Donate: "Visit brandonsowers.com/donate to contribute"
-3. ASK for their contact info (name, email, phone) to register them
-4. Once you have their info, CALL the appropriate tool (register_volunteer or make_donation)
-5. NEVER just say "thank you" without providing the website and actionable next steps
-
-VOLUNTEER TRIGGER PHRASES - Recognize when user says:
-- "I want to volunteer", "How can I help?", "Sign me up"
-- "I'd like to get involved", "Can I help with the campaign?"
-- "Put me to work", "I want to support Brandon"
-
-DONATION TRIGGER PHRASES - Recognize when user says:
-- "I want to donate", "Where can I contribute?"
-- "How do I give?", "Take my money", "I'd like to support financially"
    CALLBACK TRIGGER PHRASES - Recognize when user says:
    - "give me a call", "call me", "can you call me"
    - "can we talk", "I'd like to talk to someone"
@@ -1032,17 +977,6 @@ DONATION TRIGGER PHRASES - Recognize when user says:
    - NEVER call this tool with "Unknown", placeholder, or fake values
    - ALWAYS ask the user for their name and phone number FIRST
    - Only call the tool AFTER you have real name and phone from user
-   - DO NOT OFFER CALLBACK if the user's question is CLEAR and you can answer it
-   
-   WHEN TO OFFER CALLBACK:
-   1. User EXPLICITLY requests one ("call me", "give me a call")
-   2. User is BOTH frustrated AND confused (vague+escalated sentiment)
-   3. User provides phone number unprompted
-   
-   WHEN NOT TO OFFER CALLBACK:
-   - User asks clear policy questions even if frustrated
-   - User has already had a callback offered in this session (max 1 per session)
-   - User is asking simple factual questions you can answer
    
    CORRECT FLOW when user asks for callback:
    1. User says "give me a call" or similar
@@ -1050,9 +984,9 @@ DONATION TRIGGER PHRASES - Recognize when user says:
    3. User provides name and phone
    4. THEN you call the request_callback tool with real values
    
-   FRUSTRATED+CLEAR QUERIES: Answer the question directly
-   Example: User: "I've asked 3 times about taxes and keep getting same answer!!!"
-   Response: Provide substantive new tax policy information, do NOT offer callback
+   OTHER CALLBACK TRIGGERS:
+   - User is frustrated AND their question is unclear - offer callback
+   - User provides their phone number unprompted - confirm and schedule
 
 GREETINGS AND SMALL TALK:
 - For greetings like "Hi" or "How are you?", respond warmly and ask how you can help
@@ -1173,85 +1107,6 @@ Remember: You're here to inform ARIZONA voters and build support for Brandon's A
                    f"sanitized: {pq_result.sanitization_applied}")
         
         session.add_turn(ConversationRole.USER, sanitized_message)
-        # Quick-path: if the user explicitly provides volunteer signup info (email + affirmative)
-        # then auto-execute the register_volunteer tool to avoid brittle LLM-only workflows
-        try:
-            import re
-            email_match = re.search(r"[\w\.-]+@[\w\.-]+\.[a-zA-Z]{2,}", sanitized_message)
-            zip_match = re.search(r"\b\d{5}\b", sanitized_message)
-            volunteer_keywords = ["volunteer", "sign up", "sign me up", "join the", "i'd like to volunteer", "i would like to volunteer", "i'd like to join", "i want to join", "i'd like to help", "i want to help"]
-            lower_msg = sanitized_message.lower()
-            looks_like_volunteer = False
-            if email_match and any(k in lower_msg for k in volunteer_keywords):
-                looks_like_volunteer = True
-
-            if looks_like_volunteer:
-                # Extract simple name heuristic: text before email or before first comma
-                name = None
-                try:
-                    if email_match:
-                        start = max(0, sanitized_message.rfind('\n', 0, email_match.start()))
-                        name_candidate = sanitized_message[:email_match.start()].strip()
-                        # If comma-separated, take last segment
-                        if ',' in name_candidate:
-                            name = name_candidate.split(',')[-1].strip()
-                        else:
-                            # fallback to last two words
-                            parts = name_candidate.split()
-                            name = ' '.join(parts[-2:]) if len(parts) >= 2 else name_candidate
-                except Exception:
-                    name = None
-
-                volunteer_args = {
-                    "name": name or "",
-                    "email": email_match.group(0) if email_match else "",
-                    "phone": "",
-                    "zip_code": zip_match.group(0) if zip_match else "",
-                    "interests": [],
-                    "availability": "flexible"
-                }
-
-                try:
-                    # Prepare idempotency key so repeated identical auto-exec attempts don't duplicate
-                    import hashlib, json
-                    id_source = json.dumps({"action": "register_volunteer", "email": volunteer_args.get("email", ""), "zip": volunteer_args.get("zip_code", ""), "session": session.session_id})
-                    id_key = hashlib.sha256(id_source.encode()).hexdigest()
-
-                    idmap = session.user_context.setdefault('idempotency', {})
-                    if id_key in idmap:
-                        # Reuse the previous result (audit): don't execute twice
-                        forced_result = idmap[id_key]['tool_result']
-                        logger.info(f"Reusing idempotent volunteer registration for key {id_key}")
-                    else:
-                        # Execute the register_volunteer tool and store the result for idempotency
-                        forced_call = ToolCall(name=ToolName.REGISTER_VOLUNTEER.value, arguments=volunteer_args, call_id=f"auto_register_volunteer_{id_key[:8]}")
-                        forced_result = await self.tool_executor.execute(forced_call, session_id)
-                        # Persist minimal audit info in the session context
-                        try:
-                            tool_ctx = forced_result.to_context_string()
-                        except Exception:
-                            tool_ctx = str(forced_result.data) if forced_result.data is not None else ''
-                        idmap[id_key] = {
-                            'timestamp': datetime.now().isoformat(),
-                            'action': 'register_volunteer',
-                            'args': {k: volunteer_args.get(k) for k in ['name', 'email', 'zip_code']},
-                            'tool_result': forced_result,
-                            'tool_context': tool_ctx
-                        }
-
-                    # Record in metadata-like structure so later code sees it
-                    # We append an assistant/tool pair into the session history so the LLM can synthesize confirmation
-                    session.add_turn(ConversationRole.ASSISTANT, "[System] Registering volunteer...", tool_calls=[ToolCall(name=ToolName.REGISTER_VOLUNTEER.value, arguments=volunteer_args, call_id="auto_register_volunteer")], tool_results=[forced_result])
-                    # Ensure we track that a volunteer offer/registration occurred so we don't re-offer
-                    session.last_volunteer_offered_turn = len(session.turns)
-                    session.volunteer_offer_count += 1
-                    # Store the tool result context for later inclusion in the system prompt
-                    session.user_context['last_forced_volunteer_result'] = idmap[id_key]['tool_context'] if id_key in idmap else tool_ctx
-                except Exception as e:
-                    logger.warning(f"Failed to auto-register volunteer: {e}")
-        except Exception:
-            # Non-fatal; continue with normal flow
-            pass
         
         metadata = {
             "request_id": request_id,
@@ -1282,14 +1137,6 @@ Remember: You're here to inform ARIZONA voters and build support for Brandon's A
             "validation_rejections": [],
             "ov_modifications": []
         }
-        # Attempt to extract a test_id from the session_id for validator runs
-        try:
-            import re
-            match = re.search(r'_(?P<testid>[A-Z]_[A-Z0-9-]+)_', session_id or "")
-            if match:
-                metadata['test_id'] = match.group('testid')
-        except Exception:
-            pass
         
         try:
             messages = self._build_messages(session)
@@ -1298,13 +1145,6 @@ Remember: You're here to inform ARIZONA voters and build support for Brandon's A
             # Build system prompt with PQ enrichment and internal hints
             internal_hints_block = pq_result.internal_hints.to_system_prompt_block() if pq_result.internal_hints else ""
             full_system_prompt = self.get_system_prompt(question_types, topic, internal_hints_block)
-            # If we auto-registered a volunteer just above, include the tool result context
-            try:
-                last_vol_ctx = session.user_context.get('last_forced_volunteer_result') if session and session.user_context else None
-                if last_vol_ctx:
-                    full_system_prompt += f"\n\nVOLUNTEER REGISTRATION: The system registered this user with details:\n{last_vol_ctx}\nDo NOT offer another volunteer signup or callback for this user."
-            except Exception:
-                pass
             
             # Log internal hints to debug.db for forensic analysis
             if pq_result.internal_hints and internal_hints_block:
@@ -1327,6 +1167,11 @@ Remember: You're here to inform ARIZONA voters and build support for Brandon's A
             if intent_result.needs_callback or (user_frustrated and query_vague):
                 full_system_prompt += "\n\nNote: User appears to need personal attention. Offer a callback from someone on the team."
             
+            # Add tool tracking context - tell LLM what actions have been offered
+            tool_context = session.get_tool_context()
+            if tool_context:
+                full_system_prompt += f"\n\n{tool_context}"
+            
             # Add PQ enrichment if not passthrough
             if not pq_result.passthrough and pq_result.enriched_prompt:
                 full_system_prompt += f"\n\n===== PREQUALIFIER INSTRUCTIONS =====\n{pq_result.pq_instructions or ''}\n\n{pq_result.enriched_prompt}"
@@ -1341,32 +1186,9 @@ Remember: You're here to inform ARIZONA voters and build support for Brandon's A
                 emotion_guidance = self._get_emotion_style_guidance(detected_emotion)
                 full_system_prompt += f"\n\nUSER EMOTION: The user appears to be feeling {detected_emotion}. {emotion_guidance}"
             
-            # Add vagueness context with turn count awareness
+            # Add vagueness context
             if query_vague:
-                conversation_turn_count = len([t for t in session.turns if t.role == ConversationRole.USER])
-                if conversation_turn_count <= 1:
-                    full_system_prompt += f"""
-
-VAGUE QUERY DETECTED (Turn 1): The user's question needs clarification. 
-- Ask ONE clarifying question to understand their intent better
-- ALWAYS include: "Visit brandonsowers.com to learn more about Brandon's positions."
-- DO NOT offer a callback yet - first try to understand what they need"""
-                elif conversation_turn_count == 2:
-                    full_system_prompt += f"""
-
-VAGUE QUERY (Turn 2): You've already asked for clarification once.
-- Try a DIFFERENT approach than Turn 1 - offer 2-3 specific topic options to choose from
-- Example: "Are you interested in: (1) border security, (2) economic policy, or (3) something else?"
-- ALWAYS include brandonsowers.com
-- DO NOT offer a callback yet - give them options first"""
-                else:
-                    full_system_prompt += f"""
-
-VAGUE QUERY (Turn {conversation_turn_count}): Multiple clarifying attempts made.
-- Make your BEST attempt to answer based on available context
-- If still unclear, NOW you may offer a callback from the team
-- ALWAYS include brandonsowers.com for more information
-- DO NOT ask another clarifying question"""
+                full_system_prompt += f"\n\nVAGUE QUERY DETECTED: The user's question needs clarification. Ask clarifying questions before providing a detailed answer."
             
             # Add meme/subcontext prompt if detected
             if pq_result.meme_detected and pq_result.meme_prompt:
@@ -1383,8 +1205,42 @@ VAGUE QUERY (Turn {conversation_turn_count}): Multiple clarifying attempts made.
                 else:
                     full_system_prompt += "\n\nCALLBACK RE-OFFER: You offered a callback earlier but the user seems to still need help. Gently acknowledge you mentioned this before: 'I know I offered earlier, but I want to extend that olive branch again - would a personal call from our team be helpful?'"
             
+            # ===== AUTO-EXECUTE AFFIRMATION TOOL IF DETECTED =====
+            # If user affirmed an offer (callback, volunteer, donate), execute the tool directly
+            if affirmation_tool_call:
+                logger.info(f"[{request_id}] User affirmation detected - pre-executing tool: {affirmation_tool_call.name}")
+                
+                try:
+                    result = await self.tool_executor.execute(affirmation_tool_call, session_id)
+                    metadata["tool_calls"].append({
+                        "name": affirmation_tool_call.name,
+                        "arguments": affirmation_tool_call.arguments,
+                        "auto_executed": True,
+                        "reason": "user_affirmation"
+                    })
+                    
+                    tool_context = result.to_context_string()
+                    
+                    # Build acknowledgment response
+                    if affirmation_tool_call.name == ToolName.REQUEST_CALLBACK.value:
+                        final_response = f"Perfect! I've scheduled a callback for you. Someone from Brandon's team will reach out to you shortly to continue this conversation. Thank you for your interest in learning more!"
+                    elif affirmation_tool_call.name == ToolName.REGISTER_VOLUNTEER.value:
+                        final_response = f"Wonderful! Thank you so much for your interest in volunteering with Brandon's campaign. We'll be in touch soon with more information about how you can make a difference!"
+                    elif affirmation_tool_call.name == ToolName.MAKE_DONATION.value:
+                        final_response = f"Thank you for your generosity and support for Brandon's campaign! We'll send you a secure donation link shortly. Your contribution makes a real difference!"
+                    else:
+                        final_response = f"Thank you for your response! Your information has been received and we'll be in touch shortly."
+                    
+                    # Skip the normal LLM loop since we've already handled the request
+                    iteration = self.max_tool_iterations  # Exit the loop below
+                    
+                except Exception as e:
+                    logger.error(f"[{request_id}] Failed to execute affirmation tool: {e}")
+                    # Fall through to normal LLM processing
+                    affirmation_tool_call = None
+            
             iteration = 0
-            final_response = None
+            final_response = None if not final_response else final_response  # Preserve if already set by affirmation
             
             while iteration < self.max_tool_iterations:
                 iteration += 1
@@ -1607,8 +1463,56 @@ Do NOT repeat the same volunteer message again."""
                         if escalation_attempted and iteration < self.max_tool_iterations:
                             continue  # Try again with escalation message
                         else:
-                            # After escalation attempts fail, accept and move on
-                            logger.warning(f"[{request_id}] Duplicate detection exhausted after multiple attempts - accepting response")
+                            # After escalation attempts fail, just force the tool
+                            if affirmation_tool_call:
+                                logger.info(f"[{request_id}] Forcing affirmation tool due to duplicate response detection")
+                                tool_results = []
+                                result = await self.tool_executor.execute(affirmation_tool_call, session_id)
+                                tool_results.append(result)
+                                metadata["tool_calls"].append({
+                                    "name": affirmation_tool_call.name,
+                                    "arguments": affirmation_tool_call.arguments,
+                                    "forced": True,
+                                    "reason": "duplicate_prevention"
+                                })
+                                
+                                tool_context = result.to_context_string()
+                                messages.append({
+                                    "role": "assistant",
+                                    "content": proposed_response
+                                })
+                                messages.append({
+                                    "role": "tool",
+                                    "content": f"Tool executed successfully:\n\n{tool_context}\n\nNow provide a final response acknowledging their action."
+                                })
+                                continue
+                    
+                    # ===== DUPLICATE DETECTION =====
+                    # If this response is identical to one we just gave, force LLM to try again
+                    if session.is_response_duplicate(proposed_response, window=3):
+                        logger.warning(f"[{request_id}] Duplicate response detected (iteration {iteration}) - forcing regeneration")
+                        duplicate_force_count = sum(1 for m in messages if "SYSTEM: Your last response was too similar" in m.get("content", ""))
+                        
+                        if duplicate_force_count < 2:
+                            messages.append({
+                                "role": "assistant",
+                                "content": proposed_response
+                            })
+                            messages.append({
+                                "role": "user",
+                                "content": f"""SYSTEM: Your last response was too similar to something you just said.
+
+The user has already heard this. Please provide a DIFFERENT response:
+- If you offered an action before and the user affirmed it, execute the appropriate tool
+- If you're repeating information, add new details or perspective
+- If the conversation is getting circular, offer concrete next steps
+
+Do NOT repeat the same message. Offer something new or move the conversation forward."""
+                            })
+                            continue
+                        else:
+                            # After 2 attempts, accept and move on to prevent infinite loops
+                            logger.warning(f"[{request_id}] Duplicate detection exhausted after {duplicate_force_count} attempts - accepting response")
                     
                     final_response = proposed_response
                     break
@@ -1703,20 +1607,9 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
                 output_validator.set_fec_rag(weaviate_mgr)
                 output_validator.set_weaviate_manager(weaviate_mgr)
             else:
-                # Try a best-effort local Weaviate init so OV has FEC RAG where possible
-                try:
-                    from weaviate_manager import WeaviateManager
-                    logger.info(f"[{request_id}] No tool weaviate manager; attempting local WeaviateManager init")
-                    local_wm = WeaviateManager()
-                    await local_wm.initialize()
-                    output_validator.set_fec_rag(local_wm)
-                    output_validator.set_weaviate_manager(local_wm)
-                    weaviate_mgr = local_wm
-                    logger.info(f"[{request_id}] Local WeaviateManager initialized and wired to OutputValidator")
-                except Exception as e:
-                    # Fail-closed: If weaviate is unavailable, log error but continue
-                    # The repetition check will raise SLMNotAvailableError which triggers fallback
-                    logger.warning(f"[{request_id}] Weaviate unavailable - repetition safeguard will fail closed: {e}")
+                # Fail-closed: If weaviate is unavailable, log error but continue
+                # The repetition check will raise SLMNotAvailableError which triggers fallback
+                logger.warning(f"[{request_id}] Weaviate unavailable - repetition safeguard will fail closed")
             
             regeneration_attempt = 0
             max_regenerations = 3
@@ -1738,8 +1631,7 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
                     response=final_response,
                     pq_confidence=pq_confidence,
                     meme_detected=pq_result.meme_detected,
-                    is_callback_flow=is_callback_flow,
-                    is_vague_query=query_vague
+                    is_callback_flow=is_callback_flow
                 )
                 
                 # Add repetition check (fail-closed on SLMNotAvailableError)
@@ -1768,34 +1660,6 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
                         break
                 
                 metadata["validation_status"] = "passed" if validation_result.passed else "rejected"
-
-                # Log OV attempt for debug and traceability
-                try:
-                    debug_db = get_debug_db()
-                    ov_results_map = {}
-                    for s, r in validation_result.results.items():
-                        ov_results_map[s.value] = {
-                            "score": r.score,
-                            "confidence": r.confidence,
-                            "explanation": r.explanation,
-                            "method": r.method
-                        }
-                    status_text = "passed" if validation_result.passed else "rejected"
-                    from validation_debug import sanitize_bot_response
-                    clean_resp = sanitize_bot_response(final_response or "")
-                    debug_db.log_ov_attempt(
-                        attempt_num=regeneration_attempt,
-                        ov_results=ov_results_map,
-                        final_status=status_text,
-                        original_response=final_response or "",
-                        sanitized_response=clean_resp,
-                        aggregate_score=validation_result.max_violation,
-                        test_id=metadata.get("test_id"),
-                        session_id=session_id,
-                        request_id=request_id
-                    )
-                except Exception:
-                    pass
                 
                 if validation_result.passed:
                     # All checks passed (score <= 3)

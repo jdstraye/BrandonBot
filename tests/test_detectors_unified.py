@@ -15,6 +15,23 @@ import logging
 import re
 from pathlib import Path
 from typing import List, Tuple, Dict, Any
+import inspect
+
+
+# If pytest-asyncio isn't available in the environment, dynamically wrap any
+# `async def test_*` functions so they can run under vanilla pytest by using
+# `asyncio.run()`.
+def _wrap_async_tests_in_module(globals_dict):
+    for name, obj in list(globals_dict.items()):
+        if name.startswith("test_") and inspect.iscoroutinefunction(obj):
+            globals_dict[name] = (lambda _obj: (lambda *a, **k: asyncio.run(_obj(*a, **k))))(obj)
+
+
+# Apply wrapping immediately
+_wrap_async_tests_in_module(globals())
+
+# Ensure async tests are wrapped after module definitions (double-call safe)
+_wrap_async_tests_in_module(globals())
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -328,8 +345,18 @@ def frustration_score_to_expected(score: int) -> bool:
     return score >= 4
 
 
-async def test_vagueness_detector():
-    """Test vagueness detector with all test cases"""
+def test_vagueness_detector():
+    """Sync wrapper for vagueness detector test to run async implementation."""
+    return asyncio.run(_async_test_vagueness_detector())
+
+
+def test_frustration_detector():
+    """Sync wrapper for frustration detector test to run async implementation."""
+    return asyncio.run(_async_test_frustration_detector())
+
+
+async def _async_test_vagueness_detector():
+    """Async implementation for vagueness detector test"""
     import weaviate
     from slm_manager import SLMManager
     from weaviate_manager import WeaviateManager
@@ -452,8 +479,8 @@ async def test_vagueness_detector():
     return {"accuracy": overall_acc, "latency_ms": avg_lat, "load_time": load_time}
 
 
-async def test_frustration_detector():
-    """Test frustration detector with all test cases"""
+async def _async_test_frustration_detector():
+    """Async implementation for frustration detector test"""
     from slm_manager import SLMManager
     from prequalifier import PatternFlags
     

@@ -8,6 +8,13 @@ import logging
 import os
 import uuid
 
+# Load environment variables from .env file (before any env var access)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv not installed, rely on platform env vars (Replit)
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 

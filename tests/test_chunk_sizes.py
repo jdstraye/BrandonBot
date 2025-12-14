@@ -97,7 +97,7 @@ def reingest_documents(chunk_size: int, overlap: int) -> bool:
         with open('ingest_documents.py', 'w') as f:
             f.write(original_content)
 
-def test_query(query: str, expand: bool) -> float:
+def run_query(query: str, expand: bool) -> float:
     """Test a single query and return confidence score"""
     try:
         url = f'http://localhost:5000/api/test_rag?query={query}&expand={"true" if expand else "false"}'
@@ -109,7 +109,7 @@ def test_query(query: str, expand: bool) -> float:
         print(f"  ⚠️  Error testing {query}: {e}")
         return 0.0
 
-def test_chunk_size(chunk_size: int) -> Dict:
+def run_chunk_size(chunk_size: int) -> Dict:
     """Test a specific chunk size with and without expansion"""
     overlap = int(chunk_size * OVERLAP_RATIO)
     

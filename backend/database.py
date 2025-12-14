@@ -178,7 +178,7 @@ class DatabaseManager:
     
     async def update_consent(self, user_id: str, consent_given: bool):
         async with aiosqlite.connect(self.db_path) as db:
-            now = datetime.utcnow().isoformat()
+            now = datetime.now(timezone.utc).isoformat()
             await db.execute('''
                 INSERT INTO user_consent (user_id, consent_given, consent_date, updated_at)
                 VALUES (?, ?, ?, ?)
@@ -201,7 +201,7 @@ class DatabaseManager:
                              confidence: float, sources: list, consent_given: bool,
                              model_used: Optional[str] = None):
         async with aiosqlite.connect(self.db_path) as db:
-            now = datetime.utcnow().isoformat()
+            now = datetime.now(timezone.utc).isoformat()
             await db.execute('''
                 INSERT INTO interactions (user_id, query, response, confidence, sources, timestamp, consent_given, model_used)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -212,7 +212,7 @@ class DatabaseManager:
     
     async def _track_new_question(self, question: str):
         async with aiosqlite.connect(self.db_path) as db:
-            now = datetime.utcnow().isoformat()
+            now = datetime.now(timezone.utc).isoformat()
             await db.execute('''
                 INSERT INTO new_questions (question, count, first_asked, last_asked)
                 VALUES (?, 1, ?, ?)
@@ -225,7 +225,7 @@ class DatabaseManager:
     async def log_callback_request(self, user_id: str, name: str, phone: str, 
                                    email: Optional[str], question: str):
         async with aiosqlite.connect(self.db_path) as db:
-            now = datetime.utcnow().isoformat()
+            now = datetime.now(timezone.utc).isoformat()
             await db.execute('''
                 INSERT INTO callback_requests (user_id, name, phone, email, question, timestamp)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -237,7 +237,7 @@ class DatabaseManager:
                                      model_used: Optional[str] = None, consent_given: bool = False):
         """Log a single conversation turn with consent flag"""
         async with aiosqlite.connect(self.db_path) as db:
-            now = datetime.utcnow().isoformat()
+            now = datetime.now(timezone.utc).isoformat()
             await db.execute('''
                 INSERT INTO conversation_history 
                 (session_id, user_id, role, content, tool_calls, model_used, timestamp, consent_given)
@@ -276,7 +276,7 @@ class DatabaseManager:
                           error: Optional[str] = None):
         """Log a complete request with timing and tool traces"""
         async with aiosqlite.connect(self.db_path) as db:
-            now = datetime.utcnow().isoformat()
+            now = datetime.now(timezone.utc).isoformat()
             await db.execute('''
                 INSERT INTO request_logs
                 (request_id, session_id, user_id, query, response, model_used, 
@@ -294,7 +294,7 @@ class DatabaseManager:
                                      request_id: Optional[str] = None):
         """Log model performance for evaluation"""
         async with aiosqlite.connect(self.db_path) as db:
-            now = datetime.utcnow().isoformat()
+            now = datetime.now(timezone.utc).isoformat()
             await db.execute('''
                 INSERT INTO model_performance
                 (provider, model, session_id, request_id, success, latency_ms, 
@@ -402,7 +402,7 @@ class DatabaseManager:
                             availability: str = "flexible"):
         """Log volunteer registration"""
         async with aiosqlite.connect(self.db_path) as db:
-            now = datetime.utcnow().isoformat()
+            now = datetime.now(timezone.utc).isoformat()
             await db.execute('''
                 INSERT INTO volunteers 
                 (name, email, phone, zip_code, interests, availability, timestamp)

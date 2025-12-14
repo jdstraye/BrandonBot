@@ -1,22 +1,40 @@
 #!/usr/bin/env python3
 """
-Test RAG+Qwen Vagueness Detection
+Test RAG+SLM Vagueness Detection
 
-Tests the new RAG-informed vagueness classification:
+Tests the RAG-informed vagueness classification flow using the local SLM
+in combination with RAG results. The intent is to verify that the local
+SLM (cross-encoder or configured SLM provider) can classify queries as
+CLEAR or VAGUE given the query, retrieved RAG context, and similarity
+scores (no external cloud-only model required).
+
+Flow:
 1. Query Weaviate for relevant content
-2. Pass query + RAG results + similarity scores to Qwen
-3. Qwen classifies CLEAR/VAGUE with full context
+2. Pass query + RAG results + similarity scores to the configured local SLM
+3. SLM classifies CLEAR/VAGUE with full context
 
 Measures latency for each component and overall.
 """
-
 import asyncio
 import time
 import logging
 import weaviate
+import inspect
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Wrap async tests if pytest-asyncio is not present
+def _wrap_async_tests_in_module(globals_dict):
+    for name, obj in list(globals_dict.items()):
+        if name.startswith("test_") and inspect.iscoroutinefunction(obj):
+            globals_dict[name] = (lambda _obj: (lambda *a, **k: asyncio.run(_obj(*a, **k))))(obj)
+
+
+_wrap_async_tests_in_module(globals())
+
+# Ensure wrapper applied after async test definitions (double-call is safe)
+_wrap_async_tests_in_module(globals())
 
 TEST_QUERIES = {
     "clear_policy": [
@@ -64,11 +82,11 @@ TEST_QUERIES = {
 }
 
 
-async def test_rag_vagueness():
-    """Test RAG+Qwen vagueness detection with latency measurement."""
+async def _async_test_rag_vagueness():
+    """Async implementation for RAG+Qwen vagueness detection with latency measurement."""
     
     print("=" * 60)
-    print("RAG + Qwen Vagueness Detection Test")
+    print("RAG + SLM Vagueness Detection Test")
     print("=" * 60)
     
     print("\n[1/3] Connecting to Weaviate...")
@@ -182,13 +200,18 @@ async def test_rag_vagueness():
     
     print("\n" + "=" * 60)
     if overall_accuracy >= 80:
-        print("RESULT: RAG+Qwen vagueness detection is VIABLE")
+        print("RESULT: RAG+SLM vagueness detection is VIABLE")
     elif overall_accuracy >= 60:
-        print("RESULT: RAG+Qwen vagueness detection needs TUNING")
+        print("RESULT: RAG+SLM vagueness detection needs TUNING")
     else:
-        print("RESULT: RAG+Qwen vagueness detection needs MAJOR WORK")
+        print("RESULT: RAG+SLM vagueness detection needs MAJOR WORK")
     print("=" * 60)
 
 
+def test_rag_vagueness():
+    """Synchronous wrapper for the async vagueness test so pytest can run without asyncio plugin."""
+    return asyncio.run(_async_test_rag_vagueness())
+
+
 if __name__ == "__main__":
-    asyncio.run(test_rag_vagueness())
+    asyncio.run(_async_test_rag_vagueness())

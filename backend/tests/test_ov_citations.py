@@ -11,11 +11,9 @@ Tests citation anchor system:
 import pytest
 import asyncio
 
-try:
-    loop = asyncio.get_event_loop()
-except RuntimeError:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+# Avoid calling `asyncio.get_event_loop()` at import time; tests should use
+# `asyncio.run()` or the `event_loop` pytest fixture. This prevents
+# DeprecationWarning on Python 3.12 when no running loop exists.
 
 
 @pytest.fixture
@@ -203,7 +201,7 @@ class TestCitationValidation:
             result = await validator_with_store._check_citations(response)
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         assert result.score <= 2, f"Expected pass (score <= 2), got {result.score}: {result.explanation}"
     
@@ -214,7 +212,7 @@ class TestCitationValidation:
             result = await validator_with_store._check_citations(response)
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         assert result.score >= expected_min_score - 1, f"Expected score >= {expected_min_score-1}, got {result.score}: {result.explanation}"
 
@@ -256,7 +254,7 @@ class TestCitationEdgeCases:
             result = await validator._check_citations("")
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         assert result.score == 0
     
     def test_multiple_citations_same_sentence(self, validator_with_store):
@@ -266,7 +264,7 @@ class TestCitationEdgeCases:
             result = await validator_with_store._check_citations(response)
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         assert result.score == 0
 
 

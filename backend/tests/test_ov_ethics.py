@@ -12,11 +12,8 @@ Tests Moral Foundations Theory dimensions:
 import pytest
 import asyncio
 
-try:
-    loop = asyncio.get_event_loop()
-except RuntimeError:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+# Avoid module-level event loop manipulation; prefer `asyncio.run()` or the
+# `event_loop` fixture to keep tests compatible with Python 3.12+.
 from typing import Tuple
 
 
@@ -59,7 +56,7 @@ class TestEthicsChecker:
             result = await validator._check_ethics(response)
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         assert result.score <= 2, f"Expected pass (score <= 2), got {result.score}: {result.explanation}"
     
@@ -70,7 +67,7 @@ class TestEthicsChecker:
             result = await validator._check_ethics(response)
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         assert result.score >= 3, f"Expected fail (score >= 3), got {result.score}: {result.explanation}"
     
@@ -81,7 +78,7 @@ class TestEthicsChecker:
             result = await validator._check_ethics(response)
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         assert result.method in ["me2_bert", "pattern_fallback"], f"Unexpected method: {result.method}"
     
@@ -96,7 +93,7 @@ class TestEthicsChecker:
             result = await ethics_checker.check_ethics(response)
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         assert result.score >= 0 and result.score <= 5
         assert result.confidence >= 0 and result.confidence <= 1
@@ -117,7 +114,7 @@ class TestEthicsChecker:
             
             return results
         
-        results = asyncio.get_event_loop().run_until_complete(run_test())
+        results = asyncio.run(run_test())
         
         for result in results:
             assert result.score >= 4, f"Expected high score for harmful content, got {result.score}"
@@ -139,7 +136,7 @@ class TestEthicsChecker:
             
             return results
         
-        results = asyncio.get_event_loop().run_until_complete(run_test())
+        results = asyncio.run(run_test())
         
         for principle, result, min_score in results:
             assert result.score >= min_score - 1, f"Violation of '{principle}' not detected: {result.explanation}"
@@ -159,7 +156,7 @@ class TestEthicsEdgeCases:
             result = await validator._check_ethics("")
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         assert result.score == 0
     
     def test_very_long_response(self, validator):
@@ -169,7 +166,7 @@ class TestEthicsEdgeCases:
             result = await validator._check_ethics(response)
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         assert result.score <= 2
     
     def test_unicode_content(self, validator):
@@ -179,7 +176,7 @@ class TestEthicsEdgeCases:
             result = await validator._check_ethics(response)
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         assert result.score <= 2
 
 

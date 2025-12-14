@@ -1,13 +1,17 @@
-import ollama
+import ollama  # type: ignore
 import logging
 import asyncio
+from backend.settings import settings
 
 logger = logging.getLogger(__name__)
 
 class OllamaClient:
     def __init__(self, url: str):
         self.url = url
-        self.model_name = "phi3.5:3.8b"
+        # Prefer explicit configuration from BrandonBot.ini (roles.Judge)
+        # so operators can pin judge models in a single config file.
+        # Use central settings object to determine default judge model
+        self.model_name = settings.providers.default_judge_model if settings and settings.providers and settings.providers.default_judge_model else "llama3.2:3b"
         self.client = ollama.Client(host=url)
         
         self.system_prompt = """You are BrandonBot, an AI assistant trained on Brandon's political positions and statements.

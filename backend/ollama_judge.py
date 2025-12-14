@@ -26,8 +26,15 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "llama3.1:8b")
+from backend.settings import settings
+
+# Load provider defaults from centralized settings (BrandonBot.ini)
+try:
+    OLLAMA_HOST = settings.providers.ollama_host
+    JUDGE_MODEL = settings.providers.default_judge_model
+except Exception:
+    OLLAMA_HOST = "http://localhost:11434"
+    JUDGE_MODEL = "llama3.2:3b"
 
 NVIDIA_API_KEY_ENV = "NVIDIA_LLAMA33_API_KEY"
 NVIDIA_MODEL = "meta/llama-3.3-70b-instruct"

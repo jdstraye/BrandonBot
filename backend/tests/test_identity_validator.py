@@ -8,11 +8,8 @@ Brandon Sowers is running for U.S. Congress in ARIZONA - not Pennsylvania or any
 import pytest
 import asyncio
 
-try:
-    loop = asyncio.get_event_loop()
-except RuntimeError:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+# Avoid calling `asyncio.get_event_loop()` at import time; tests should use
+# `asyncio.run()` or pytest's `event_loop` fixture.
 
 
 class TestIdentityValidator:
@@ -33,7 +30,7 @@ class TestIdentityValidator:
             )
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         assert result.score == 0, f"Arizona reference should pass, got score {result.score}: {result.explanation}"
     
@@ -45,7 +42,7 @@ class TestIdentityValidator:
             )
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         assert result.score == 5, f"Pennsylvania campaign reference should hard fail, got {result.score}"
         assert "CRITICAL" in result.explanation
@@ -59,7 +56,7 @@ class TestIdentityValidator:
             )
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         assert result.score == 5, f"Running in wrong state should fail, got {result.score}"
     
@@ -71,7 +68,7 @@ class TestIdentityValidator:
             )
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         assert result.score == 5, f"Wrong state voters reference should fail, got {result.score}"
     
@@ -83,7 +80,7 @@ class TestIdentityValidator:
             )
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         assert result.score == 5, f"Wrong state district should fail, got {result.score}"
     
@@ -95,7 +92,7 @@ class TestIdentityValidator:
             )
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         assert result.score == 5, f"Wrong city campaign reference should fail, got {result.score}"
     
@@ -108,7 +105,7 @@ class TestIdentityValidator:
             )
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         assert result.score == 0, f"Neutral response should pass, got {result.score}"
     
@@ -121,7 +118,7 @@ class TestIdentityValidator:
             )
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         assert result.score == 0, f"Non-campaign state reference should pass, got {result.score}"
     
@@ -133,7 +130,7 @@ class TestIdentityValidator:
             )
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         assert result.score == 5, f"Representing wrong state should fail, got {result.score}"
     
@@ -145,7 +142,7 @@ class TestIdentityValidator:
             )
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         assert result.score == 5, f"New Jersey campaign should fail, got {result.score}"
     
@@ -157,7 +154,7 @@ class TestIdentityValidator:
             )
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         assert result.score == 5, f"Massachusetts campaign should fail, got {result.score}"
 
@@ -185,7 +182,7 @@ class TestIdentityInFullValidation:
                     pytest.skip("FEC RAG not configured")
                 raise
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         from output_validator import OVSafeguard
         identity_result = result.results.get(OVSafeguard.IDENTITY_CONSISTENCY)

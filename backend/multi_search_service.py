@@ -22,6 +22,7 @@ import concurrent.futures
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from backend.config_loader import load_config
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +36,13 @@ SEARXNG_PUBLIC_INSTANCES = [
     "https://searx.fmac.xyz",
     "https://searx.prvcy.eu",
 ]
+# No import-time override here — selection happens at runtime (INI -> env -> defaults)
 
 SEARXNG_TIMEOUT = 8.0
 DDG_TIMEOUT = 10.0
 SERPAPI_TIMEOUT = 10.0
 INSTANCE_COOLDOWN = 60
+CACHE_TTL = timedelta(hours=8)
 
 
 @dataclass
@@ -98,33 +101,63 @@ class MultiSearchService:
     """
     
     def __init__(self):
+        # Determine Searx instances at runtime with precedence:
+        # 1) INI: providers.Searxng_url
+        # 2) Env: SEARXNG_URL
+        # 3) Defaults: SEARXNG_PUBLIC_INSTANCES
+        instances = []
+        try:
+            cfg = load_config()
+            searx_ini = getattr(getattr(cfg, "providers", None), "searxng_url", "") or ""
+        except Exception:
+            searx_ini = ""
+
+        if searx_ini:
+            instances = [searx_ini.rstrip('/')]
+        elif os.environ.get("SEARXNG_URL"):
+            instances = [os.environ.get("SEARXNG_URL").rstrip('/')]
+        else:
+            instances = SEARXNG_PUBLIC_INSTANCES.copy()
+
+        self._instances = instances
         self._instance_health: Dict[str, InstanceHealth] = {
-            url: InstanceHealth(url=url) for url in SEARXNG_PUBLIC_INSTANCES
+            url: InstanceHealth(url=url) for url in self._instances
         }
         self._current_instance_idx = 0
         self._serpapi_key = os.environ.get("SERPAPI_KEY") or os.environ.get("SERPAPI_API_KEY")
         self._lock = asyncio.Lock()
+        # Round-robin selected search engines to instruct Searx which engine to use
+        self._searx_engines = ["google", "bing", "duckduckgo"]
+        self._searx_engine_idx = 0
         
         if self._serpapi_key:
             logger.info("MultiSearchService initialized with SearxNG + SerpAPI fallback")
         else:
             logger.info("MultiSearchService initialized with SearxNG only (no SerpAPI key)")
+
+        # Simple in-memory cache to avoid hitting public SearxNG instances repeatedly
+        # Keyed by (query, max_results) -> (timestamp, SearchResponse)
+        self._cache: Dict[str, Any] = {}
+        # Normal initialization; searches will use SearxNG -> DuckDuckGo -> SerpAPI
     
     def _get_next_healthy_instance(self) -> Optional[str]:
         """Get next healthy SearxNG instance in round-robin order"""
         start_idx = self._current_instance_idx
         checked = 0
-        
-        while checked < len(SEARXNG_PUBLIC_INSTANCES):
-            url = SEARXNG_PUBLIC_INSTANCES[self._current_instance_idx]
-            self._current_instance_idx = (self._current_instance_idx + 1) % len(SEARXNG_PUBLIC_INSTANCES)
+        while checked < len(self._instances):
+            url = self._instances[self._current_instance_idx]
+            self._current_instance_idx = (self._current_instance_idx + 1) % len(self._instances)
             checked += 1
-            
             health = self._instance_health[url]
             if health.is_healthy():
                 return url
-        
-        return SEARXNG_PUBLIC_INSTANCES[start_idx]
+        return self._instances[start_idx]
+
+    def _get_next_searx_engine(self) -> str:
+        # Rotate among a small set of engines to avoid querying all engines every time
+        engine = self._searx_engines[self._searx_engine_idx]
+        self._searx_engine_idx = (self._searx_engine_idx + 1) % len(self._searx_engines)
+        return engine
     
     async def _search_searxng(self, instance_url: str, query: str, max_results: int) -> SearchResponse:
         """Search using a specific SearxNG instance"""
@@ -134,6 +167,15 @@ class MultiSearchService:
                 "format": "json",
                 "categories": "general",
             }
+            # Instruct Searx to use only a single downstream engine (rotated) so we
+            # don't hit every engine every request. The Searx `engines` param accepts
+            # a comma-separated list; here we pass a single engine.
+            try:
+                engine = self._get_next_searx_engine()
+                params["engines"] = engine
+            except Exception:
+                # If rotation fails for some reason, do not include engines param
+                pass
             
             async with httpx.AsyncClient(timeout=SEARXNG_TIMEOUT) as client:
                 response = await client.get(
@@ -164,11 +206,20 @@ class MultiSearchService:
             self._instance_health[instance_url].record_failure()
             logger.warning(f"SearxNG {instance_url} timeout")
             return SearchResponse(results=[], error="timeout")
-            
         except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            # Treat 403/429 as rate-limited and increase the failure count to push the
+            # instance into a longer cooldown window so we don't hammer it.
+            if status in (429, 403):
+                ih = self._instance_health[instance_url]
+                ih.failures = max(ih.failures, 5)
+                ih.last_failure = datetime.now()
+                logger.warning(f"SearxNG {instance_url} rate-limited HTTP {status}")
+                return SearchResponse(results=[], error=f"http_{status}")
+
             self._instance_health[instance_url].record_failure()
-            logger.warning(f"SearxNG {instance_url} HTTP error: {e.response.status_code}")
-            return SearchResponse(results=[], error=f"http_{e.response.status_code}")
+            logger.warning(f"SearxNG {instance_url} HTTP error: {status}")
+            return SearchResponse(results=[], error=f"http_{status}")
             
         except Exception as e:
             self._instance_health[instance_url].record_failure()
@@ -178,9 +229,13 @@ class MultiSearchService:
     def _ddg_sync_search(self, query: str, max_results: int) -> list:
         """Synchronous DDG search for executor"""
         try:
-            from ddgs import DDGS
-        except ImportError:
-            from duckduckgo_search import DDGS
+            import warnings
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=r".*renamed to `ddgs`.*", category=RuntimeWarning)
+                from ddgs import DDGS
+        except Exception:
+            raise ImportError("ddgs package is not installed; please 'pip install ddgs'")
+
         ddgs = DDGS()
         return list(ddgs.text(query, max_results=max_results))
     
@@ -272,9 +327,21 @@ class MultiSearchService:
             SearchResponse with results from first successful provider
         """
         async with self._lock:
+            # Check in-memory cache first
+            cache_key = f"{query}::{max_results}"
+            cached = self._cache.get(cache_key)
+            if cached:
+                ts, resp = cached
+                if datetime.now() - ts < CACHE_TTL:
+                    logger.debug("Returning cached search result for query")
+                    return resp
+                else:
+                    # Expired
+                    del self._cache[cache_key]
+
             # Tier 1: Try SearxNG public instances
             attempts = 0
-            max_attempts = min(len(SEARXNG_PUBLIC_INSTANCES), 3)
+            max_attempts = min(len(self._instances), 3)
             
             while attempts < max_attempts:
                 instance_url = self._get_next_healthy_instance()
@@ -283,6 +350,12 @@ class MultiSearchService:
                 
                 response = await self._search_searxng(instance_url, query, max_results)
                 if response.success:
+                    # Cache successful responses to prevent re-querying public Searx instances
+                    try:
+                        self._cache[cache_key] = (datetime.now(), response)
+                    except Exception:
+                        # If caching fails for any reason, do not block the search
+                        logger.debug("Failed to cache search result")
                     return response
                 
                 attempts += 1

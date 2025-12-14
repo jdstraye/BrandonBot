@@ -23,7 +23,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'backend'))
 
-from llm_providers import (
+from backend.llm_providers import (
     LLMProviderManager, 
     APIKeySlot, 
     SlotStatus,

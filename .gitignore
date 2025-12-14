@@ -50,3 +50,6 @@ transformers_cache/
 tools/ollama/
 backend/phi3_model/
 backend/llama_guard_model/
+
+# Validation Results
+backend/validation/results/

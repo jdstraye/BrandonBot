@@ -16,10 +16,11 @@ import sqlite3
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -245,6 +246,97 @@ class ValidationDebugDB:
                 CREATE INDEX IF NOT EXISTS idx_internal_hints_session 
                 ON internal_hints(session_id)
             """)
+            # SLM decision logs: raw small-lm/classifier outputs and evidence
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS slm_decisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    test_id TEXT,
+                    session_id TEXT,
+                    request_id TEXT,
+                    model TEXT,
+                    query TEXT,
+                    phrase TEXT,
+                    avg_meme REAL,
+                    avg_anti REAL,
+                    indicator_count INTEGER,
+                    political_count INTEGER,
+                    phrase_present INTEGER,
+                    explanation TEXT,
+                    supporting_snippets TEXT,
+                    raw_output TEXT
+                )
+            """)
+
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_slm_decisions_test_id 
+                ON slm_decisions(test_id)
+            """)
+
+            # Embedding logs for repetition checks: store embeddings and similarity
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS slm_embeddings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    test_id TEXT,
+                    session_id TEXT,
+                    request_id TEXT,
+                    response_text TEXT,
+                    response_embedding TEXT,
+                    previous_embeddings TEXT,
+                    max_similarity REAL
+                )
+            """)
+
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_slm_embeddings_test_id 
+                ON slm_embeddings(test_id)
+            """)
+
+            # Log of OV attempts and per-regeneration results
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS ov_attempts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    test_id TEXT,
+                    session_id TEXT,
+                    request_id TEXT,
+                    attempt_num INTEGER,
+                    ov_results TEXT,
+                    final_status TEXT,
+                    original_response TEXT,
+                    sanitized_response TEXT,
+                    aggregate_score INTEGER
+                )
+            """)
+
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_ov_attempts_test_id 
+                ON ov_attempts(test_id)
+            """)
+
+            # Performance metrics for detailed profiling of validation runs
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS perf_metrics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    test_id TEXT,
+                    session_id TEXT,
+                    request_id TEXT,
+                    step TEXT,
+                    duration_ms INTEGER,
+                    cpu_percent REAL,
+                    memory_rss_mb REAL,
+                    io_read_bytes INTEGER,
+                    io_write_bytes INTEGER,
+                    extra TEXT
+                )
+            """)
+
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_perf_metrics_test_id
+                ON perf_metrics(test_id)
+            """)
             
             conn.commit()
         
@@ -263,7 +355,7 @@ class ValidationDebugDB:
         all_results: Optional[Dict[str, Any]] = None
     ):
         """Log an OV rejection event."""
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = datetime.now(timezone.utc).isoformat()
         all_results_json = json.dumps(all_results) if all_results else None
         
         with sqlite3.connect(self.db_path) as conn:
@@ -339,7 +431,7 @@ class ValidationDebugDB:
             parse_method: How the response was parsed (json, delimiter, chatter_stripped)
             raw_response: Optional full raw LLM response
         """
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = datetime.now(timezone.utc).isoformat()
         
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("""
@@ -530,7 +622,7 @@ class ValidationDebugDB:
         session_id: Optional[str] = None
     ):
         """Log a raw LLM response before sanitization."""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = datetime.now(timezone.utc).isoformat()
         
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("""
@@ -554,7 +646,7 @@ class ValidationDebugDB:
         This captures buying signals, frustration context, and other sideband
         signals for forensic analysis of agent behavior.
         """
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = datetime.now(timezone.utc).isoformat()
         
         buying_signals = json.dumps(internal_hints.buying_signals) if internal_hints.buying_signals else None
         frustration_context = internal_hints.frustration_context
@@ -575,6 +667,175 @@ class ValidationDebugDB:
             conn.commit()
         
         logger.debug(f"Logged internal hints for query '{query[:50]}...'")
+
+    def log_slm_decision(
+        self,
+        model: str,
+        query: str,
+        phrase: str,
+        avg_meme: float,
+        avg_anti: float,
+        indicator_count: int,
+        political_count: int,
+        phrase_present: bool,
+        explanation: str,
+        supporting_snippets: Optional[List[str]] = None,
+        raw_output: Optional[str] = None,
+        test_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+    ):
+        """Log a raw SLM decision (e.g., classify_meme outputs) with supporting evidence.
+
+        Stores model scores, snippet evidence, and raw output for debugging.
+        """
+        timestamp = datetime.now(timezone.utc).isoformat()
+        snippets_json = json.dumps(supporting_snippets) if supporting_snippets else None
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                INSERT INTO slm_decisions
+                (timestamp, test_id, session_id, request_id, model, query, phrase, avg_meme, avg_anti, indicator_count, political_count, phrase_present, explanation, supporting_snippets, raw_output)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                timestamp, test_id, session_id, request_id, model, query, phrase, avg_meme, avg_anti, indicator_count, political_count, int(bool(phrase_present)), explanation, snippets_json, raw_output
+            ))
+            conn.commit()
+
+        logger.debug(f"Logged SLM decision: model={model}, query='{query[:40]}...', avg_meme={avg_meme:.3f}, avg_anti={avg_anti:.3f}")
+
+    def log_repetition_embedding(
+        self,
+        response_text: str,
+        response_embedding: List[float],
+        previous_embeddings: List[List[float]],
+        max_similarity: float,
+        test_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+    ):
+        """Log embedding vector information for a repetition check.
+
+        Embeddings are stored as JSON arrays. This helps forensic analysis of repetition checks.
+        """
+        timestamp = datetime.now(timezone.utc).isoformat()
+        response_emb_json = json.dumps(response_embedding)
+        previous_embs_json = json.dumps(previous_embeddings)
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                INSERT INTO slm_embeddings
+                (timestamp, test_id, session_id, request_id, response_text, response_embedding, previous_embeddings, max_similarity)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                timestamp, test_id, session_id, request_id, response_text, response_emb_json, previous_embs_json, max_similarity
+            ))
+            conn.commit()
+
+        logger.debug(f"Logged repetition embedding: max_similarity={max_similarity:.3f}, response='{response_text[:40]}...'")
+
+    def _collect_system_metrics(self) -> Dict[str, Any]:
+        """Collect lightweight system/process metrics using psutil when available."""
+        metrics = {
+            "cpu_percent": None,
+            "memory_rss_mb": None,
+            "io_read_bytes": None,
+            "io_write_bytes": None,
+        }
+        try:
+            if psutil is None:
+                return metrics
+            proc = psutil.Process()
+            metrics["cpu_percent"] = psutil.cpu_percent(interval=None)
+            mem = proc.memory_info()
+            metrics["memory_rss_mb"] = round(mem.rss / (1024 * 1024), 2)
+            try:
+                io = proc.io_counters()
+                metrics["io_read_bytes"] = io.read_bytes
+                metrics["io_write_bytes"] = io.write_bytes
+            except Exception:
+                pass
+        except Exception:
+            pass
+        return metrics
+
+    def log_perf_metric(self, step: str, duration_ms: int, test_id: Optional[str] = None, session_id: Optional[str] = None, request_id: Optional[str] = None, extra: Optional[Dict[str, Any]] = None):
+        """Log a performance metric sample to the `perf_metrics` table.
+
+        This uses `backend.config_loader.load_config()` to check the
+        `[validation] perf_monitor` flag; do not use environment variables
+        for flow control.
+        """
+        try:
+            from backend.config_loader import load_config
+            cfg = load_config()
+            perf_enabled = bool(cfg.validation.get("perf_monitor")) if getattr(cfg, "validation", None) else False
+        except Exception:
+            perf_enabled = False
+
+        if not perf_enabled:
+            logger.debug("Perf monitoring disabled via config; skipping log_perf_metric")
+            return
+
+        timestamp = datetime.now(timezone.utc).isoformat()
+        metrics = self._collect_system_metrics()
+        extra_json = json.dumps(extra) if extra else None
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                INSERT INTO perf_metrics
+                (timestamp, test_id, session_id, request_id, step, duration_ms, cpu_percent, memory_rss_mb, io_read_bytes, io_write_bytes, extra)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                timestamp,
+                test_id,
+                session_id,
+                request_id,
+                step,
+                duration_ms,
+                metrics.get("cpu_percent"),
+                metrics.get("memory_rss_mb"),
+                metrics.get("io_read_bytes"),
+                metrics.get("io_write_bytes"),
+                extra_json,
+            ))
+            conn.commit()
+
+        logger.debug(f"Logged perf metric: {step} {duration_ms}ms (test={test_id})")
+
+    # NOTE: _collect_system_metrics and log_perf_metric are implemented above
+    # as part of the class to collect and persist performance sampling data.
+
+    def log_ov_attempt(
+        self,
+        attempt_num: int,
+        ov_results: Dict[str, Any],
+        final_status: str,
+        original_response: str,
+        sanitized_response: str,
+        aggregate_score: int,
+        test_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+    ):
+        """Log a single OV attempt (per regeneration) with the OV results and status.
+
+        ov_results is a dict (safeguard->result) captured per attempt.
+        """
+        timestamp = datetime.now(timezone.utc).isoformat()
+        ov_json = json.dumps(ov_results)
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                INSERT INTO ov_attempts
+                (timestamp, test_id, session_id, request_id, attempt_num, ov_results, final_status, original_response, sanitized_response, aggregate_score)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                timestamp, test_id, session_id, request_id, attempt_num, ov_json, final_status, original_response, sanitized_response, aggregate_score
+            ))
+            conn.commit()
+
+        logger.debug(f"Logged OV attempt: attempt={attempt_num}, status={final_status}, score={aggregate_score}")
 
 
 # Global singleton instance
@@ -640,7 +901,6 @@ def sanitize_bot_response(raw_response: str) -> str:
         r"I need to use the \w+ (?:tool|function)[^.]*\.",
         r"Based on the tool results?,?\s*",
         r"The \w+ tool (?:returned|shows|indicates)[^.]*\.",
-        
         r"You're right,? I should verify[^.]*\. Here's the corrected response:?",
         r"Here's (?:the|my) corrected response:?",
         r"Here's (?:the|a) (?:more )?(?:accurate|better|proper) response:?",
@@ -658,7 +918,56 @@ def sanitize_bot_response(raw_response: str) -> str:
         r"According to (?:my search|the search|my verification)[^,.:]*,?\s*",
         r"^\"",
         r"\"$",
+
     ]
+
+    def _collect_system_metrics(self) -> Dict[str, Any]:
+        """Collect lightweight system/process metrics using psutil when available."""
+        metrics = {
+            "cpu_percent": None,
+            "memory_rss_mb": None,
+            "io_read_bytes": None,
+            "io_write_bytes": None,
+        }
+        try:
+            # Import psutil lazily to avoid importing it at module init time
+            try:
+                import psutil
+            except Exception:
+                return metrics
+
+            proc = psutil.Process()
+            # Non-blocking cpu_percent - may return 0.0 on first call
+            metrics["cpu_percent"] = psutil.cpu_percent(interval=None)
+            mem = proc.memory_info()
+            metrics["memory_rss_mb"] = round(mem.rss / (1024 * 1024), 2)
+            try:
+                io = proc.io_counters()
+                metrics["io_read_bytes"] = io.read_bytes
+                metrics["io_write_bytes"] = io.write_bytes
+            except Exception:
+                # IO counters may not be available on all platforms
+                pass
+        except Exception:
+            # Defensive: if psutil fails, return None-filled metrics
+            pass
+        return metrics
+
+    def log_perf_metric(
+        self,
+        step: str,
+        duration_ms: int,
+        test_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+        extra: Optional[Dict[str, Any]] = None
+    ):
+        """Log a performance metric sample to the `perf_metrics` table.
+
+        The method will attempt to collect CPU/memory/IO metrics via psutil
+        when available; if not, cpu and memory fields will be NULL.
+        """
+        # Perf metric logging is implemented as class methods (outside this sanitize function)
     
     for pattern in patterns_to_remove:
         text = re.sub(pattern, "", text, flags=re.IGNORECASE | re.DOTALL)

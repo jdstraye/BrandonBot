@@ -27,7 +27,7 @@ import re
 import asyncio
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Any, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +108,15 @@ class FECComplianceChecker:
         self._require_rag = require_rag
         self._rag_verified = False
         self._audit_log = []
+        # Phrase store for safe fallback responses (tests call _phrase_store.get_safe_response)
+        class PhraseStore:
+            def __init__(self, mapping):
+                self._mapping = mapping
+
+            def get_safe_response(self, key: str) -> Optional[str]:
+                return self._mapping.get(key) or self._mapping.get("default")
+
+        self._phrase_store = PhraseStore(SAFE_RESPONSES)
     
     def set_weaviate(self, weaviate_manager):
         """Set the Weaviate manager for RAG lookups."""
@@ -359,7 +368,7 @@ Your response must be a single word: YES or NO."""
                 }
                 for v in violations
             ],
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         
         self._audit_log.append(log_entry)
@@ -374,4 +383,7 @@ Your response must be a single word: YES or NO."""
         return self._audit_log.copy()
 
 
+# Module-level convenience instance for interactive use/tests. Keep fail-closed behavior
+# for production instances, but avoid raising during import in environments where
+# Weaviate isn't configured by default (tests will wire this explicitly).
 fec_checker = FECComplianceChecker(require_rag=True)

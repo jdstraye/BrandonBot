@@ -57,7 +57,7 @@ class TestPIIChecker:
             result = await validator._check_pii(response)
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         assert result.score <= 2, f"Expected pass (score <= 2), got {result.score}: {result.explanation}"
     
@@ -68,7 +68,7 @@ class TestPIIChecker:
             result = await validator._check_pii(response)
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         assert result.score >= expected_min_score - 1, f"Expected score >= {expected_min_score-1}, got {result.score}: {result.explanation}"
     
@@ -87,7 +87,7 @@ class TestPIIChecker:
             
             return results
         
-        results = asyncio.get_event_loop().run_until_complete(run_test())
+        results = asyncio.run(run_test())
         
         for result in results:
             assert result.score >= 4, f"SSN not detected: {result.explanation}"
@@ -108,7 +108,7 @@ class TestPIIChecker:
             
             return results
         
-        results = asyncio.get_event_loop().run_until_complete(run_test())
+        results = asyncio.run(run_test())
         
         for result in results:
             assert result.score >= 4, f"Credit card not detected: {result.explanation}"
@@ -129,7 +129,7 @@ class TestPIIChecker:
             
             return results
         
-        results = asyncio.get_event_loop().run_until_complete(run_test())
+        results = asyncio.run(run_test())
         
         for result in results:
             assert result.score >= 3, f"Phone number not detected: {result.explanation}"
@@ -150,7 +150,7 @@ class TestPIIChecker:
             
             return results
         
-        results = asyncio.get_event_loop().run_until_complete(run_test())
+        results = asyncio.run(run_test())
         
         for result in results:
             assert result.score >= 1, f"Email not detected: {result.explanation}"
@@ -170,7 +170,7 @@ class TestPIIChecker:
             
             return results
         
-        results = asyncio.get_event_loop().run_until_complete(run_test())
+        results = asyncio.run(run_test())
         
         for result in results:
             assert result.score >= 4, f"API key not detected: {result.explanation}"
@@ -191,7 +191,7 @@ class TestPIIChecker:
             
             return results
         
-        results = asyncio.get_event_loop().run_until_complete(run_test())
+        results = asyncio.run(run_test())
         
         for result in results:
             assert result.score >= 4, f"Password not detected: {result.explanation}"
@@ -202,7 +202,7 @@ class TestPIIChecker:
             result = await validator._check_pii("This is a clean response without any PII.")
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         assert result.method in ["hybrid_deberta", "pattern"], f"Unexpected method: {result.method}"
 
@@ -221,7 +221,7 @@ class TestPIIEdgeCases:
             result = await validator._check_pii("")
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         assert result.score == 0
     
     def test_zip_code_low_severity(self, validator):
@@ -230,7 +230,7 @@ class TestPIIEdgeCases:
             result = await validator._check_pii("We're located in zip code 12345.")
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         assert result.score <= 2, "Zip code should have low severity"
     
     def test_false_positive_numbers(self, validator):
@@ -249,7 +249,7 @@ class TestPIIEdgeCases:
             
             return results
         
-        results = asyncio.get_event_loop().run_until_complete(run_test())
+        results = asyncio.run(run_test())
         
         for result in results:
             assert result.score <= 2, f"False positive PII detection: {result.explanation}"

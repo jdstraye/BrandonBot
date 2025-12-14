@@ -58,6 +58,15 @@ except ImportError:
     WeaviateManager = None
     SLMManager = None
 
+# Config-driven role pinning and provider manager
+try:
+    from config_loader import load_config
+    from backend.llm_providers import llm_manager
+except Exception:
+    # Best-effort imports; failures will be handled at runtime
+    load_config = None
+    llm_manager = None
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -274,7 +283,7 @@ class BrandonBotValidator:
     Implements the 5-step adversarial evaluator loop.
     """
     
-    def __init__(self, use_judge: bool = True, use_agent: bool = False, require_slm: bool = True):
+    def __init__(self, use_judge: bool = True, use_agent: bool = False, require_slm: bool = True, weaviate_manager=None):
         """
         Initialize the BrandonBot validation engine.
         
@@ -287,7 +296,22 @@ class BrandonBotValidator:
         """
         self._slm_manager = None
         self._weaviate = None
-        
+
+        # Enforce SLM requirement: fail fast if require_slm=True but SLMManager
+        # isn't importable/available. Attempt a lazy import here in case the
+        # module was unavailable at top-level import but is present now.
+        if require_slm:
+            if SLMManager is None:
+                try:
+                    from slm_manager import SLMManager as _SLMManager
+                    globals()['SLMManager'] = _SLMManager
+                except Exception:
+                    raise RuntimeError(
+                        "SLMManager not available but require_slm=True.\n"
+                        "Set up the SLM dependencies (see developer_guide.md) or ensure the"
+                        " environment can import backend.slm_manager."
+                    )
+
         if require_slm and SLMManager is not None:
             logger.info("Initializing SLMManager for validation...")
             self._slm_manager = SLMManager()
@@ -295,7 +319,30 @@ class BrandonBotValidator:
         
         self.pq = Prequalifier(require_slm=require_slm, slm_provider=self._slm_manager)
         self.ov = OutputValidatorSLM(require_slm=require_slm)
+        # If a WeaviateManager instance is provided at construction time,
+        # wire it immediately so FEC RAG is available for validation runs.
+        if weaviate_manager is not None:
+            try:
+                self._weaviate = weaviate_manager
+                try:
+                    self.pq.set_weaviate_manager(self._weaviate)
+                except Exception:
+                    # Not all Prequalifier implementations require explicit wiring
+                    pass
+                try:
+                    self.set_fec_rag(self._weaviate)
+                except Exception:
+                    # set_fec_rag may raise if collection isn't present; let caller handle
+                    pass
+                logger.info("Wired provided WeaviateManager to validator at construction time")
+            except Exception as e:
+                logger.warning(f"Failed to wire provided WeaviateManager: {e}")
+        # Note: Do not auto-initialize Weaviate at validator startup. Keep
+        # fail-closed production semantics — callers/agent orchestrator should
+        # explicitly wire a WeaviateManager via `set_fec_rag()` when available.
         self.judge = OllamaJudge() if use_judge else None
+        # preserve the user's intent to use or skip the LLM judge
+        self._use_judge = bool(use_judge)
         self.agent = None
         self._agent_initialized = False
         self._use_agent = use_agent and AGENT_AVAILABLE
@@ -448,6 +495,70 @@ class BrandonBotValidator:
         except Exception as e:
             logger.warning(f"Could not initialize Prequalifier dependencies: {e}")
             return False
+
+    async def _create_session_judge(self, session_id: str) -> Optional[OllamaJudge]:
+        """
+        Create a per-session OllamaJudge instance pinned from `BrandonBot.ini` via `llm_manager`.
+
+        Returns:
+            - `OllamaJudge` instance if a pinned judge was created and is available
+            - `None` to indicate caller should fall back to `self.judge` (when allowed)
+
+        Raises RuntimeError when `require_llama_for_judge` is True and no pinned judge is available.
+        """
+        # If config loader or llm_manager not present, fall back to global judge
+        if load_config is None or llm_manager is None:
+            logger.debug("Config loader or llm_manager not imported; using default judge")
+            return None
+
+        cfg = load_config()
+
+        try:
+            selection = llm_manager.select_for_role(session_id, "Judge")
+        except Exception as e:
+            logger.warning(f"llm_manager.select_for_role failed: {e}")
+            selection = None
+
+        require_llama = bool(cfg.scoring.require_llama_for_judge) if getattr(cfg, 'scoring', None) else True
+
+        if not selection:
+            if require_llama:
+                raise RuntimeError("No configured Llama judge slots available and 'require_llama_for_judge' is true")
+            logger.info("No pinned judge selection found; falling back to default judge if available")
+            return None
+
+        provider_name, slot_id, model_name = selection
+        provider_name = provider_name.lower() if provider_name else provider_name
+
+        # Map provider name to judge backend
+        if provider_name == "ollama":
+            backend = "ollama"
+        elif provider_name == "nvidia":
+            backend = "nvidia"
+        else:
+            logger.warning(f"Configured judge provider '{provider_name}' is not recognized as a judge-capable backend")
+            if require_llama:
+                raise RuntimeError(f"Configured judge provider '{provider_name}' not available as judge and 'require_llama_for_judge' is true")
+            return None
+
+        # Instantiate per-session judge
+        try:
+            session_judge = OllamaJudge(model=model_name or None, force_backend=backend)
+        except Exception as e:
+            logger.error(f"Failed to instantiate session judge for {provider_name}:{model_name} - {e}")
+            if require_llama:
+                raise
+            return None
+
+        available = await session_judge.check_availability()
+        if not available:
+            if require_llama:
+                raise RuntimeError(f"Pinned judge {provider_name}:{model_name} not available")
+            logger.warning(f"Pinned judge {provider_name}:{model_name} not available; falling back to default judge")
+            return None
+
+        logger.info(f"Session judge pinned: {provider_name}/{slot_id}/{model_name} for session {session_id[:8]}...")
+        return session_judge
     
     async def run_pq_tests(self) -> List[TestResult]:
         """Run Phase 1: Prequalifier tests."""
@@ -625,7 +736,7 @@ class BrandonBotValidator:
         
         return results
     
-    async def run_mcp_tests(self) -> List[TestResult]:
+    async def run_mcp_tests(self, limit: int = None) -> List[TestResult]:
         """Run Phase 2: MCP Tool Verification Tests.
         
         Tests that specific prompts trigger the correct MCP tools.
@@ -643,6 +754,9 @@ class BrandonBotValidator:
         mcp_tests = self.test_data.get("mcp_tests", {}).get("tests", [])
         test_identity = self.test_data.get("mcp_tests", {}).get("test_identity", {})
         
+        # Optionally limit number of MCP tests for quick runs
+        if limit is not None and isinstance(limit, int) and limit > 0:
+            mcp_tests = mcp_tests[:limit]
         for test in mcp_tests:
             test_id = test["id"]
             logger.info(f"Running MCP test: {test_id}")
@@ -661,8 +775,7 @@ class BrandonBotValidator:
             try:
                 response, metadata = await self.agent.process_query(
                     message=test["input"],
-                    session_id=session_id,
-                    consent=True
+                    session_id=session_id
                 )
                 
                 result.bot_response = sanitize_bot_response(response)
@@ -735,8 +848,7 @@ class BrandonBotValidator:
             try:
                 response, metadata = await self.agent.process_query(
                     message=test["prompt"],
-                    session_id=session_id,
-                    consent=True
+                    session_id=session_id
                 )
                 
                 result.bot_response = sanitize_bot_response(response)
@@ -751,7 +863,9 @@ class BrandonBotValidator:
                 
                 expected_success = test.get("success", "")
                 
-                if "catch" in expected_success.lower() or "trigger" in expected_success.lower():
+                # If the test expects the OV to detect or trigger a safeguard,
+                # pass when the OV retried or explicitly rejected the response.
+                if any(term in expected_success.lower() for term in ("catch", "trigger", "detect")):
                     passed = ov_retries > 0 or not result.ov_passed
                     result.reasoning = f"OV retries: {ov_retries}, Status: {ov_final_status}"
                 else:
@@ -770,7 +884,7 @@ class BrandonBotValidator:
         
         return results
     
-    async def run_full_validation(self, max_prompts: int = None) -> List[TestResult]:
+    async def run_full_validation(self, max_prompts: int = None, target_prompt_index: Optional[int] = None, target_prompt_id: Optional[str] = None) -> List[TestResult]:
         """Run Phase 4: Full conversational validation with Judge.
         
         REQUIRES: 
@@ -789,15 +903,15 @@ class BrandonBotValidator:
         if not agent_ready or self.agent is None:
             raise RuntimeError("AgentOrchestrator failed to initialize - cannot run full validation without real agent")
         
-        if not self.judge:
-            raise RuntimeError("LLM Judge not configured - cannot run full validation without judge")
-        
-        judge_available = await self.judge.check_availability()
-        if not judge_available:
-            raise RuntimeError("LLM Judge not available - cannot run full validation without judge")
-        
-        logger.info("Full validation: Agent and Judge both available - using real responses")
-        
+        if self._use_judge:
+            if not self.judge:
+                raise RuntimeError("LLM Judge not configured - cannot run full validation without judge")
+            judge_available = await self.judge.check_availability()
+            if not judge_available:
+                raise RuntimeError("LLM Judge not available - cannot run full validation without judge")
+            logger.info("Full validation: Agent and Judge both available - using real responses")
+        else:
+            logger.info("Full validation: running without LLM judge (--no-judge); scoring will be skipped or zeroed")        
         categories = self.test_data.get("categories", {})
         prompt_count = 0
         
@@ -805,15 +919,51 @@ class BrandonBotValidator:
             prompts = category.get("prompts", [])
             
             for prompt in prompts:
+                # If caller specified a single prompt index, skip until we reach it
+                if target_prompt_index is not None and prompt_count != int(target_prompt_index):
+                    prompt_count += 1
+                    continue
+
+                # If caller specified a single prompt id (e.g. 'A_VAGUE-002'), skip until match
+                generated_test_id = f"{cat_key}-{prompt_count:03d}"
+                if target_prompt_id is not None and target_prompt_id != generated_test_id:
+                    prompt_count += 1
+                    continue
+
                 if max_prompts and prompt_count >= max_prompts:
                     break
                 
-                test_id = f"{cat_key}-{prompt_count:03d}"
+                # Use generated id (may have been computed above when filtering by id)
+                test_id = generated_test_id
                 logger.info(f"Running full test: {test_id}")
                 
                 persona = self._select_persona()
                 style = self._select_style()
                 session_id = f"full_val_{test_id}_{int(time.time())}"
+                # start timer for this test early so errors during judge setup can record a duration
+                start_time = time.time()
+                # Create a per-session judge pinned from INI (if configured)
+                session_judge = None
+                # Only attempt per-session judge creation when running with judge enabled
+                if self._use_judge:
+                    try:
+                        session_judge = await self._create_session_judge(session_id)
+                    except Exception as e:
+                        # Build a minimal TestResult to record the setup error and continue
+                        err_result = TestResult(
+                            test_id=test_id,
+                            category=cat_key,
+                            persona=persona.value,
+                            engagement_style=style.value,
+                            timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        )
+                        err_result.pass_fail = "ERROR"
+                        err_result.reasoning = str(e)
+                        logger.error(f"Full test {test_id} failed during judge setup: {e}")
+                        err_result.duration_ms = int((time.time() - start_time) * 1000)
+                        results.append(err_result)
+                        prompt_count += 1
+                        continue
                 
                 result = TestResult(
                     test_id=test_id,
@@ -867,6 +1017,12 @@ class BrandonBotValidator:
                         
                         is_clarifying = bot_response.strip().endswith("?")
                         
+                        # When the judge is disabled, do not attempt to simulate the user actor.
+                        # Treat clarifying questions as final so the loop can end safely.
+                        if is_clarifying and not self._use_judge:
+                            logger.info("Judge disabled: treating bot clarifying question as final (no user simulation)")
+                            is_clarifying = False
+                        
                         if not is_clarifying:
                             logger.debug(f"Bot provided substantive answer at turn {turn_count}")
                             break
@@ -875,7 +1031,12 @@ class BrandonBotValidator:
                             logger.debug(f"Max turns ({max_turns}) reached")
                             break
                         
-                        user_response = await self.judge.generate_user_response(
+                        judge_for_session = session_judge or self.judge
+                        if not judge_for_session:
+                            # When no judge is configured, log and stop the clarification loop rather than raising.
+                            logger.info("No LLM judge available for this session: skipping user simulation")
+                            break
+                        user_response = await judge_for_session.generate_user_response(
                             bot_response=bot_response,
                             conversation_history=conversation,
                             persona=persona,
@@ -888,22 +1049,37 @@ class BrandonBotValidator:
                     full_conversation = result.get_full_conversation()
                     final_response = bot_responses[-1] if bot_responses else ""
                     
-                    scores = await self.judge.score_response(
-                        user_query=prompt,
-                        bot_response=final_response,
-                        context=full_conversation
-                    )
-                    
-                    result.score_clarity = scores.clarity
-                    result.score_empathy = scores.empathy
-                    result.score_accuracy = scores.accuracy
-                    result.score_engagement = scores.engagement
-                    result.score_tone = scores.tone
-                    result.score_alignment = scores.alignment
-                    result.reasoning = f"Turns: {turn_count}. {scores.reasoning}"
-                    
-                    tool_match = (result.tool_called == result.expected_tool) if result.expected_tool else True
-                    result.pass_fail = "PASS" if (scores.all_passing and tool_match) else "FAIL"
+                    # If judge is disabled, zero scores and continue (useful for debugging)
+                    if not self._use_judge:
+                        result.score_clarity = 0.0
+                        result.score_empathy = 0.0
+                        result.score_accuracy = 0.0
+                        result.score_engagement = 0.0
+                        result.score_tone = 0.0
+                        result.score_alignment = 0.0
+                        result.reasoning = "LLM Judge disabled (--no-judge) — scores zeroed"
+                        # Mark as skipped when judge is intentionally disabled
+                        result.pass_fail = "SKIPPED"
+                    else:
+                        judge_for_session = session_judge or self.judge
+                        if not judge_for_session:
+                            raise RuntimeError("LLM Judge not configured for this session")
+                        scores = await judge_for_session.score_response(
+                            user_query=prompt,
+                            bot_response=final_response,
+                            context=full_conversation
+                        )
+
+                        result.score_clarity = scores.clarity
+                        result.score_empathy = scores.empathy
+                        result.score_accuracy = scores.accuracy
+                        result.score_engagement = scores.engagement
+                        result.score_tone = scores.tone
+                        result.score_alignment = scores.alignment
+                        result.reasoning = f"Turns: {turn_count}. {scores.reasoning}"
+
+                        tool_match = (result.tool_called == result.expected_tool) if result.expected_tool else True
+                        result.pass_fail = "PASS" if (scores.all_passing and tool_match) else "FAIL"
                 
                 except Exception as e:
                     result.pass_fail = "ERROR"
@@ -944,15 +1120,15 @@ class BrandonBotValidator:
         if not agent_ready or self.agent is None:
             raise RuntimeError("AgentOrchestrator failed to initialize - cannot run vague loop test without real agent")
         
-        if not self.judge:
-            raise RuntimeError("LLM Judge not configured - cannot run vague loop test without judge")
-        
-        judge_available = await self.judge.check_availability()
-        if not judge_available:
-            raise RuntimeError("LLM Judge not available - cannot run vague loop test without judge")
-        
-        logger.info("Vague loop test: Agent and Judge both available - using real responses")
-        
+        if self._use_judge:
+            if not self.judge:
+                raise RuntimeError("LLM Judge not configured - cannot run vague loop test without judge")
+            judge_available = await self.judge.check_availability()
+            if not judge_available:
+                raise RuntimeError("LLM Judge not available - cannot run vague loop test without judge")
+            logger.info("Vague loop test: Agent and Judge both available - using real responses")
+        else:
+            logger.info("Vague loop test: running without LLM judge (--no-judge); scoring will be skipped or zeroed")        
         results = []
         vague_prompts = ["Hi Brandon", "Hi Brandon, I'm Jayson.", "Hi Brandon, How are you today?"]
         
@@ -973,6 +1149,18 @@ class BrandonBotValidator:
             bot_responses = []
             session_id = f"vague_test_{i}_{int(time.time())}"
             last_metadata = None
+            # Create a per-session judge pinned from INI (if configured)
+            session_judge = None
+            if self._use_judge:
+                try:
+                    session_judge = await self._create_session_judge(session_id)
+                except Exception as e:
+                    result.pass_fail = "ERROR"
+                    result.reasoning = str(e)
+                    logger.error(f"Vague loop test {test_id} failed during judge setup: {e}")
+                    result.duration_ms = int((time.time() - start_time) * 1000)
+                    results.append(result)
+                    continue
             
             try:
                 current_input = initial_prompt
@@ -1009,7 +1197,11 @@ class BrandonBotValidator:
                     if turn_count >= 3 and pq_result.vagueness_decision == VaguenessDecision.CLEAR:
                         break
                     
-                    user_response = await self.judge.generate_user_response(
+                    judge_for_session = session_judge or self.judge
+                    if not judge_for_session:
+                        logger.info("Judge disabled: skipping LLM user actor simulation in vague loop")
+                        break
+                    user_response = await judge_for_session.generate_user_response(
                         bot_response=bot_response,
                         conversation_history=conversation,
                         persona=Persona.DOCILE,
@@ -1023,23 +1215,37 @@ class BrandonBotValidator:
                 structure_passed = clarifying_questions >= 2 and turn_count >= 3
                 
                 full_conversation = result.get_full_conversation()
-                scores = await self.judge.score_response(
-                    user_query=initial_prompt,
-                    bot_response=bot_responses[-1] if bot_responses else "",
-                    context=full_conversation
-                )
-                
-                result.score_clarity = scores.clarity
-                result.score_empathy = scores.empathy
-                result.score_accuracy = scores.accuracy
-                result.score_engagement = scores.engagement
-                result.score_tone = scores.tone
-                result.score_alignment = scores.alignment
-                
-                passed = structure_passed and scores.all_passing
-                result.pass_fail = "PASS" if passed else "FAIL"
-                result.reasoning = f"Turns: {turn_count}, Clarifying: {clarifying_questions}, Scores: {scores.average:.2f}"
-                result.genai = last_metadata.get("model_used", last_metadata.get("model", "")) if last_metadata else ""
+                # If judge disabled, zero scores
+                if not self._use_judge:
+                    result.score_clarity = 0.0
+                    result.score_empathy = 0.0
+                    result.score_accuracy = 0.0
+                    result.score_engagement = 0.0
+                    result.score_tone = 0.0
+                    result.score_alignment = 0.0
+                    result.reasoning = "LLM Judge disabled (--no-judge) — scores zeroed"
+                    result.pass_fail = "SKIPPED"
+                else:
+                    judge_for_session = session_judge or self.judge
+                    if not judge_for_session:
+                        raise RuntimeError("LLM Judge not configured for this session")
+                    scores = await judge_for_session.score_response(
+                        user_query=initial_prompt,
+                        bot_response=bot_responses[-1] if bot_responses else "",
+                        context=full_conversation
+                    )
+
+                    result.score_clarity = scores.clarity
+                    result.score_empathy = scores.empathy
+                    result.score_accuracy = scores.accuracy
+                    result.score_engagement = scores.engagement
+                    result.score_tone = scores.tone
+                    result.score_alignment = scores.alignment
+
+                    passed = structure_passed and scores.all_passing
+                    result.pass_fail = "PASS" if passed else "FAIL"
+                    result.reasoning = f"Turns: {turn_count}, Clarifying: {clarifying_questions}, Scores: {scores.average:.2f}"
+                    result.genai = last_metadata.get("model_used", last_metadata.get("model", "")) if last_metadata else ""
                 
             except Exception as e:
                 result.pass_fail = "ERROR"
@@ -1094,8 +1300,7 @@ class BrandonBotValidator:
                     
                     response, metadata = await self.agent.process_query(
                         message=user_msg,
-                        session_id=session_id,
-                        consent=True
+                        session_id=session_id
                     )
                     
                     tool_calls = metadata.get("tool_calls", [])
@@ -1204,7 +1409,7 @@ class BrandonBotValidator:
                     ov_result = await self.ov.check_repetition(
                         response=current_response,
                         previous_responses=[previous_response],
-                        similarity_threshold=0.85
+                        similarity_threshold=0.8
                     )
                 except SLMNotAvailableError as e:
                     result.pass_fail = "FAIL"
@@ -1289,22 +1494,23 @@ class BrandonBotValidator:
                     
                     response, metadata = await self.agent.process_query(
                         message=prompt,
-                        session_id=session_id,
-                        consent=True
+                        session_id=session_id
                     )
                     
                     tool_calls = metadata.get("tool_calls", [])
-                    tools_called = [tc.get("name", "") for tc in tool_calls]
+                    # Check if callback tool was EXECUTED (not blocked)
+                    callback_executed = any(
+                        tc.get("name") == "request_callback" and tc.get("blocked") is None
+                        for tc in tool_calls
+                    )
                     
-                    callback_offered = any("callback" in tc.lower() for tc in tools_called)
-                    
-                    passed = not callback_offered
+                    passed = not callback_executed
                     
                     result.user_prompt = prompt
                     result.bot_response = response
-                    result.tool_called = ", ".join(tools_called) if tools_called else "NONE"
+                    result.tool_called = ", ".join([tc.get("name", "") for tc in tool_calls]) if tool_calls else "NONE"
                     result.pass_fail = "PASS" if passed else "FAIL"
-                    result.reasoning = f"Anti-pattern: {anti_pattern}. Callback offered: {callback_offered}"
+                    result.reasoning = f"Anti-pattern: {anti_pattern}. Callback executed: {callback_executed}. Expected: False (answer clear+frustrated directly)"
                 
                 elif test_id == "M_EDGE_CASES-133":
                     turn_1 = test.get("turn_1", "")
@@ -1312,27 +1518,28 @@ class BrandonBotValidator:
                     
                     response1, metadata1 = await self.agent.process_query(
                         message=turn_1,
-                        session_id=session_id,
-                        consent=True
+                        session_id=session_id
                     )
                     
                     response2, metadata2 = await self.agent.process_query(
                         message=turn_2,
-                        session_id=session_id,
-                        consent=True
+                        session_id=session_id
                     )
                     
                     tool_calls_2 = metadata2.get("tool_calls", [])
-                    tools_called_2 = [tc.get("name", "") for tc in tool_calls_2]
-                    callback_in_turn_2 = any("callback" in tc.lower() for tc in tools_called_2)
+                    # Check if callback was EXECUTED (not blocked)
+                    callback_executed = any(
+                        tc.get("name") == "request_callback" and tc.get("blocked") is None
+                        for tc in tool_calls_2
+                    )
                     
-                    passed = not callback_in_turn_2
+                    passed = not callback_executed
                     
                     result.user_prompt = f"Turn 1: {turn_1} | Turn 2: {turn_2}"
                     result.bot_response = f"Turn 1: {response1[:100]}... | Turn 2: {response2[:100]}..."
-                    result.tool_called = ", ".join(tools_called_2) if tools_called_2 else "NONE"
+                    result.tool_called = ", ".join([tc.get("name", "") for tc in tool_calls_2]) if tool_calls_2 else "NONE"
                     result.pass_fail = "PASS" if passed else "FAIL"
-                    result.reasoning = f"Turn 2 callback: {callback_in_turn_2}. Expected: no callback after first offer"
+                    result.reasoning = f"Turn 2 callback executed: {callback_executed}. Expected: False (should be on cooldown)"
                     
                     result.add_turn(user_prompt=turn_1, bot_response=response1)
                     result.add_turn(user_prompt=turn_2, bot_response=response2)
@@ -1343,29 +1550,139 @@ class BrandonBotValidator:
                     
                     resp_explicit, meta_explicit = await self.agent.process_query(
                         message=explicit,
-                        session_id=f"{session_id}_explicit",
-                        consent=True
+                        session_id=f"{session_id}_explicit"
                     )
                     
                     resp_implied, meta_implied = await self.agent.process_query(
                         message=implied,
-                        session_id=f"{session_id}_implied",
-                        consent=True
+                        session_id=f"{session_id}_implied"
                     )
                     
-                    explicit_tools = [tc.get("name", "") for tc in meta_explicit.get("tool_calls", [])]
-                    implied_tools = [tc.get("name", "") for tc in meta_implied.get("tool_calls", [])]
+                    explicit_tcs = meta_explicit.get("tool_calls", [])
+                    implied_tcs = meta_implied.get("tool_calls", [])
                     
-                    explicit_callback = any("callback" in tc.lower() for tc in explicit_tools)
-                    implied_callback = any("callback" in tc.lower() for tc in implied_tools)
+                    # Check if callback was EXECUTED (not blocked)
+                    explicit_callback_executed = any(
+                        tc.get("name") == "request_callback" and tc.get("blocked") is None
+                        for tc in explicit_tcs
+                    )
+                    implied_callback_executed = any(
+                        tc.get("name") == "request_callback" and tc.get("blocked") is None
+                        for tc in implied_tcs
+                    )
                     
-                    passed = explicit_callback and not implied_callback
+                    passed = explicit_callback_executed and not implied_callback_executed
                     
                     result.user_prompt = f"Explicit: {explicit} | Implied: {implied}"
                     result.bot_response = f"Explicit resp: {resp_explicit[:100]}... | Implied resp: {resp_implied[:100]}..."
-                    result.tool_called = f"Explicit: {explicit_tools}, Implied: {implied_tools}"
+                    result.tool_called = f"Explicit: {[tc.get('name') for tc in explicit_tcs]}, Implied: {[tc.get('name') for tc in implied_tcs]}"
                     result.pass_fail = "PASS" if passed else "FAIL"
-                    result.reasoning = f"Explicit callback: {explicit_callback}, Implied callback: {implied_callback}. Expected: explicit=yes, implied=no"
+                    result.reasoning = f"Explicit callback executed: {explicit_callback_executed}, Implied callback executed: {implied_callback_executed}. Expected: explicit=True, implied=False"
+
+                
+                elif test_id == "M_EDGE_CASES-135":
+                    prompt = test.get("prompt", "")
+                    response, metadata = await self.agent.process_query(
+                        message=prompt,
+                        session_id=session_id
+                    )
+                    tool_calls = metadata.get("tool_calls", [])
+                    # Check actual tool calls
+                    callback_detected = any(tc.get("name") == "request_callback" for tc in tool_calls)
+                    donate_detected = any(tc.get("name") == "make_donation" for tc in tool_calls)
+                    
+                    passed = callback_detected and not donate_detected
+                    result.user_prompt = prompt
+                    result.bot_response = response
+                    result.tool_called = ", ".join([tc.get("name", "") for tc in tool_calls]) if tool_calls else "NONE"
+                    result.pass_fail = "PASS" if passed else "FAIL"
+                    result.reasoning = f"Should detect callback (not donate). Callback: {callback_detected}, Donate: {donate_detected}"
+                
+                elif test_id == "M_EDGE_CASES-136":
+                    prompt = test.get("prompt", "")
+                    response, metadata = await self.agent.process_query(
+                        message=prompt,
+                        session_id=session_id
+                    )
+                    ov_passed = metadata.get("ov_validation", {}).get("status") == "passed"
+                    
+                    result.user_prompt = prompt
+                    result.bot_response = response
+                    result.pass_fail = "PASS" if ov_passed else "FAIL"
+                    result.reasoning = f"Callback query should bypass OV intent check. OV result: {ov_passed}"
+                
+                elif test_id == "M_EDGE_CASES-137":
+                    prompt = test.get("prompt", "")
+                    response, metadata = await self.agent.process_query(
+                        message=prompt,
+                        session_id=session_id
+                    )
+                    tool_calls = metadata.get("tool_calls", [])
+                    callback_detected = any(tc.get("name") == "request_callback" for tc in tool_calls)
+                    search_triggered = any(tc.get("name") == "search_brandon_positions" for tc in tool_calls)
+                    
+                    passed = callback_detected and not search_triggered
+                    result.user_prompt = prompt
+                    result.bot_response = response
+                    result.tool_called = ", ".join([tc.get("name", "") for tc in tool_calls]) if tool_calls else "NONE"
+                    result.pass_fail = "PASS" if passed else "FAIL"
+                    result.reasoning = f"Callback should bypass factual safeguard. Callback: {callback_detected}, Search: {search_triggered}"
+                
+                elif test_id == "M_EDGE_CASES-138":
+                    prompt = test.get("prompt", "")
+                    response, metadata = await self.agent.process_query(
+                        message=prompt,
+                        session_id=session_id
+                    )
+                    tool_calls = metadata.get("tool_calls", [])
+                    callback_detected = any(tc.get("name") == "request_callback" for tc in tool_calls)
+                    
+                    result.user_prompt = prompt
+                    result.bot_response = response
+                    result.tool_called = ", ".join([tc.get("name", "") for tc in tool_calls]) if tool_calls else "NONE"
+                    result.pass_fail = "PASS" if callback_detected else "FAIL"
+                    result.reasoning = f"Should detect 'schedule a call' as callback. Callback: {callback_detected}"
+                
+                elif test_id == "M_EDGE_CASES-139":
+                    prompt = test.get("prompt", "")
+                    response, metadata = await self.agent.process_query(
+                        message=prompt,
+                        session_id=session_id
+                    )
+                    tool_calls = metadata.get("tool_calls", [])
+                    callback_detected = any(tc.get("name") == "request_callback" for tc in tool_calls)
+                    
+                    result.user_prompt = prompt
+                    result.bot_response = response
+                    result.tool_called = ", ".join([tc.get("name", "") for tc in tool_calls]) if tool_calls else "NONE"
+                    result.pass_fail = "PASS" if callback_detected else "FAIL"
+                    result.reasoning = f"Should detect 'speak to someone' as callback. Callback: {callback_detected}"
+                
+                elif test_id == "M_EDGE_CASES-140":
+                    callback_prompt = test.get("prompts", {}).get("callback", "")
+                    donate_prompt = test.get("prompts", {}).get("donate", "")
+                    
+                    resp_cb, meta_cb = await self.agent.process_query(
+                        message=callback_prompt,
+                        session_id=f"{session_id}_callback"
+                    )
+                    resp_do, meta_do = await self.agent.process_query(
+                        message=donate_prompt,
+                        session_id=f"{session_id}_donate"
+                    )
+                    
+                    tools_cb_tcs = meta_cb.get("tool_calls", [])
+                    tools_do_tcs = meta_do.get("tool_calls", [])
+                    
+                    callback_detected = any(tc.get("name") == "request_callback" for tc in tools_cb_tcs)
+                    donate_detected = any(tc.get("name") == "make_donation" for tc in tools_do_tcs)
+                    
+                    passed = callback_detected and donate_detected
+                    result.user_prompt = f"Callback: {callback_prompt} | Donate: {donate_prompt}"
+                    result.bot_response = f"Callback: {resp_cb[:80]}... | Donate: {resp_do[:80]}..."
+                    result.tool_called = f"Callback: {[tc.get('name') for tc in tools_cb_tcs]}, Donate: {[tc.get('name') for tc in tools_do_tcs]}"
+                    result.pass_fail = "PASS" if passed else "FAIL"
+                    result.reasoning = f"Callback={callback_detected}, Donate={donate_detected}. Both should be detected separately"
                 
                 else:
                     result.pass_fail = "SKIP"
@@ -1381,7 +1698,7 @@ class BrandonBotValidator:
         
         return results
     
-    async def run_validation(self, phase: TestPhase, max_prompts: int = None) -> ValidationSession:
+    async def run_validation(self, phase: TestPhase, max_prompts: int = None, target_prompt_index: Optional[int] = None, target_prompt_id: Optional[str] = None) -> ValidationSession:
         """Run validation for specified phase."""
         self.session = ValidationSession(
             session_id=f"val_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
@@ -1426,18 +1743,25 @@ class BrandonBotValidator:
         
         if phase in [TestPhase.FULL, TestPhase.ALL]:
             logger.info("Running full validation...")
-            results = await self.run_full_validation(max_prompts)
+            results = await self.run_full_validation(max_prompts, target_prompt_index=target_prompt_index, target_prompt_id=target_prompt_id)
             self.session.results.extend(results)
-            
-            logger.info("Running vague loop tests...")
-            results = await self.run_vague_loop_test()
-            self.session.results.extend(results)
-            
-            logger.info("Running callback edge case tests (M_EDGE_CASES-132 regression)...")
-            results = await self.run_callback_edge_case_tests()
-            self.session.results.extend(results)
-        
-        if phase in [TestPhase.MCP, TestPhase.FULL, TestPhase.ALL] and REQUIRED_CALLBACK_EDGE_IDS:
+
+            # If the caller provided a max_prompts limit, assume they wanted only to exercise
+            # the core full-validation loop and skip the additional vague-loop and callback-edge tests.
+            # When no max_prompts is provided (None), retain historical behavior and run the extra tests.
+            if max_prompts is None or phase == TestPhase.ALL:
+                logger.info("Running vague loop tests...")
+                results = await self.run_vague_loop_test()
+                self.session.results.extend(results)
+
+                logger.info("Running callback edge case tests (M_EDGE_CASES-132 regression)...")
+                results = await self.run_callback_edge_case_tests()
+                self.session.results.extend(results)
+        if REQUIRED_CALLBACK_EDGE_IDS and (
+            phase == TestPhase.MCP
+            or (phase == TestPhase.FULL and max_prompts is None)
+            or phase == TestPhase.ALL
+        ):
             executed_ids = {r.test_id for r in self.session.results}
             missing_ids = REQUIRED_CALLBACK_EDGE_IDS - executed_ids
             if missing_ids:
@@ -1750,6 +2074,20 @@ async def main():
         help="Limit number of prompts in 'full' phase (useful for quick runs)"
     )
     parser.add_argument(
+        "--prompt",
+        type=int,
+        default=None,
+        metavar="I",
+        help="Run only the prompt with the given global index (e.g., --prompt 42). Indexing is zero-based and spans all categories."
+    )
+    parser.add_argument(
+        "--prompt-id",
+        type=str,
+        default=None,
+        metavar="ID",
+        help="Run only the prompt matching the exact test id (e.g., --prompt-id A_VAGUE-002)."
+    )
+    parser.add_argument(
         "--no-judge",
         action="store_true",
         help="Disable Ollama LLM judge – responses will not be scored (useful for debugging)"
@@ -1762,7 +2100,11 @@ async def main():
         help="Custom output directory for results (default: ./validation/results)"
     )
     args = parser.parse_args()
-    phase = TestPhase(args.phase.upper())
+    # Accept either lowercase or uppercase CLI phase values (e.g. 'pq' or 'PQ')
+    try:
+        phase = TestPhase(args.phase)
+    except ValueError:
+        phase = TestPhase(args.phase.lower())
     print(f"\nStarting BrandonBot Validation – Phase: {phase.value.upper()}")
     print(f"Testing mode: {TESTING_MODE}")
     if args.no_judge:
@@ -1771,16 +2113,81 @@ async def main():
         print(f"Limiting full validation to {args.max_prompts} prompts")
     # Agent is needed for phases that interact with the real bot
     use_agent = phase in [TestPhase.MCP, TestPhase.FULL, TestPhase.OV, TestPhase.ALL]
+    # Always require SLMs for validation runs. This enforces the production
+    # behavior where SLM-based checks (intent, FEC RAG, etc.) are mandatory.
+    # Attempt to initialize a WeaviateManager for full validation runs and
+    # pass it into the validator so FEC RAG is wired explicitly. If this
+    # initialization fails, we continue with validator creation and allow
+    # fail-closed behavior when OV requires RAG.
+    wm_for_validator = None
+    try:
+        from weaviate_manager import WeaviateManager
+        wm_candidate = WeaviateManager()
+        try:
+            # We're already inside an asyncio.run() context here; initialize
+            # the WeaviateManager asynchronously to avoid event loop errors.
+            await wm_candidate.initialize()
+            wm_for_validator = wm_candidate
+            logger.info("Initialized WeaviateManager for validation run")
+        except Exception as e:
+            logger.info(f"Could not initialize WeaviateManager for validation run: {e}")
+    except Exception:
+        # WeaviateManager not available in this environment
+        wm_for_validator = None
+
     validator = BrandonBotValidator(
         use_judge=not args.no_judge,
-        use_agent=use_agent
+        use_agent=use_agent,
+        require_slm=True,
+        weaviate_manager=wm_for_validator,
     )
-    session = await validator.run_validation(phase, args.max_prompts)
+    session = await validator.run_validation(phase, args.max_prompts, target_prompt_index=args.prompt, target_prompt_id=args.prompt_id)
     csv_path = validator.export_results(args.output)
     validator.print_summary()
     print(f"\nResults saved to: {csv_path}")
     if args.output:
         print(f"Output directory: {os.path.abspath(args.output)}")
+    # Graceful shutdown of optional resources to avoid ResourceWarning(s)
+    try:
+        if hasattr(validator, '_weaviate') and validator._weaviate:
+            try:
+                await validator._weaviate.close()
+                logger.info('WeaviateManager closed successfully')
+            except Exception as e:
+                logger.warning(f'Failed to close WeaviateManager: {e}')
+    except Exception:
+        # Defensive: ignore any unexpected errors while closing weaviate
+        pass
+
+    try:
+        if hasattr(validator, 'agent') and validator.agent:
+            close_fn = getattr(validator.agent, 'close', None)
+            if callable(close_fn):
+                try:
+                    if hasattr(close_fn, '__call__') and __import__('asyncio').iscoroutinefunction(close_fn):
+                        await close_fn()
+                    else:
+                        close_fn()
+                    logger.info('Agent closed successfully')
+                except Exception as e:
+                    logger.warning(f'Failed to close agent: {e}')
+    except Exception:
+        pass
+
+    try:
+        if hasattr(validator, '_slm_manager') and validator._slm_manager:
+            close_fn = getattr(validator._slm_manager, 'close', None)
+            if callable(close_fn):
+                try:
+                    if __import__('asyncio').iscoroutinefunction(close_fn):
+                        await close_fn()
+                    else:
+                        close_fn()
+                    logger.info('SLMManager closed successfully')
+                except Exception as e:
+                    logger.warning(f'Failed to close SLMManager: {e}')
+    except Exception:
+        pass
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -437,9 +437,14 @@ class MarketGuruIngester:
             with open(file_path, 'r', encoding='utf-8') as f:
                 return f.read()
         elif ext == '.pdf':
-            import pypdf
+            try:
+                from PyPDF2 import PdfReader as PDFReader  # type: ignore
+            except Exception:
+                import pypdf
+                PDFReader = pypdf.PdfReader
+
             with open(file_path, 'rb') as f:
-                reader = pypdf.PdfReader(f)
+                reader = PDFReader(f)
                 return '\n'.join(page.extract_text() for page in reader.pages)
         elif ext == '.html':
             from bs4 import BeautifulSoup

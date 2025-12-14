@@ -13,9 +13,24 @@ Measures latency and accuracy.
 import asyncio
 import time
 import logging
+import inspect
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Wrap any `async def test_*` functions so they run under vanilla pytest when
+# `pytest-asyncio` isn't installed.
+def _wrap_async_tests_in_module(globals_dict):
+    for name, obj in list(globals_dict.items()):
+        if name.startswith("test_") and inspect.iscoroutinefunction(obj):
+            globals_dict[name] = (lambda _obj: (lambda *a, **k: asyncio.run(_obj(*a, **k))))(obj)
+
+
+# Apply wrapper
+_wrap_async_tests_in_module(globals())
+
+# Ensure wrapper also applied after definitions (safe to call twice)
+_wrap_async_tests_in_module(globals())
 
 TEST_CASES = {
     "calm_clear": [
@@ -104,8 +119,8 @@ TEST_CASES = {
     ],
 }
 
-async def test_frustration_detection():
-    """Test frustration detection with latency measurement."""
+async def _async_test_frustration_detection():
+    """Async implementation for frustration detection with latency measurement."""
     
     print("=" * 60)
     print("Frustration Detection Test")
@@ -213,5 +228,10 @@ async def test_frustration_detection():
     print("=" * 60)
 
 
+def test_frustration_detection():
+    """Sync wrapper for pytest: runs the async frustration test under asyncio.run"""
+    return asyncio.run(_async_test_frustration_detection())
+
+
 if __name__ == "__main__":
-    asyncio.run(test_frustration_detection())
+    asyncio.run(_async_test_frustration_detection())

@@ -22,6 +22,27 @@ logger = logging.getLogger(__name__)
 
 MEME_ANALYSIS_TEMPLATE = "This is about a political controversy, meme, or cultural debate"
 MEME_SIMILARITY_THRESHOLD = 0.28
+# A complementary template that represents neutral/factual content. We use
+# the difference between meme and non-meme similarities to reduce false
+# positives on ambiguous queries (e.g., dictionary definitions).
+NON_MEME_ANALYSIS_TEMPLATE = "This is a neutral factual definition or general informational content"
+MEME_SIMILARITY_MARGIN = 0.05  # require meme_similarity to exceed non-meme similarity by this margin
+
+# Keywords that strongly indicate a meme/viral context when present in snippets
+MEME_INDICATOR_KEYWORDS = [
+    "meme", "viral", "chant", "slogan", "tweet", "twitter", "hashtag",
+    "reddit", "parody", "viral tweet", "video", "tiktok", "instagram",
+    "viral tweet", "viral video", "chant", "slogan", "opinion piece"
+]
+
+# Keywords that more specifically indicate a political context (used for
+# political meme detection rather than generic/pop-culture memes)
+POLITICAL_INDICATOR_KEYWORDS = [
+    "politic", "political", "slogan", "chant", "policy", "protest",
+    "election", "president", "trump", "biden", "conservative", "liberal",
+    "senate", "congress", "immigration", "abortion", "border", "vaccine",
+    "climate", "gender", "trans", "campaign", "rally"
+]
 
 GREETING_WORDS = {"hi", "hello", "hey", "greetings", "good morning", "good afternoon", "good evening", "howdy", "yo"}
 
@@ -30,6 +51,19 @@ MEME_TRIGGER_PHRASES = {
     "okay groomer", "ok groomer", "this is fine", "what is a woman",
     "mostly peaceful", "fine people", "build back", "defund",
     "stolen election", "deep state", "fake news", "great replacement"
+}
+
+# Some phrases are known to be repurposed for political/cultural commentary
+# even if traditional political keywords are not nearby in snippets.
+POLITICAL_MEME_OVERRIDES = {
+    "this is fine", "okay groomer", "ok groomer", "lets go brandon",
+    "lets go", "build the wall", "what is a woman", "mostly peaceful",
+    "fine people"
+}
+
+# Known pop-culture memes that are NOT political in our detection
+NON_POLITICAL_MEMES = {
+    "okay boomer", "this is sparta", "what is a man", "build the team"
 }
 
 
@@ -77,14 +111,17 @@ class MemeDetector:
             try:
                 from sentence_transformers import SentenceTransformer
                 from multi_search_service import multi_search_service
-                
-                logger.info("Loading meme detector (all-MiniLM-L6-v2 + SearxNG)...")
+                from slm_manager import SLMManager
+
+                logger.info("Loading meme detector (all-MiniLM-L6-v2 + SearxNG + local SLM)...")
                 self._embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
                 self._template_embedding = self._embedding_model.encode(MEME_ANALYSIS_TEMPLATE)
                 self._multi_search = multi_search_service
-                
+                # SLMManager will lazy-load the cross-encoder on first use
+                self._slm = SLMManager()
+
                 self._initialized = True
-                logger.info("Meme detector ready with multi-provider search")
+                logger.info("Meme detector ready with multi-provider search and SLM")
                 return True
                 
             except Exception as e:
@@ -171,16 +208,29 @@ class MemeDetector:
         
         snippet_embeddings = self._embedding_model.encode(snippets)
         avg_embedding = np.mean(snippet_embeddings, axis=0)
-        
-        similarity = float(np.dot(avg_embedding, self._template_embedding) / (
+
+        meme_similarity = float(np.dot(avg_embedding, self._template_embedding) / (
             np.linalg.norm(avg_embedding) * np.linalg.norm(self._template_embedding)
         ))
-        
+
+        # Compute a non-meme similarity as a negative control to detect cases
+        # where snippets are neutral/definitional despite matching the meme
+        # template by accident.
+        try:
+            non_meme_embedding = self._embedding_model.encode([NON_MEME_ANALYSIS_TEMPLATE])[0]
+            non_meme_similarity = float(np.dot(avg_embedding, non_meme_embedding) / (
+                np.linalg.norm(avg_embedding) * np.linalg.norm(non_meme_embedding)
+            ))
+        except Exception:
+            non_meme_similarity = 0.0
+
+        similarity = meme_similarity
+
         context = " ".join(snippets[:3])
         if len(context) > 800:
             context = context[:800] + "..."
-        
-        return similarity, context
+
+        return similarity, context, non_meme_similarity
     
     def _determine_pivot(self, phrase: str, context: str) -> str:
         """
@@ -223,7 +273,7 @@ class MemeDetector:
         
         return ""
     
-    async def detect(self, query: str) -> MemeDetectionResult:
+    async def detect(self, query: str, session_id: Optional[str] = None, test_id: Optional[str] = None, request_id: Optional[str] = None) -> MemeDetectionResult:
         """
         Detect if a query contains a meme or culturally loaded phrase.
         
@@ -266,21 +316,153 @@ class MemeDetector:
             snippets = [r.snippet for r in search_response.results if r.snippet]
             result.search_snippets = snippets
             result.reasoning = f"Got {len(snippets)} snippets from {search_response.provider}"
-            
-            similarity, context = self._analyze_snippets(snippets)
+
+            # Precompute snippet-level indicators so we can make context-aware
+            # decisions even when the SLM asserts 'not_meme' with high confidence.
+            import re
+            snippet_text = " ".join(snippets).lower()
+            snippet_text_clean = re.sub(r"[^\w\s]", " ", snippet_text)
+            # Normalize common abbreviated forms (e.g., 'ok' -> 'okay') to
+            # help phrase matching for variants like 'OK Groomer' vs 'Okay Groomer'.
+            snippet_text_clean = re.sub(r"\bok\b", "okay", snippet_text_clean)
+            indicator_count = 0
+            for kw in MEME_INDICATOR_KEYWORDS:
+                indicator_count += snippet_text_clean.count(kw)
+
+            political_count = 0
+            for kw in POLITICAL_INDICATOR_KEYWORDS:
+                political_count += snippet_text_clean.count(kw)
+
+            phrase_norm = re.sub(r"[^\w\s]", "", query.lower()).strip()
+            # If this phrase is a known non-political meme, skip detection
+            if phrase_norm in NON_POLITICAL_MEMES:
+                result.reasoning += " | Phrase is a known non-political meme - skipping political detection"
+                logger.debug(f"Skipping political meme detection for known non-political meme: '{query}'")
+                return result
+
+            # Ask the local SLM (cross-encoder) to classify snippets for meme signal.
+            try:
+                # Pass the original query/phrase so SLM can check phrase presence
+                slm_resp = await self._slm.classify_meme(snippets, phrase=query, test_id=test_id, session_id=session_id, request_id=request_id)
+                result.reasoning += f" | SLM: {slm_resp.explanation}"
+
+                # Strong SLM meme decisions take precedence, but require either
+                # explicit political indicators or membership in overrides to
+                # avoid SLM labeling pop-culture-only memes as political.
+                if slm_resp.decision == "meme" and slm_resp.confidence >= 0.5 and (phrase_norm in POLITICAL_MEME_OVERRIDES or political_count >= 1):
+                    result.is_meme = True
+                    result.similarity_score = slm_resp.confidence
+                    result.suggested_pivot = self._determine_pivot(query, result.reasoning)
+                    result.reasoning += f" | Meme detected (SLM confidence: {slm_resp.confidence:.3f})"
+                    logger.info(f"Meme detected by SLM: '{query}' (confidence: {slm_resp.confidence:.3f})")
+                    return result
+
+                # If SLM is strongly confident this is NOT a meme, we still allow
+                # heuristic overrides (e.g., explicit political indicators or a
+                # curated override phrase). This avoids SLM overconfidence blocking
+                # obvious political memes when snippets are noisy.
+                if slm_resp.decision == "not_meme" and slm_resp.confidence >= 0.6:
+                    if not (phrase_norm in POLITICAL_MEME_OVERRIDES or (" " + phrase_norm + " " in " " + snippet_text_clean + " " and (political_count >= 1 or indicator_count >= 2))):
+                        result.is_meme = False
+                        result.similarity_score = 0.0
+                        result.reasoning += f" | Classified non-meme by SLM (confidence: {slm_resp.confidence:.3f})"
+                        logger.info(f"SLM classified non-meme: '{query}' (confidence: {slm_resp.confidence:.3f})")
+                        return result
+                    else:
+                        # Ignore SLM's not_meme and fall through to heuristics
+                        logger.info(f"Ignoring SLM non-meme for '{query}' due to contextual indicators (political={political_count}, indicators={indicator_count})")
+            except Exception as e:
+                logger.warning(f"SLM meme classification failed: {e}")
+
+            similarity, context, non_meme_similarity = self._analyze_snippets(snippets)
             result.similarity_score = similarity
+            result._non_meme_similarity = non_meme_similarity  # debug aid
             result.context = context
             result.cultural_context = context[:300] if context else ""
             result.confidence = min(similarity / MEME_SIMILARITY_THRESHOLD, 1.0) if similarity > 0 else 0.0
-            
-            if similarity >= MEME_SIMILARITY_THRESHOLD:
+            # Check for explicit indicators in snippets (strong signal).
+            # Use a cleaned snippet text (no punctuation) for reliable matching.
+            import re
+            snippet_text = " ".join(snippets).lower()
+            snippet_text_clean = re.sub(r"[^\w\s]", " ", snippet_text)
+            indicator_count = 0
+            for kw in MEME_INDICATOR_KEYWORDS:
+                indicator_count += snippet_text_clean.count(kw)
+
+            # Final decision uses a combination of signals:
+            # 1) similarity threshold
+            # 2) meme vs non-meme similarity margin
+            # 3) presence of explicit indicator keywords
+            is_meme_by_similarity = similarity >= MEME_SIMILARITY_THRESHOLD
+            is_meme_by_margin = (similarity - non_meme_similarity) >= MEME_SIMILARITY_MARGIN
+            # Phrase presence check: indicator keywords should relate to the phrase
+            import re
+            phrase_clean = re.sub(r"[^\w\s]", "", query.lower()).strip()
+            phrase_present = phrase_clean in snippet_text_clean
+
+            # Special-case guard: for very short generic phrases (<=2 words) where
+            # the snippets predominantly reference a longer political phrase
+            # (e.g., 'lets go brandon'), do not label the short phrase as a meme.
+            phrase_word_count = len(phrase_clean.split()) if phrase_clean else 0
+            if phrase_word_count <= 2 and 'brandon' in snippet_text_clean and 'brandon' not in phrase_clean:
+                result.reasoning += " | Short generic phrase appears only as part of a longer meme (e.g., 'lets go brandon') - not labeling as meme"
+                logger.info(f"Short generic phrase '{query}' appears in political snippets but without explicit phrase match - skipping as meme")
+                return result
+
+            # Count political-specific indicators separately; we treat a phrase as a political
+            # meme even if there is only a single political indicator present in snippets
+            political_count = 0
+            for kw in POLITICAL_INDICATOR_KEYWORDS:
+                political_count += snippet_text_clean.count(kw)
+
+            # Short-circuit for pop-culture/political memes: if the phrase is present
+            # and there are explicit meme/viral indicators, treat as a meme. In addition,
+            # treat curated override phrases (e.g., 'okay groomer') as political memes
+            # if the snippet indicators show meme/viral context, even when the phrase
+            # itself isn't present exactly in the snippets (helps with 'Okay, Groomer').
+            phrase_norm = re.sub(r"[^\w\s]", "", query.lower()).strip()
+            if (phrase_present and indicator_count >= 2 and (political_count >= 1 or phrase_norm in POLITICAL_MEME_OVERRIDES) and (phrase_norm in POLITICAL_MEME_OVERRIDES or (not phrase_norm.startswith('what is') and not phrase_norm.startswith('who is')))) or (phrase_norm in POLITICAL_MEME_OVERRIDES and indicator_count >= 2):
                 result.is_meme = True
                 result.suggested_pivot = self._determine_pivot(query, context)
-                result.reasoning += f" | Meme detected (score: {similarity:.3f})"
-                logger.info(f"Meme detected: '{query}' (score: {similarity:.3f}, pivot: {result.suggested_pivot})")
+                result.reasoning += f" | Meme detected (indicators: {indicator_count})"
+                logger.info(f"Meme detected by indicators: '{query}' (indicators: {indicator_count}, pivot: {result.suggested_pivot})")
+
+            # Decision rules:
+            # - If political indicators are present and the phrase occurs in snippets, treat as political meme
+            # - Otherwise require similarity >= threshold AND a positive margin vs non-meme
+            elif phrase_present:
+                # For phrases in our overrides, a single political indicator is enough
+                if phrase_norm in POLITICAL_MEME_OVERRIDES and political_count >= 1:
+                    result.is_meme = True
+                    result.suggested_pivot = self._determine_pivot(query, context)
+                    result.reasoning += f" | Meme detected (override + political_indicators: {political_count})"
+                    logger.info(f"Meme detected by override+political indicators: '{query}' (political_indicators: {political_count}, pivot: {result.suggested_pivot})")
+                # Otherwise require a stronger political signal to avoid false positives
+                elif political_count >= 3 and (indicator_count >= 2 or (is_meme_by_similarity and is_meme_by_margin)):
+                    result.is_meme = True
+                    result.suggested_pivot = self._determine_pivot(query, context)
+                    result.reasoning += f" | Meme detected (political_indicators: {political_count})"
+                    logger.info(f"Meme detected by political indicators: '{query}' (political_indicators: {political_count}, pivot: {result.suggested_pivot})")
+            # Final similarity-based rule: require stronger political signal for
+            # question-like phrases (e.g., "What is a tree?") to avoid false positives.
+            if is_meme_by_similarity and is_meme_by_margin:
+                if phrase_norm.startswith('what is') or phrase_norm.startswith('who is'):
+                    # require >=3 political indicators for question-like phrases
+                    if political_count >= 3:
+                        result.is_meme = True
+                        result.suggested_pivot = self._determine_pivot(query, context)
+                        result.reasoning += f" | Meme detected (score: {similarity:.3f}, indicators: {indicator_count})"
+                        logger.info(f"Meme detected by similarity (question case): '{query}' (score: {similarity:.3f}, pivot: {result.suggested_pivot}, indicators: {indicator_count})")
+                else:
+                    # non-question phrases need only a single political indicator (or overrides handled earlier)
+                    if political_count >= 1:
+                        result.is_meme = True
+                        result.suggested_pivot = self._determine_pivot(query, context)
+                        result.reasoning += f" | Meme detected (score: {similarity:.3f}, indicators: {indicator_count})"
+                        logger.info(f"Meme detected by similarity: '{query}' (score: {similarity:.3f}, pivot: {result.suggested_pivot}, indicators: {indicator_count})")
             else:
-                result.reasoning += f" | Not a meme (score: {similarity:.3f} < threshold {MEME_SIMILARITY_THRESHOLD})"
-                logger.debug(f"Not a meme: '{query}' (score: {similarity:.3f})")
+                result.reasoning += f" | Not a meme (score: {similarity:.3f} < threshold {MEME_SIMILARITY_THRESHOLD} or margin fail (non_meme={non_meme_similarity:.3f}, indicators={indicator_count}))"
+                logger.debug(f"Not a meme: '{query}' (score: {similarity:.3f}, non_meme={non_meme_similarity:.3f}, indicators={indicator_count})")
             
             return result
             

@@ -48,10 +48,19 @@ class TestFECChecker:
     """Test suite for FEC compliance checking with RAG + SLM."""
     
     @pytest.fixture
-    def fec_checker(self):
-        """Get the FEC compliance checker."""
+    def fec_checker(self, weaviate_manager):
+        """Get the FEC compliance checker with test Weaviate manager attached."""
         from fec_compliance_checker import FECComplianceChecker
-        return FECComplianceChecker()
+        # Provide a lightweight SLM stub to simulate binary classification in tests
+        class _TestSLM:
+            async def classify(self, prompt: str) -> str:
+                # Simple keyword-based classifier for test inputs
+                lp = prompt.lower()
+                if "tax" in lp or "deductible" in lp or "donation" in lp:
+                    return "YES"
+                return "NO"
+
+        return FECComplianceChecker(weaviate_manager=weaviate_manager, slm_classifier=_TestSLM())
     
     @pytest.mark.parametrize("query,response,expected_max_score", FEC_PASS_CASES)
     def test_fec_pass_cases(self, output_validator_with_rag, query, response, expected_max_score):

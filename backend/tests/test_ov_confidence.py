@@ -9,11 +9,7 @@ Tests confidence calibration:
 import pytest
 import asyncio
 
-try:
-    loop = asyncio.get_event_loop()
-except RuntimeError:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+# Avoid module-level event loop creation; tests use `asyncio.run()` instead.
 
 
 CONFIDENCE_PASS_CASES_LOW_PQ = [
@@ -63,7 +59,7 @@ class TestConfidenceChecker:
             result = await validator._check_confidence(query, response, pq_confidence)
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         assert result.score <= 2, f"Expected pass (score <= 2), got {result.score}: {result.explanation}"
     
@@ -74,7 +70,7 @@ class TestConfidenceChecker:
             result = await validator._check_confidence(query, response, pq_confidence)
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         assert result.score >= 3, f"Expected fail (score >= 3), got {result.score}: {result.explanation}"
     
@@ -85,7 +81,7 @@ class TestConfidenceChecker:
             result = await validator._check_confidence(query, response, pq_confidence)
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         assert result.score <= 2, f"Expected pass (score <= 2), got {result.score}: {result.explanation}"
     
@@ -96,7 +92,7 @@ class TestConfidenceChecker:
             result = await validator._check_confidence(query, response, pq_confidence)
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         assert result.score >= 2, f"Expected fail (score >= 2), got {result.score}: {result.explanation}"
     
@@ -119,7 +115,7 @@ class TestConfidenceChecker:
             
             return results
         
-        results = asyncio.get_event_loop().run_until_complete(run_test())
+        results = asyncio.run(run_test())
         
         for result in results:
             assert result.hedging_detected, f"Hedging not detected: {result.explanation}"
@@ -143,7 +139,7 @@ class TestConfidenceChecker:
             
             return results
         
-        results = asyncio.get_event_loop().run_until_complete(run_test())
+        results = asyncio.run(run_test())
         
         for result in results:
             assert result.overconfidence_detected, f"Overconfidence not detected: {result.explanation}"
@@ -154,7 +150,7 @@ class TestConfidenceChecker:
             result = await validator._check_confidence("Query", "Response", 0.5)
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         
         assert result.method in ["bert_tiny", "pattern_fallback"], f"Unexpected method: {result.method}"
 
@@ -173,7 +169,7 @@ class TestConfidenceEdgeCases:
             result = await validator._check_confidence("Query", "", 0.5)
             return result
         
-        result = asyncio.get_event_loop().run_until_complete(run_test())
+        result = asyncio.run(run_test())
         assert result.score >= 0
     
     def test_pq_confidence_boundary(self, validator):
@@ -187,7 +183,7 @@ class TestConfidenceEdgeCases:
             
             return below, at, above
         
-        below, at, above = asyncio.get_event_loop().run_until_complete(run_test())
+        below, at, above = asyncio.run(run_test())
         
         assert above.score <= at.score, "Above threshold should not score worse"
     
@@ -201,7 +197,7 @@ class TestConfidenceEdgeCases:
             
             return zero, one
         
-        zero, one = asyncio.get_event_loop().run_until_complete(run_test())
+        zero, one = asyncio.run(run_test())
         
         assert zero.score >= 0 and zero.score <= 5
         assert one.score >= 0 and one.score <= 5

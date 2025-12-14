@@ -12,7 +12,7 @@ from typing import Dict, List
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger(__name__)
 
-async def test_query(question: str, test_name: str) -> Dict:
+async def send_query(question: str, test_name: str) -> Dict:
     """Send a query to BrandonBot and return the response"""
     import aiohttp
     
@@ -107,7 +107,7 @@ async def run_smoke_tests():
         logger.info(f"\nExecuting query...")
         logger.info("")
         
-        response = await test_query(test['question'], test['name'])
+        response = await send_query(test['question'], test['name'])
         
         if "error" in response:
             logger.error(f"❌ Test failed with error")

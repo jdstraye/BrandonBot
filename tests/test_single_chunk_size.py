@@ -66,8 +66,8 @@ def restart_and_ingest(chunk_size: int):
         print("❌ Ingestion failed")
         return False
 
-def test_query(query: str, expand: bool) -> float:
-    """Test a single query"""
+def run_query(query: str, expand: bool) -> float:
+    """Test a single query (renamed to avoid pytest collection)"""
     try:
         url = f'http://localhost:5000/api/test_rag?query={query}&expand={"true" if expand else "false"}'
         response = urllib.request.urlopen(url, timeout=30).read()

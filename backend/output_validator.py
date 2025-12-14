@@ -818,6 +818,7 @@ class OutputValidatorSLM:
         ]
         has_false_inability = any(p.search(response) for p in false_inability_patterns)
         
+        logger.debug(f"Hedging check: pq_confidence={pq_confidence:.2f}, has_hedging={has_hedging}, has_overconfidence={has_overconfidence}")
         if pq_confidence < 0.75:
             if has_overconfidence and not has_hedging:
                 score = 4
@@ -1011,6 +1012,23 @@ class OutputValidatorSLM:
                 explanation="No previous responses to compare",
                 method="embedding"
             )
+
+        # If the response is a known fallback/safe-blocking message, ignore
+        # repetition checking to avoid penalizing system-level fallback content
+        # that may be intentionally identical across attempts.
+        FALLBACK_MESSAGES = [
+            "I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?",
+            "I apologize, but I'm having trouble completing this request. Would you like someone from the team to call you back to discuss this?"
+        ]
+        normalized_resp = (response or "").strip()
+        if any(normalized_resp == fm for fm in FALLBACK_MESSAGES):
+            return OVResult(
+                safeguard=OVSafeguard.REPETITION,
+                score=0,
+                confidence=1.0,
+                explanation="Fallback response - repetition check skipped",
+                method="embedding"
+            )
         
         # Fail-closed: Require weaviate_manager for embeddings
         if not self._weaviate_manager:
@@ -1074,6 +1092,25 @@ class OutputValidatorSLM:
                 if similarity > max_similarity:
                     max_similarity = similarity
             
+            logger.debug(f"Repetition check similarity: {max_similarity:.3f} (thresholds: 0.95, {similarity_threshold}, 0.7)")
+            # Log repetition embedding telemetry (best-effort)
+            try:
+                from validation_debug import get_debug_db
+                debug_db = get_debug_db()
+                # Convert embeddings to native lists for JSON storage
+                resp_emb_list = response_embedding.tolist() if hasattr(response_embedding, 'tolist') else list(response_embedding)
+                prev_embs_list = [p.tolist() if hasattr(p, 'tolist') else list(p) for p in prev_embeddings]
+                debug_db.log_repetition_embedding(
+                    response_text=response[:1000],
+                    response_embedding=resp_emb_list,
+                    previous_embeddings=prev_embs_list,
+                    max_similarity=max_similarity,
+                    test_id=None,
+                    session_id=None,
+                    request_id=None
+                )
+            except Exception:
+                pass
             if max_similarity >= 0.95:
                 return OVResult(
                     safeguard=OVSafeguard.REPETITION,
@@ -1099,13 +1136,15 @@ class OutputValidatorSLM:
                     method="embedding"
                 )
             else:
-                return OVResult(
+                result = OVResult(
                     safeguard=OVSafeguard.REPETITION,
                     score=0,
                     confidence=0.9,
                     explanation=f"Response is sufficiently different from previous responses (max similarity: {max_similarity:.2f})",
                     method="embedding"
                 )
+                logger.debug(f"Repetition check result: {result.explanation}")
+                return result
                 
         except SLMNotAvailableError:
             raise  # Re-raise fail-closed errors

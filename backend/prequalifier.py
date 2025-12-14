@@ -516,7 +516,7 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
             logger.info(f"Meme detection bypassed for crypto/religion topic: {result.sanitized_message[:50]}...")
         else:
             try:
-                meme_result = await meme_detector.detect(result.sanitized_message)
+                meme_result = await meme_detector.detect(result.sanitized_message, session_id=session_id)
                 if meme_result.is_meme:
                     result.meme_detected = True
                     result.meme_context = meme_result.context
@@ -887,12 +887,14 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
         avg_confidence: float
     ) -> VaguenessDecision:
         """
-        RAG-informed vagueness classification using Qwen.
-        
+        RAG-informed vagueness classification using a configured local SLM.
+
         The SLM receives the user query along with RAG results and similarity
         scores, allowing it to make an informed decision about whether the
-        knowledge base can answer the query.
-        
+        knowledge base can answer the query. By default this is performed
+        with the local cross-encoder or other configured SLM provider and
+        does not require an external cloud-only model.
+
         Raises:
             SLMNotAvailableError: If require_slm=True and SLM is not available.
         """

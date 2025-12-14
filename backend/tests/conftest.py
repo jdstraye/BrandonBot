@@ -10,11 +10,16 @@ Provides fixtures for:
 """
 
 import pytest
+import warnings
 
 
 def pytest_configure(config):
     """Register custom markers."""
     config.addinivalue_line("markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')")
+    # NOTE: We used to suppress CryptographyDeprecationWarning here, but
+    # that hid the underlying problem. Instead of filtering the warning,
+    # we prefer to fix code so deprecated features are not used. See
+    # TODO.md for dependency-upgrade items related to `pypdf`/`cryptography`.
 import asyncio
 import logging
 import os
@@ -27,12 +32,8 @@ logger = logging.getLogger(__name__)
 
 def run_async(coro):
     """Helper to run async functions in sync context."""
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    return loop.run_until_complete(coro)
+    # Prefer `asyncio.run()` for running top-level coroutines (Python 3.7+)
+    return asyncio.run(coro)
 
 
 @pytest.fixture(scope="session")
@@ -55,7 +56,8 @@ def weaviate_manager():
     import weaviate
     from weaviate_manager import WeaviateManager
     from weaviate.classes.config import Configure, Property, DataType
-    from fec_compliance_checker import FECProhibitedPhrasesStore
+    # Use real ingestion pipeline to populate collections including FEC
+    from ingest_all import connect_or_start_weaviate, ingest_fec_prohibited
     
     wm = None
     connected_to_existing = False
@@ -81,39 +83,48 @@ def weaviate_manager():
             wm = WeaviateManager(persist_directory="./weaviate_test_data")
             await wm.initialize()
         
-        # Create FECProhibited collection if needed
-        if not wm.client.collections.exists("FECProhibited"):
-            wm.client.collections.create(
-                name="FECProhibited",
-                description="FEC prohibited phrases and rules for compliance checking",
-                properties=[
-                    Property(name="content", data_type=DataType.TEXT),
-                    Property(name="source", data_type=DataType.TEXT),
-                    Property(name="date", data_type=DataType.TEXT),
-                    Property(name="category", data_type=DataType.TEXT),
-                    Property(name="confidence_tier", data_type=DataType.INT),
-                    Property(name="metadata", data_type=DataType.TEXT),
-                    Property(name="violation_type", data_type=DataType.TEXT),
-                    Property(name="severity", data_type=DataType.INT),
-                ],
-                vectorizer_config=Configure.Vectorizer.none()
-            )
-            logger.info("Created FECProhibited collection")
-            
-            phrase_store = FECProhibitedPhrasesStore()
-            for violation_type, phrases in phrase_store.PROHIBITED_PHRASES.items():
-                for phrase, severity in phrases:
-                    await wm.add_document(
-                        collection_name="FECProhibited",
-                        content=phrase,
-                        source="FEC Compliance Rules",
-                        category=violation_type,
-                        metadata={"violation_type": violation_type, "severity": severity}
-                    )
-            
-            count = await wm.get_collection_count("FECProhibited")
-            logger.info(f"Populated FECProhibited collection with {count} phrases")
-        
+        # Ensure FECProhibited collection exists and is populated using real ingestion helper
+        try:
+            exists = False
+            if getattr(wm, 'client', None):
+                try:
+                    exists = wm.client.collections.exists("FECProhibited")
+                except Exception:
+                    exists = False
+            elif hasattr(wm, 'rest_url') and wm.rest_url:
+                import httpx
+                r = httpx.get(f"{wm.rest_url}/v1/schema", timeout=5)
+                if r.status_code == 200:
+                    classes = r.json().get('classes', [])
+                    exists = any(c.get('class') == 'FECProhibited' for c in classes)
+
+            if not exists:
+                # Use add_document which will create the class via REST fallback if needed
+                try:
+                    await wm.add_document("FECProhibited", content="seed doc", source="seed")
+                    logger.info("Created/seeded FECProhibited collection via REST fallback")
+                except Exception as e:
+                    logger.warning(f"Could not create/seed FECProhibited collection: {e}")
+        except Exception as e:
+            logger.warning(f"Error checking/creating FECProhibited collection: {e}")
+
+        # Use built-in ingestion to populate baseline mandatory FEC data (idempotent)
+        await ingest_fec_prohibited(wm)
+
+        # Ensure the module-level output_validator (if imported by tests) is wired
+        try:
+            from output_validator import output_validator as module_output_validator
+            module_output_validator.set_fec_rag(wm)
+            module_output_validator.set_weaviate_manager(wm)
+            logger.info("Wired module-level output_validator to test WeaviateManager")
+        except Exception:
+            # Not all test processes import the module-level output_validator; ignore failures
+            logger.debug("module-level output_validator not present or could not be wired")
+
+        # Note: Do not attempt to modify the production module-level `fec_checker`
+        # at import time. Tests should construct and wire their own instances
+        # to preserve fail-closed production semantics.
+
         return wm
     
     wm = run_async(setup())

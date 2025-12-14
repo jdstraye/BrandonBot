@@ -47,13 +47,8 @@ class WebSearchService:
             self.ddgs = DDGS()
             self.search_available = True
         except ImportError:
-            try:
-                from duckduckgo_search import DDGS
-                self.ddgs = DDGS()
-                self.search_available = True
-            except ImportError:
-                import logging
-                logging.warning("ddgs/duckduckgo-search not installed. Web search disabled.")
+            import logging
+            logging.warning("ddgs not installed. Web search disabled. Please 'pip install ddgs'")
     
     def _sync_search(self, query: str, max_results: int) -> list:
         """
@@ -63,7 +58,7 @@ class WebSearchService:
         try:
             from ddgs import DDGS
         except ImportError:
-            from duckduckgo_search import DDGS
+            raise ImportError("ddgs package is not installed; please 'pip install ddgs'")
         ddgs = DDGS()
         return list(ddgs.text(query, max_results=max_results))
     
