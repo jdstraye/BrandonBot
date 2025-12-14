@@ -198,6 +198,27 @@ docker compose up -d --build
 ```
 
 ### Chat not responding
+
+## Maintenance tasks and cron jobs 🔧
+
+There are helper scripts to install maintenance cron jobs:
+
+- Weekly FEC RAG refresh:
+
+```bash
+scripts/install_refresh_cron.sh --install
+```
+
+-- Nightly validation report (generates `validation_runs/` and `validation_report/` at 00:00 America/Los_Angeles):
+
+```bash
+scripts/install_nightly_validation_cron.sh
+# or install both refresh + nightly in one step:
+scripts/install_refresh_cron.sh --install-all
+```
+
+Use the `--print` variants to preview the crontab lines before installing.
+
 1. Check all containers are running:
    ```bash
    docker compose ps

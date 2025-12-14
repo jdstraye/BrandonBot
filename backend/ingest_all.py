@@ -74,6 +74,47 @@ FEC_PROHIBITED_DATA = [
         "source": "FEC Regulations - Medical Advice",
         "category": "medical_advice",
     },
+    # Additional best-known pitfalls and authoritative constraints
+    {
+        "content": "PROHIBITED: Contributions, donations, or expenditures from foreign nationals. Individuals who are not U.S. citizens or lawful permanent residents, foreign corporations, or foreign governments may not contribute or make expenditures in connection with any U.S. election.",
+        "source": "FEC Guidance - Foreign Nationals",
+        "category": "foreign_national",
+    },
+    {
+        "content": "PROHIBITED: Corporate and labor organization contributions. Corporations and labor organizations are not permitted to make direct contributions to federal candidates or political committees.",
+        "source": "FEC Guidance - Corporate Contributions",
+        "category": "corporate_contribution",
+    },
+    {
+        "content": "PROHIBITED: Making contributions in the name of another person (straw donor/conduit contributions) or reimbursing donations to hide a true donor is illegal and reportable.",
+        "source": "FEC Guidance - Prohibited Conduct (Straw Donors)",
+        "category": "straw_donor",
+    },
+    {
+        "content": "RESTRICTED/MUST REPORT: Campaigns must refuse, refund, or report contributions that exceed legal per-election limits (individual limits vary by cycle). Accepting excessive contributions without prompt refund or disclosure may violate FEC rules.",
+        "source": "FEC Guidance - Contribution Limits & Refunds",
+        "category": "contribution_limits",
+    },
+    {
+        "content": "RESTRICTED: Coordination rules — communications or expenditures coordinated with a campaign may be treated as in-kind contributions and are subject to limits and reporting; independent expenditures by outside groups must be independent to avoid conversion to coordinated spending.",
+        "source": "FEC Guidance - Coordination",
+        "category": "coordination",
+    },
+    {
+        "content": "REQUIRED: Paid public political communications that solicit contributions or make electioneering calls must include clear disclaimers (who paid for the communication and whether authorized by the candidate) and may trigger additional reporting obligations.",
+        "source": "FEC Guidance - Disclaimer Requirements",
+        "category": "disclaimer_requirement",
+    },
+    {
+        "content": "MUST COLLECT: For contributions above small thresholds, campaigns must collect and report donor identifying information (name, address, employer, occupation) and disclose large or aggregate contributions in FEC filings.",
+        "source": "FEC Guidance - Reporting & Disclosure",
+        "category": "reporting",
+    },
+    {
+        "content": "PROHIBITED/RESTRICTED: Federal contractors and certain other classes of payees may face restrictions on making contributions to candidates while performing federal contracts; consult legal counsel and FEC guidance.",
+        "source": "FEC Guidance - Federal Contractor Restrictions",
+        "category": "federal_contractor",
+    },
 ]
 
 
@@ -123,6 +164,44 @@ async def ingest_fec_prohibited(weaviate: WeaviateManager) -> dict:
     
     logger.info(f"    Added {added} FEC prohibited phrases")
     stats["docs"] = added
+    return stats
+
+
+async def ingest_fec_official(weaviate: WeaviateManager) -> dict:
+    """Fetch and ingest a curated set of official FEC/eCFR pages.
+
+    This is complementary to the hard-coded `FEC_PROHIBITED_DATA` and ensures
+    that authoritative guidance and regulations are available to the RAG.
+    """
+    import httpx
+    import re
+
+    PAGES = [
+        ("https://www.fec.gov/help-candidates-and-committees/", "FEC: Help for candidates and committees"),
+        ("https://www.fec.gov/press/", "FEC: Press and announcements"),
+        ("https://www.fec.gov/updates/fec-contribution-limits/", "FEC: Contribution limits (updates)"),
+        ("https://www.ecfr.gov/current/title-11", "eCFR Title 11 - Federal Elections"),
+    ]
+
+    stats = {"pages": 0}
+    async with httpx.AsyncClient() as client:
+        for url, title in PAGES:
+            try:
+                r = await client.get(url, timeout=30.0)
+                if r.status_code != 200:
+                    continue
+                # Minimal HTML -> text
+                cleaned = re.sub(r"(?is)<(script|style).*?>.*?(</\1>)", " ", r.text)
+                cleaned = re.sub(r"(?s)<.*?>", " ", cleaned)
+                cleaned = re.sub(r"\s+", " ", cleaned).strip()
+                snippet = cleaned[:20000]
+                content = f"{title}\nSource: {url}\n\n{snippet}"
+                ok = await weaviate.add_document(collection_name="FECProhibited", content=content, source=url, category="official_fec")
+                if ok:
+                    stats["pages"] += 1
+            except Exception as e:
+                logger.warning(f"Failed to fetch/ingest official FEC page {url}: {e}")
+
     return stats
 
 
@@ -292,6 +371,10 @@ async def run_unified_ingestion(data_dir: str, chunk_size: int = 1000,
         logger.info("-" * 40)
         fec_stats = await ingest_fec_prohibited(weaviate)
         fec_file_stats = await ingest_fec_from_files(weaviate, data_dir, chunk_size, overlap)
+        # Ingest official FEC/eCFR pages to enrich RAG with authoritative sources
+        logger.info("\nPHASE 1B: FEC Official Pages (optional but recommended)")
+        logger.info("-" * 40)
+        fec_official_stats = await ingest_fec_official(weaviate)
         
         fec_count = await weaviate.get_collection_count("FECProhibited")
         if fec_count == 0:
@@ -329,7 +412,7 @@ async def run_unified_ingestion(data_dir: str, chunk_size: int = 1000,
             logger.info(f"  {collection}: {count} chunks [{status}]{mandatory}")
         
         logger.info("\nIngestion Summary:")
-        logger.info(f"  FEC Prohibited: {fec_stats['docs']} built-in + {fec_file_stats.get('chunks', 0)} from files")
+        logger.info(f"  FEC Prohibited: {fec_stats['docs']} built-in + {fec_file_stats.get('chunks', 0)} from files + {fec_official_stats.get('pages', 0)} official pages")
         logger.info(f"  Standard docs: {std_stats['docs']} files, {std_stats['chunks']} chunks")
         logger.info(f"  MarketGurus:   {guru_stats['files']} files, {guru_stats['chunks']} chunks")
         

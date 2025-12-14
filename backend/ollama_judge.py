@@ -399,13 +399,23 @@ Respond with ONLY the message the voter would say, nothing else."""
     
     async def _generate_ollama(self, prompt: str, system: str = None) -> str:
         """Generate a response from Ollama."""
+        # Allow num_predict / temperature to be tuned via settings for latency control
+        try:
+            cfg = getattr(settings, "cfg", None)
+            judge_cfg = getattr(cfg, "judge", {}) if cfg else {}
+            num_predict = int(judge_cfg.get("num_predict", 256))
+            temperature = float(judge_cfg.get("temperature", 0.3))
+        except Exception:
+            num_predict = 256
+            temperature = 0.3
+
         payload = {
             "model": self.model,
             "prompt": prompt,
             "stream": False,
             "options": {
-                "temperature": 0.3,
-                "num_predict": 1024,
+                "temperature": temperature,
+                "num_predict": num_predict,
             }
         }
 

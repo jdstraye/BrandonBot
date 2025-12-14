@@ -68,8 +68,8 @@ if [ "$FULL_INGEST" = "true" ]; then
     exit 1
   }
 else
-  echo "Seeding Weaviate collections (this may take a moment)..."
-  (cd "$REPO_ROOT" && python3 backend/seed_weaviate.py)
+  echo "Seeding Weaviate collections (this may take a moment)... (includes ingesting official FEC pages)"
+    (cd "$REPO_ROOT" && python3 backend/seed_weaviate.py)
 fi
 
 echo "Seed complete. You can now run: pytest -q backend/tests"

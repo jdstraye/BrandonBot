@@ -669,6 +669,17 @@ class BrandonBotValidator:
             
             logger.info("Wiring Weaviate to OutputValidator for FEC RAG...")
             self.set_fec_rag(self._weaviate)
+            # Verify that the FECProhibited collection has been seeded
+            try:
+                count = await self._weaviate.get_collection_count("FECProhibited")
+                if count <= 0:
+                    logger.warning("FECProhibited collection present but contains 0 documents; ensure ingestion was run")
+                    return False
+                logger.info(f"FEC RAG ready: FECProhibited contains {count} documents")
+            except Exception as e:
+                logger.warning(f"Failed to verify FECProhibited count: {e}")
+                return False
+
             return True
         except Exception as e:
             logger.warning(f"Could not initialize FEC RAG: {e}")
@@ -1127,7 +1138,9 @@ class BrandonBotValidator:
                         result.ov_passed = False
                         result.ov_issues = [str(e)]
 
-                    # If judge is disabled, zero scores and continue (useful for debugging)
+                    # If judge is disabled, zero scores and determine PASS/FAIL
+                    # based on the Output Validator result so deterministic
+                    # fallback runs can make progress without a local LLM judge.
                     if not self._use_judge:
                         result.score_clarity = 0.0
                         result.score_empathy = 0.0
@@ -1136,8 +1149,10 @@ class BrandonBotValidator:
                         result.score_tone = 0.0
                         result.score_alignment = 0.0
                         result.reasoning = "LLM Judge disabled (--no-judge) — scores zeroed"
-                        # Mark as skipped when judge is intentionally disabled
-                        result.pass_fail = "SKIPPED"
+                        # Determine pass/fail from OV when judge is disabled so
+                        # deterministic fallback runs can still assert PASS/FAIL
+                        tool_match = (result.tool_called == result.expected_tool) if result.expected_tool else True
+                        result.pass_fail = "PASS" if (result.ov_passed and tool_match) else "FAIL"
                     else:
                         judge_for_session = session_judge or self.judge
                         if not judge_for_session:
@@ -1278,7 +1293,7 @@ class BrandonBotValidator:
                     if turn_count >= 3 and pq_result.vagueness_decision == VaguenessDecision.CLEAR:
                         break
                     
-                    judge_for_session = session_judge or self.judge
+                    judge_for_session = session_judge or (self.judge if self._use_judge else None)
                     if not judge_for_session:
                         logger.info("Judge disabled: skipping LLM user actor simulation in vague loop")
                         break

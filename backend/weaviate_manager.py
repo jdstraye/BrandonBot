@@ -1,5 +1,6 @@
 import os
 import weaviate
+import json
 import httpx
 from weaviate.classes.config import Configure, Property, DataType
 from sentence_transformers import SentenceTransformer
@@ -164,7 +165,7 @@ class WeaviateManager:
                 }
 
                 if metadata and isinstance(metadata, dict):
-                    import json
+                    # Use module-level `json` import for serialization
                     metadata_str = json.dumps(metadata)
                 else:
                     metadata_str = str(metadata) if metadata else ""
@@ -196,7 +197,8 @@ class WeaviateManager:
                         "date": date,
                         "category": category,
                         "confidence_tier": 3,
-                        "metadata": metadata if metadata else ""
+                        # Ensure metadata is a JSON string when posting via REST
+                        "metadata": (json.dumps(metadata) if isinstance(metadata, dict) else (metadata if metadata else ""))
                     },
                     "vector": vector
                 }

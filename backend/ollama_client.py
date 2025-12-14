@@ -29,8 +29,19 @@ DISCLAIMER: While I've been trained on Brandon's positions, I may make mistakes.
     async def ensure_model_ready(self):
         try:
             models = self.client.list()
-            model_exists = any(self.model_name in model['name'] for model in models.get('models', []))
-            
+            # ollama.Client.list() returns a ListResponse with a `.models` sequence
+            available = []
+            try:
+                available = [m.model for m in models.models]
+            except Exception:
+                # Fallback: try dict-like access
+                try:
+                    available = [m.get('model') for m in models.get('models', [])]
+                except Exception:
+                    available = []
+
+            model_exists = any(self.model_name == m or self.model_name in m for m in available)
+
             if not model_exists:
                 logger.info(f"Pulling model {self.model_name}... This may take several minutes.")
                 self.client.pull(self.model_name)
