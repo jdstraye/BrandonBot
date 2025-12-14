@@ -214,7 +214,7 @@ Evaluate the following response based on these metrics (0-5 scale, where 0 is wo
 You MUST respond with valid JSON in this exact format:
 {"scores": {"clarity": X, "empathy": X, "accuracy": X, "engagement": X, "tone": X, "alignment": X}, "reasoning": "Brief explanation of scores"}
 
-Do not include any text outside the JSON object."""
+          Do not include any text outside the JSON object. Keep reasoning brief (max 60 words) and respond concisely to minimize latency."""
 
     USER_ACTOR_SYSTEM_PROMPT = """You are playing the role of a voter interacting with a political campaign chatbot for Brandon Sowers, a Republican candidate for Congress in Arizona.
 
@@ -408,23 +408,52 @@ Respond with ONLY the message the voter would say, nothing else."""
                 "num_predict": 1024,
             }
         }
-        
+
         if system:
             payload["system"] = system
-        
+
+        # Read judge-specific config (timeout, retries, backoff) from settings
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                response = await client.post(
-                    f"{self.host}/api/generate",
-                    json=payload
-                )
-                if response.status_code == 200:
+            cfg = getattr(settings, "cfg", None)
+            judge_cfg = getattr(cfg, "judge", {}) if cfg else {}
+            timeout = float(judge_cfg.get("timeout_seconds", 120.0))
+            retries = int(judge_cfg.get("retries", 1))
+            backoff_ms = int(judge_cfg.get("retry_backoff_ms", 500))
+        except Exception:
+            timeout = 120.0
+            retries = 1
+            backoff_ms = 500
+
+        last_exc = None
+        for attempt in range(retries + 1):
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.post(
+                        f"{self.host}/api/generate",
+                        json=payload
+                    )
+                    response.raise_for_status()
                     data = response.json()
                     return data.get("response", "")
-                else:
-                    raise RuntimeError(f"Ollama error: {response.status_code}")
-        except httpx.TimeoutException:
-            raise RuntimeError("Ollama request timed out")
+
+            except (httpx.TimeoutException, httpx.HTTPStatusError) as e:
+                last_exc = e
+                logger.warning(f"Ollama generation attempt {attempt+1} failed: {e}")
+                if attempt < retries:
+                    # exponential backoff
+                    wait = backoff_ms * (2 ** attempt) / 1000.0
+                    await asyncio.sleep(wait)
+                    continue
+                # final attempt failed
+                raise RuntimeError("Ollama request timed out or failed") from e
+            except Exception as e:
+                last_exc = e
+                logger.error(f"Ollama unexpected error: {e}")
+                if attempt < retries:
+                    wait = backoff_ms * (2 ** attempt) / 1000.0
+                    await asyncio.sleep(wait)
+                    continue
+                raise RuntimeError(f"Ollama error: {e}") from e
     
     async def score_response(
         self,
@@ -460,7 +489,14 @@ Bot Response: {bot_response}"""
         
         try:
             raw_response = await self._generate(prompt, self.JUDGE_SYSTEM_PROMPT)
-            
+            raw_response = raw_response.strip()
+            # Handle string-quoted JSON returned by some LLMs ("{...}")
+            if raw_response.startswith('"') and raw_response.endswith('"'):
+                try:
+                    raw_response = raw_response[1:-1].replace('\"', '"')
+                except Exception:
+                    pass
+
             try:
                 json_start = raw_response.find("{")
                 json_end = raw_response.rfind("}") + 1

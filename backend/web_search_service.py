@@ -84,7 +84,7 @@ class WebSearchService:
             )
         
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 search_results = await loop.run_in_executor(
                     executor,

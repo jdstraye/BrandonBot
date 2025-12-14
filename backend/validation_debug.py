@@ -198,6 +198,36 @@ class ValidationDebugDB:
                 CREATE INDEX IF NOT EXISTS idx_raw_llm_test_id 
                 ON raw_llm_responses(test_id)
             """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS llm_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    test_id TEXT,
+                    session_id TEXT,
+                    request_id TEXT,
+                    provider TEXT,
+                    model TEXT,
+                    system_prompt TEXT,
+                    messages TEXT,
+                    tools TEXT,
+                    extra TEXT
+                )
+            """)
+
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_llm_requests_test_id 
+                ON llm_requests(test_id)
+            """)
+            # Migration: add 'extra' column if missing (for older DBs)
+            cur = conn.execute("PRAGMA table_info(llm_requests)")
+            cols = [r[1] for r in cur.fetchall()]
+            if 'extra' not in cols:
+                try:
+                    conn.execute("ALTER TABLE llm_requests ADD COLUMN extra TEXT")
+                except Exception:
+                    # Be defensive: if the ALTER fails (older SQLite or locked DB), continue
+                    logger.debug("Could not add 'extra' column to llm_requests; it may already exist or DB is locked")
             
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS llm_reasoning (
@@ -313,6 +343,24 @@ class ValidationDebugDB:
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_ov_attempts_test_id 
                 ON ov_attempts(test_id)
+            """)
+
+            # Track detected 'death spiral' events (OV <-> LLM regeneration loops)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS spiral_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    test_id TEXT,
+                    session_id TEXT,
+                    request_id TEXT,
+                    reason TEXT,
+                    recent_rejections TEXT
+                )
+            """)
+
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_spiral_events_test_id
+                ON spiral_events(test_id)
             """)
 
             # Performance metrics for detailed profiling of validation runs
@@ -525,6 +573,52 @@ class ValidationDebugDB:
                 explanation=row["explanation"],
                 all_results=row["all_results"]
             ) for row in cursor.fetchall()]
+
+    def get_llm_requests_by_test(self, test_id: str) -> List[Dict[str, Any]]:
+        """Retrieve logged LLM request payloads for a given test_id.
+
+        Returns a list of dicts with keys: id, timestamp, test_id, session_id,
+        request_id, provider, model, system_prompt, messages (list), tools (list|None).
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                "SELECT * FROM llm_requests WHERE test_id = ? ORDER BY id",
+                (test_id,)
+            )
+            rows = cursor.fetchall()
+
+        results: List[Dict[str, Any]] = []
+        for row in rows:
+            try:
+                messages = json.loads(row["messages"]) if row["messages"] else []
+            except Exception:
+                messages = row["messages"]
+
+            try:
+                tools = json.loads(row["tools"]) if row["tools"] else None
+            except Exception:
+                tools = row["tools"]
+            try:
+                extra = json.loads(row["extra"]) if row["extra"] else None
+            except Exception:
+                extra = row["extra"]
+
+            results.append({
+                "id": row["id"],
+                "timestamp": row["timestamp"],
+                "test_id": row["test_id"],
+                "session_id": row["session_id"],
+                "request_id": row["request_id"],
+                "provider": row["provider"],
+                "model": row["model"],
+                "system_prompt": row["system_prompt"],
+                "messages": messages,
+                "tools": tools,
+                "extra": extra,
+            })
+
+        return results
     
     def get_summary_stats(self) -> Dict[str, Any]:
         """Get summary statistics of rejections."""
@@ -631,6 +725,41 @@ class ValidationDebugDB:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (timestamp, test_id, session_id, query, raw_response, sanitized_response, model, tokens_used))
             conn.commit()
+
+    def log_llm_request(
+        self,
+        system_prompt: str,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        provider: str = "",
+        model: str = "",
+        test_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ):
+        """Log the exact request payload sent to an LLM provider.
+
+        Stores a JSON serialization of `messages` and `tools` for forensic
+        inspection. Caller should avoid including secrets in the message
+        content; this facility is intended for developer debugging.
+        """
+        timestamp = datetime.now(timezone.utc).isoformat()
+        messages_json = json.dumps(messages, ensure_ascii=False)
+        tools_json = json.dumps(tools, ensure_ascii=False) if tools is not None else None
+        extra_json = json.dumps(extra, ensure_ascii=False) if extra is not None else None
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                INSERT INTO llm_requests
+                (timestamp, test_id, session_id, request_id, provider, model, system_prompt, messages, tools, extra)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                timestamp, test_id, session_id, request_id, provider, model, system_prompt, messages_json, tools_json, extra_json
+            ))
+            conn.commit()
+
+        logger.debug(f"Logged LLM request (provider={provider}, model={model}, test={test_id})")
 
     def log_internal_hints(
         self,
@@ -836,6 +965,26 @@ class ValidationDebugDB:
             conn.commit()
 
         logger.debug(f"Logged OV attempt: attempt={attempt_num}, status={final_status}, score={aggregate_score}")
+
+    def log_spiral_event(self, test_id: Optional[str], session_id: Optional[str], request_id: Optional[str], reason: str, recent_rejections: Any):
+        """Log a detected death-spiral event for the given test/session.
+
+        recent_rejections should be JSON-serializable (list/dict) describing last rejections.
+        """
+        timestamp = datetime.now(timezone.utc).isoformat()
+        recent_json = json.dumps(recent_rejections) if recent_rejections is not None else None
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                INSERT INTO spiral_events
+                (timestamp, test_id, session_id, request_id, reason, recent_rejections)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                timestamp, test_id, session_id, request_id, reason, recent_json
+            ))
+            conn.commit()
+
+        logger.warning(f"Logged death-spiral event for test={test_id} session={session_id} reason={reason}")
 
 
 # Global singleton instance

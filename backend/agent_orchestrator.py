@@ -40,6 +40,53 @@ from structured_response import (
 
 logger = logging.getLogger(__name__)
 
+# Death-spiral detection defaults
+SPIRAL_INTENT_THRESHOLD = 3  # consecutive intent-check failures
+SPIRAL_REPEAT_WINDOW = 6     # number of OV attempts to inspect for repetition
+SPIRAL_REPEAT_UNIQUE_LIMIT = 2  # <= unique sanitized responses considered repeating
+
+
+def detect_death_spiral(metadata, test_id, session_id, debug_db, intent_threshold: int = SPIRAL_INTENT_THRESHOLD, repeat_window: int = SPIRAL_REPEAT_WINDOW, repeat_unique_limit: int = SPIRAL_REPEAT_UNIQUE_LIMIT) -> tuple[bool, str, dict]:
+    """Detect a death-spiral based on consecutive intent-check failures
+    or repeated identical sanitized responses in recent OV attempts.
+
+    Returns (detected, reason, details)
+    """
+    # Check consecutive intent-checking rejections
+    intent_streak = 0
+    for entry in reversed(metadata.get("validation_rejections", [])):
+        failed_checks = entry.get("failed_checks", [])
+        if any(fc.get("safeguard") == OVSafeguard.INTENT_CHECKING.value and fc.get("score", 0) >= 4 for fc in failed_checks):
+            intent_streak += 1
+        else:
+            break
+    if intent_streak >= intent_threshold:
+        return True, f"intent_rejection_streak={intent_streak}", {"intent_streak": intent_streak}
+
+    # Check for repetition in recent OV attempts (use the debug DB)
+    try:
+        rows = []
+        if test_id:
+            conn = None
+            try:
+                conn = __import__('sqlite3').connect(debug_db.db_path)
+                cur = conn.cursor()
+                cur.execute('SELECT sanitized_response FROM ov_attempts WHERE test_id = ? ORDER BY id DESC LIMIT ?', (test_id, repeat_window))
+                rows = [r[0] for r in cur.fetchall()]
+            finally:
+                if conn:
+                    conn.close()
+
+        if rows and len(rows) >= 3:
+            unique_count = len(set(rows))
+            if unique_count <= repeat_unique_limit:
+                return True, f"repetition_detected_unique_count={unique_count}", {"recent_responses": rows}
+    except Exception:
+        # On DB errors, don't crash the regeneration flow
+        pass
+
+    return False, "", {}
+
 
 class ConversationRole(str, Enum):
     """Roles in a conversation turn"""
@@ -47,6 +94,24 @@ class ConversationRole(str, Enum):
     ASSISTANT = "assistant"
     TOOL = "tool"
     SYSTEM = "system"
+
+
+def _build_regen_prompt(validation_result, original_query: str) -> str:
+    """Build the regeneration prompt to send to the LLM when OV requests a retry.
+
+    Adds OV feedback + structured regeneration instructions. If the failure
+    includes intent checking, adds a short REMINDER with the original user
+    query to keep the model focused on answering the user's question.
+    """
+    base = validation_result.get_feedback_for_retry() or ""
+    base += get_ov_regeneration_instructions()
+    failed_intent = any(
+        (s == OVSafeguard.INTENT_CHECKING and r.score > 3)
+        for s, r in validation_result.results.items()
+    )
+    if failed_intent:
+        base = base + f"\n\nREMINDER: The user's original question was: '{original_query}'. Please answer that question directly (or ask ONE concise clarifying question if necessary)."
+    return base
 
 
 @dataclass
@@ -1179,79 +1244,78 @@ Remember: You're here to inform ARIZONA voters and build support for Brandon's A
             import re
             email_match = re.search(r"[\w\.-]+@[\w\.-]+\.[a-zA-Z]{2,}", sanitized_message)
             zip_match = re.search(r"\b\d{5}\b", sanitized_message)
-            volunteer_keywords = ["volunteer", "sign up", "sign me up", "join the", "i'd like to volunteer", "i would like to volunteer", "i'd like to join", "i want to join", "i'd like to help", "i want to help"]
+            volunteer_keywords = [
+                "volunteer", "sign up", "sign me up", "join the",
+                "i'd like to volunteer", "i would like to volunteer",
+                "i'd like to join", "i want to join", "i'd like to help", "i want to help"
+            ]
             lower_msg = sanitized_message.lower()
             looks_like_volunteer = False
             if email_match and any(k in lower_msg for k in volunteer_keywords):
                 looks_like_volunteer = True
 
-            if looks_like_volunteer:
-                # Extract simple name heuristic: text before email or before first comma
-                name = None
-                try:
-                    if email_match:
-                        start = max(0, sanitized_message.rfind('\n', 0, email_match.start()))
-                        name_candidate = sanitized_message[:email_match.start()].strip()
-                        # If comma-separated, take last segment
-                        if ',' in name_candidate:
-                            name = name_candidate.split(',')[-1].strip()
-                        else:
-                            # fallback to last two words
-                            parts = name_candidate.split()
-                            name = ' '.join(parts[-2:]) if len(parts) >= 2 else name_candidate
-                except Exception:
-                    name = None
-
-                volunteer_args = {
-                    "name": name or "",
-                    "email": email_match.group(0) if email_match else "",
-                    "phone": "",
-                    "zip_code": zip_match.group(0) if zip_match else "",
-                    "interests": [],
-                    "availability": "flexible"
-                }
-
-                try:
-                    # Prepare idempotency key so repeated identical auto-exec attempts don't duplicate
-                    import hashlib, json
-                    id_source = json.dumps({"action": "register_volunteer", "email": volunteer_args.get("email", ""), "zip": volunteer_args.get("zip_code", ""), "session": session.session_id})
-                    id_key = hashlib.sha256(id_source.encode()).hexdigest()
-
-                    idmap = session.user_context.setdefault('idempotency', {})
-                    if id_key in idmap:
-                        # Reuse the previous result (audit): don't execute twice
-                        forced_result = idmap[id_key]['tool_result']
-                        logger.info(f"Reusing idempotent volunteer registration for key {id_key}")
-                    else:
-                        # Execute the register_volunteer tool and store the result for idempotency
-                        forced_call = ToolCall(name=ToolName.REGISTER_VOLUNTEER.value, arguments=volunteer_args, call_id=f"auto_register_volunteer_{id_key[:8]}")
-                        forced_result = await self.tool_executor.execute(forced_call, session_id)
-                        # Persist minimal audit info in the session context
-                        try:
-                            tool_ctx = forced_result.to_context_string()
-                        except Exception:
-                            tool_ctx = str(forced_result.data) if forced_result.data is not None else ''
-                        idmap[id_key] = {
-                            'timestamp': datetime.now().isoformat(),
-                            'action': 'register_volunteer',
-                            'args': {k: volunteer_args.get(k) for k in ['name', 'email', 'zip_code']},
-                            'tool_result': forced_result,
-                            'tool_context': tool_ctx
-                        }
-
-                    # Record in metadata-like structure so later code sees it
-                    # We append an assistant/tool pair into the session history so the LLM can synthesize confirmation
-                    session.add_turn(ConversationRole.ASSISTANT, "[System] Registering volunteer...", tool_calls=[ToolCall(name=ToolName.REGISTER_VOLUNTEER.value, arguments=volunteer_args, call_id="auto_register_volunteer")], tool_results=[forced_result])
-                    # Ensure we track that a volunteer offer/registration occurred so we don't re-offer
-                    session.last_volunteer_offered_turn = len(session.turns)
-                    session.volunteer_offer_count += 1
-                    # Store the tool result context for later inclusion in the system prompt
-                    session.user_context['last_forced_volunteer_result'] = idmap[id_key]['tool_context'] if id_key in idmap else tool_ctx
-                except Exception as e:
-                    logger.warning(f"Failed to auto-register volunteer: {e}")
+            name = None
+            if email_match:
+                start = max(0, sanitized_message.rfind('\n', 0, email_match.start()))
+                name_candidate = sanitized_message[:email_match.start()].strip()
+                # If comma-separated, take last segment
+                if ',' in name_candidate:
+                    name = name_candidate.split(',')[-1].strip()
+                else:
+                    # fallback to last two words
+                    parts = name_candidate.split()
+                    name = ' '.join(parts[-2:]) if len(parts) >= 2 else name_candidate
         except Exception:
-            # Non-fatal; continue with normal flow
-            pass
+            name = None
+
+        if looks_like_volunteer:
+            volunteer_args = {
+                "name": name or "",
+                "email": email_match.group(0) if email_match else "",
+                "phone": "",
+                "zip_code": zip_match.group(0) if zip_match else "",
+                "interests": [],
+                "availability": "flexible"
+            }
+
+            try:
+                # Prepare idempotency key so repeated identical auto-exec attempts don't duplicate
+                import hashlib, json
+                id_source = json.dumps({"action": "register_volunteer", "email": volunteer_args.get("email", ""), "zip": volunteer_args.get("zip_code", ""), "session": session.session_id})
+                id_key = hashlib.sha256(id_source.encode()).hexdigest()
+
+                idmap = session.user_context.setdefault('idempotency', {})
+                if id_key in idmap:
+                    # Reuse the previous result (audit): don't execute twice
+                    forced_result = idmap[id_key]['tool_result']
+                    logger.info(f"Reusing idempotent volunteer registration for key {id_key}")
+                else:
+                    # Execute the register_volunteer tool and store the result for idempotency
+                    forced_call = ToolCall(name=ToolName.REGISTER_VOLUNTEER.value, arguments=volunteer_args, call_id=f"auto_register_volunteer_{id_key[:8]}")
+                    forced_result = await self.tool_executor.execute(forced_call, session_id)
+                    # Persist minimal audit info in the session context
+                    try:
+                        tool_ctx = forced_result.to_context_string()
+                    except Exception:
+                        tool_ctx = str(forced_result.data) if forced_result.data is not None else ''
+                    idmap[id_key] = {
+                        'timestamp': datetime.now().isoformat(),
+                        'action': 'register_volunteer',
+                        'args': {k: volunteer_args.get(k) for k in ['name', 'email', 'zip_code']},
+                        'tool_result': forced_result,
+                        'tool_context': tool_ctx
+                    }
+
+                # Record in metadata-like structure so later code sees it
+                # We append an assistant/tool pair into the session history so the LLM can synthesize confirmation
+                session.add_turn(ConversationRole.ASSISTANT, "[System] Registering volunteer...", tool_calls=[ToolCall(name=ToolName.REGISTER_VOLUNTEER.value, arguments=volunteer_args, call_id="auto_register_volunteer")], tool_results=[forced_result])
+                # Ensure we track that a volunteer offer/registration occurred so we don't re-offer
+                session.last_volunteer_offered_turn = len(session.turns)
+                session.volunteer_offer_count += 1
+                # Store the tool result context for later inclusion in the system prompt
+                session.user_context['last_forced_volunteer_result'] = idmap[id_key]['tool_context'] if id_key in idmap else tool_ctx
+            except Exception as e:
+                logger.warning(f"Failed to auto-register volunteer: {e}")
         
         metadata = {
             "request_id": request_id,
@@ -1390,6 +1454,21 @@ VAGUE QUERY (Turn {conversation_turn_count}): Multiple clarifying attempts made.
                 iteration += 1
                 metadata["iterations"] = iteration
                 
+                # Log exact messages sent to the LLM for debugging/traceability
+                try:
+                    debug_db = get_debug_db()
+                    debug_db.log_llm_request(
+                        system_prompt=full_system_prompt,
+                        messages=messages,
+                        tools=get_gemini_tool_declarations(),
+                        test_id=metadata.get("test_id"),
+                        session_id=session_id,
+                        request_id=request_id,
+                        extra={"query_vague": query_vague, "phase": "initial", "attempt": regeneration_attempt}
+                    )
+                except Exception:
+                    logger.debug(f"[{request_id}] Failed to log LLM request; continuing")
+
                 llm_response = await self.llm_manager.generate_with_tools(
                     session_id=session_id,
                     messages=messages,
@@ -1426,6 +1505,22 @@ VAGUE QUERY (Turn {conversation_turn_count}): Multiple clarifying attempts made.
                             logger.debug(f"[{request_id}] Failed to log reasoning: {db_err}")
                     
                     metadata["response_parse_method"] = parsed.parse_method
+
+                    # If the LLM returned a canned 'callback' fallback early,
+                    # prefer a clarifying question when the *user query* is vague
+                    # and we still have regeneration attempts left. This avoids
+                    # prematurely offering a callback that then gets OV-rejected
+                    # and starts a regeneration loop.
+                    norm_proposed = (proposed_response or "").strip().lower()
+                    if ("call you" in norm_proposed or "call you back" in norm_proposed or "having trouble completing" in norm_proposed):
+                        if query_vague and regeneration_attempt < max_regenerations:
+                            # Replace with an explicit clarifying question
+                            proposed_response = "Hi — can you tell me what you'd like to discuss (policy, volunteering, or something else)?"
+                            final_response = proposed_response
+                        else:
+                            # Use a neutral technical-difficulty response (no callback) until max regenerations are exhausted
+                            proposed_response = "I'm having technical difficulties right now; please try again shortly."
+                            final_response = proposed_response
                     
                     # Check for "intent to search" without actual tool call
                     # LLM sometimes says "I will search..." but doesn't call tools
@@ -1497,7 +1592,8 @@ Do NOT say you will search - either search or answer."""
                                 continue
                             except Exception as e:
                                 logger.error(f"[{request_id}] Forced search failed: {e}")
-                                final_response = "I apologize, but I'm having technical difficulties retrieving that information right now. Would you like someone from Brandon's team to call you back to discuss this in detail?"
+                                # Do not offer a callback here; prefer a neutral message and allow OV regen logic
+                                final_response = "I'm having technical difficulties retrieving that information right now; please try again shortly."
                                 break
                     
                     # Factual safeguard check - fires when THIS ITERATION had no tools
@@ -1693,7 +1789,11 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
                 })
             
             if final_response is None:
-                final_response = "I apologize, but I'm having trouble completing this request. Would you like someone from the team to call you back to discuss this?"
+                if query_vague:
+                    # Prefer to ask a clarifying question for vague queries instead of offering callback
+                    final_response = "Hi — can you tell me what you'd like to discuss (policy, volunteering, or something else)?"
+                else:
+                    final_response = "I'm having technical difficulties right now; please try again shortly."
             
             # ===== STAGE 3: OUTPUT VALIDATOR WITH REGENERATION LOOP =====
             # Set up FEC RAG and weaviate manager for compliance checking
@@ -1732,6 +1832,55 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
                 logger.info(f"[{request_id}] Callback flow detected - OV intent check will bypass "
                            f"(request_callback tool invoked)")
             
+            # Constants for spiral detection
+            SPIRAL_INTENT_THRESHOLD = 3  # consecutive intent-check failures
+            SPIRAL_REPEAT_WINDOW = 6     # number of OV attempts to inspect for repetition
+            SPIRAL_REPEAT_UNIQUE_LIMIT = 2  # <= unique sanitized responses considered repeating
+
+
+            def detect_death_spiral(metadata, test_id, session_id, debug_db, intent_threshold: int = SPIRAL_INTENT_THRESHOLD, repeat_window: int = SPIRAL_REPEAT_WINDOW, repeat_unique_limit: int = SPIRAL_REPEAT_UNIQUE_LIMIT) -> tuple[bool, str, dict]:
+                """Detect a death-spiral based on consecutive intent-check failures
+                or repeated identical sanitized responses in recent OV attempts.
+
+                Returns (detected, reason, details)
+                """
+                # Check consecutive intent-checking rejections
+                intent_streak = 0
+                for entry in reversed(metadata.get("validation_rejections", [])):
+                    failed_checks = entry.get("failed_checks", [])
+                    if any(fc.get("safeguard") == OVSafeguard.INTENT_CHECKING.value and fc.get("score", 0) >= 4 for fc in failed_checks):
+                        intent_streak += 1
+                    else:
+                        break
+                if intent_streak >= intent_threshold:
+                    return True, f"intent_rejection_streak={intent_streak}", {"intent_streak": intent_streak}
+
+                # Check for repetition in recent OV attempts (use the debug DB)
+                try:
+                    rows = []
+                    if test_id:
+                        conn = None
+                        try:
+                            conn = __import__('sqlite3').connect(debug_db.db_path)
+                            cur = conn.cursor()
+                            cur.execute('SELECT sanitized_response FROM ov_attempts WHERE test_id = ? ORDER BY id DESC LIMIT ?', (test_id, repeat_window))
+                            rows = [r[0] for r in cur.fetchall()]
+                        finally:
+                            if conn:
+                                conn.close()
+
+                    if rows and len(rows) >= 3:
+                        unique_count = len(set(rows))
+                        if unique_count <= repeat_unique_limit:
+                            return True, f"repetition_detected_unique_count={unique_count}", {"recent_responses": rows}
+                except Exception:
+                    # On DB errors, don't crash the regeneration flow
+                    pass
+
+                return False, "", {}
+
+            # Use helper detect_death_spiral at module level
+
             while regeneration_attempt <= max_regenerations:
                 validation_result = await output_validator.validate(
                     query=sanitized_message,
@@ -1742,7 +1891,7 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
                     is_vague_query=query_vague
                 )
                 
-                # Add repetition check (fail-closed on SLMNotAvailableError)
+                # Add repetition check (try pattern fallback if embedding service missing)
                 previous_responses = session.get_previous_responses(count=3)
                 if previous_responses:
                     try:
@@ -1750,22 +1899,21 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
                             response=final_response,
                             previous_responses=previous_responses
                         )
-                        validation_result.results[OVSafeguard.REPETITION] = repetition_result
-                        
-                        # Update max_violation and passed status
-                        validation_result.max_violation = max(r.score for r in validation_result.results.values())
-                        validation_result.passed = validation_result.max_violation <= 3
-                        
-                        if not validation_result.passed:
-                            failed = [f"{s.value}: {r.explanation}" 
-                                     for s, r in validation_result.results.items() if r.score > 3]
-                            validation_result.rejection_reason = "; ".join(failed)
                     except SLMNotAvailableError as e:
-                        # Fail-closed: If repetition safeguard fails, block response
-                        logger.error(f"[{request_id}] Repetition safeguard failed (fail-closed): {e}")
-                        final_response = "I want to make sure I give you accurate information. Would you like someone from Brandon's team to call you back to discuss this personally?"
-                        metadata["blocked_by_ov_safeguard_failure"] = True
-                        break
+                        # Fall back to pattern-based repetition check instead of immediate hard fallback
+                        logger.warning(f"[{request_id}] Repetition embedding unavailable; falling back to pattern check: {e}")
+                        repetition_result = output_validator._check_repetition_pattern_fallback(final_response, previous_responses)
+
+                    validation_result.results[OVSafeguard.REPETITION] = repetition_result
+                    
+                    # Update max_violation and passed status
+                    validation_result.max_violation = max(r.score for r in validation_result.results.values())
+                    validation_result.passed = validation_result.max_violation <= 3
+                    
+                    if not validation_result.passed:
+                        failed = [f"{s.value}: {r.explanation}" 
+                                 for s, r in validation_result.results.items() if r.score > 3]
+                        validation_result.rejection_reason = "; ".join(failed)
                 
                 metadata["validation_status"] = "passed" if validation_result.passed else "rejected"
 
@@ -1816,6 +1964,25 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
                     })
                     
                     logger.warning(f"[{request_id}] OV rejected (attempt {regeneration_attempt}): {validation_result.rejection_reason}")
+
+                    # Detect death-spiral patterns (consecutive intent failures or repeated identical responses)
+                    try:
+                        debug_db = get_debug_db()
+                        detected, reason, details = _detect_death_spiral(metadata, metadata.get('test_id'), session_id, debug_db)
+                        if detected:
+                            # Persist the spiral event and break with deterministic clarifying question
+                            try:
+                                debug_db.log_spiral_event(test_id=metadata.get('test_id'), session_id=session_id, request_id=request_id, reason=reason, recent_rejections=metadata.get('validation_rejections', []))
+                            except Exception:
+                                logger.debug(f"[{request_id}] Failed to log spiral event to debug DB")
+
+                            # Use a deterministic concise clarifying question to break the loop
+                            final_response = "Hi — can you tell me what you'd like to discuss (policy, volunteering, or something else)?"
+                            metadata['death_spiral'] = True
+                            logger.warning(f"[{request_id}] Death-spiral detected ({reason}); switching to deterministic clarifying prompt and breaking regeneration loop")
+                            break
+                    except Exception as e:
+                        logger.debug(f"[{request_id}] Spiral detection exception: {e}")
                     
                     # Log to debug DB for investigation
                     try:
@@ -1837,12 +2004,43 @@ Now synthesize the above results into a helpful response. Do NOT call the same t
                         
                         if regen_prompt:
                             # Add structured output reminder to prevent chatter
-                            regen_prompt += get_ov_regeneration_instructions()
+                            # If intent checking failed, explicitly remind the model
+                            # of the user's original question so it does not forget
+                            # and avoids producing unrelated or callback responses.
+                            def _build_regen_prompt(validation_result, original_query):
+                                base = validation_result.get_feedback_for_retry() or ""
+                                base += get_ov_regeneration_instructions()
+                                # If intent_checking is one of the failures, add a short reminder
+                                failed_intent = any(
+                                    (s == OVSafeguard.INTENT_CHECKING and r.score > 3)
+                                    for s, r in validation_result.results.items()
+                                )
+                                if failed_intent:
+                                    base = base + f"\n\nREMINDER: The user's original question was: '{original_query}'. Please answer that question directly (or ask ONE concise clarifying question if necessary)."
+                                return base
+
+                            from backend.ov_utils import build_regen_prompt
+                            regen_prompt = build_regen_prompt(validation_result, sanitized_message)
                             messages.append({
                                 "role": "system",
                                 "content": regen_prompt
                             })
                         
+                        # Log OV regeneration request payload for debugging
+                        try:
+                            debug_db = get_debug_db()
+                            debug_db.log_llm_request(
+                                system_prompt=full_system_prompt,
+                                messages=messages,
+                                tools=[],
+                                test_id=metadata.get("test_id"),
+                                session_id=session_id,
+                                request_id=request_id,
+                                extra={"query_vague": query_vague, "phase": "regeneration", "attempt": regeneration_attempt}
+                            )
+                        except Exception:
+                            logger.debug(f"[{request_id}] Failed to log OV regen LLM request; continuing")
+
                         # Regenerate with LLM
                         regen_response = await self.llm_manager.generate_with_tools(
                             session_id=session_id,

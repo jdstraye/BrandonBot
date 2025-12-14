@@ -18,12 +18,8 @@ import asyncio
 
 def run_async(coro):
     """Helper to run async coroutines in tests."""
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    return loop.run_until_complete(coro)
+    # Use asyncio.run to avoid warnings about missing current event loop
+    return asyncio.run(coro)
 
 
 FEC_PASS_CASES = [

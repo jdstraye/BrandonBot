@@ -222,6 +222,9 @@ class PrequalifierResult:
     # Hybrid detection decisions
     frustration_decision: FrustrationDecision = FrustrationDecision.CALM
     vagueness_decision: VaguenessDecision = VaguenessDecision.CLEAR
+    # Confidence of the vagueness classification (0.0-1.0). Higher means more
+    # confident that the query is VAGUE. Used by OV to apply leniency.
+    vagueness_confidence: float = 0.0
     pattern_flags: Optional[PatternFlags] = None
     
     # Detected emotion from 7-emotion classifier
@@ -545,12 +548,13 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
         result.confidence = avg_confidence  # Set confidence from RAG results
         
         # Step 6: SLM vagueness classification
-        vagueness_decision = await self._classify_vagueness_async(
+        vagueness_decision, vag_conf = await self._classify_vagueness_async(
             result.sanitized_message,
             rag_results,
             avg_confidence
         )
         result.vagueness_decision = vagueness_decision
+        result.vagueness_confidence = float(vag_conf or 0.0)
         
         # Step 7: Build enriched prompt based on 2x2 matrix
         enriched_prompt, pq_instructions = self._build_enriched_prompt(
@@ -914,13 +918,16 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
                 rag_results=rag_dicts,
                 avg_confidence=avg_confidence
             )
-            
+
             logger.info(f"RAG+SLM vagueness: query='{message[:50]}...', decision={response.decision}, {response.explanation}")
-            
+
+            # Return both the decision and the model's confidence so callers
+            # can apply numeric vagueness heuristics (e.g., multiplicative
+            # leniency in OV) rather than brittle pattern overrides.
             if response.decision == "VAGUE":
-                return VaguenessDecision.VAGUE
+                return (VaguenessDecision.VAGUE, float(getattr(response, 'confidence', 0.0)))
             else:
-                return VaguenessDecision.CLEAR
+                return (VaguenessDecision.CLEAR, float(getattr(response, 'confidence', 0.0)))
                 
         except Exception as e:
             if self._require_slm:
@@ -930,7 +937,10 @@ Do NOT try to answer their unclear question. Focus on de-escalation and human es
                     "Set require_slm=False to use pattern-only fallback."
                 )
             logger.warning(f"RAG+SLM vagueness classification failed: {e}, using fallback")
-            return self._fallback_vagueness_classification(message, avg_confidence)
+            # Fallback returns a decision + confidence estimate based on RAG
+            # avg_confidence so callers have a numeric vagueness hint.
+            dec = self._fallback_vagueness_classification(message, avg_confidence)
+            return (dec, float(avg_confidence or 0.0))
     
     def _fallback_vagueness_classification(
         self,

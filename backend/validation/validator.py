@@ -41,6 +41,9 @@ from enum import Enum
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from prequalifier import Prequalifier, FrustrationDecision, VaguenessDecision, PatternFlags
+
+# Per-agent-turn timeout in seconds (fail-fast when an agent turn is too slow)
+AGENT_TURN_TIMEOUT = 5.0
 from output_validator import OutputValidatorSLM, OVSafeguard, SLMNotAvailableError
 from security import rate_limiter, input_sanitizer
 from ollama_judge import OllamaJudge, JudgeScore, Persona, EngagementStyle
@@ -92,6 +95,7 @@ class ConversationTurn:
     pq_frustration: str = ""
     pq_vagueness: str = ""
     timestamp: str = ""
+    duration_ms: int = 0
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -147,9 +151,10 @@ class TestResult:
     
     timestamp: str = ""
     duration_ms: int = 0
+    judge_latency_ms: int = 0
     
     def add_turn(self, user_prompt: str, bot_response: str, tool_called: str = "",
-                 pq_frustration: str = "", pq_vagueness: str = "", model: str = "") -> None:
+                 pq_frustration: str = "", pq_vagueness: str = "", model: str = "", duration_ms: int = 0) -> None:
         """Add a conversation turn.
         
         The bot_response is processed to extract only user-facing content:
@@ -222,7 +227,8 @@ class TestResult:
             tool_called=tool_called,
             pq_frustration=pq_frustration,
             pq_vagueness=pq_vagueness,
-            timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            duration_ms=duration_ms,
         )
         self.turns.append(turn)
         self.turns_count = len(self.turns)
@@ -987,14 +993,62 @@ class BrandonBotValidator:
                         pq_result = await self.pq.analyze(current_input, session_id=session_id)
                         pq_frustration = pq_result.frustration_decision.value
                         pq_vagueness = pq_result.vagueness_decision.value
+
+                        # Remember the initial vagueness decision for OV leniency
+                        if turn_count == 0:
+                            initial_pq_vagueness = pq_result.vagueness_decision
+                            # Numeric confidence (0.0-1.0) for vagueness to inform OV leniency
+                            initial_pq_vagueness_confidence = float(getattr(pq_result, 'vagueness_confidence', 0.0) or 0.0)
                         
                         if turn_count == 0:
                             result.pq_flags = pq_result.pattern_flags.to_dict() if pq_result.pattern_flags else {}
                         
-                        bot_response, metadata = await self.agent.process_message(
-                            user_message=current_input,
-                            session_id=session_id
-                        )
+                        # Log the user message sent to the (possibly local) agent
+                        try:
+                            debug_db = get_debug_db()
+                            extra_meta = {
+                                "query_vague": (pq_result.vagueness_decision == VaguenessDecision.VAGUE),
+                                "phase": "initial",
+                                "attempt": turn_count
+                            }
+                            # Include numeric vagueness confidence for forensic analysis
+                            try:
+                                extra_meta['vagueness_confidence'] = float(getattr(pq_result, 'vagueness_confidence', 0.0) or 0.0)
+                            except Exception:
+                                extra_meta['vagueness_confidence'] = 0.0
+                            debug_db.log_llm_request(
+                                system_prompt="",
+                                messages=[{"role": "user", "content": current_input}],
+                                tools=None,
+                                provider="local_agent",
+                                model="",
+                                test_id=test_id,
+                                session_id=session_id,
+                                request_id=None,
+                                extra=extra_meta,
+                            )
+                        except Exception:
+                            logger.debug(f"[{test_id}] Failed to log agent request; continuing")
+
+                        # Measure bot response latency
+                        resp_start = time.time()
+                        try:
+                            # Enforce a per-agent-turn timeout to avoid long
+                            # blocking LLM calls stalling the entire validation.
+                            # If an agent turn exceeds AGENT_TURN_TIMEOUT, treat
+                            # it as a failure (fail-fast) so the watchdog can
+                            # collect diagnostics and move to deterministic
+                            # fallback.
+                            from backend import validation as _valmod
+                            timeout_s = getattr(_valmod, 'AGENT_TURN_TIMEOUT', 5.0)
+                            bot_response, metadata = await asyncio.wait_for(
+                                self.agent.process_message(user_message=current_input, session_id=session_id),
+                                timeout=timeout_s
+                            )
+                        except asyncio.TimeoutError:
+                            logger.error(f"Agent turn timed out (> {timeout_s}s) for session {session_id} test {test_id}")
+                            raise
+                        resp_latency_ms = int((time.time() - resp_start) * 1000)
                         last_metadata = metadata
                         
                         tool_called = metadata.get("tool_called", "") if metadata else ""
@@ -1007,7 +1061,8 @@ class BrandonBotValidator:
                             tool_called=tool_called,
                             pq_frustration=pq_frustration,
                             pq_vagueness=pq_vagueness,
-                            model=model_used
+                            model=model_used,
+                            duration_ms=resp_latency_ms
                         )
                         
                         bot_responses.append(bot_response)
@@ -1049,6 +1104,29 @@ class BrandonBotValidator:
                     full_conversation = result.get_full_conversation()
                     final_response = bot_responses[-1] if bot_responses else ""
                     
+                    # Before judge scoring, run the Output Validator on the final response
+                    try:
+                        is_vague_query_flag = (initial_pq_vagueness == VaguenessDecision.VAGUE)
+                        vagueness_confidence_val = float(getattr(locals(), 'initial_pq_vagueness_confidence', 0.0) or 0.0)
+                    except Exception:
+                        is_vague_query_flag = False
+
+                    try:
+                        ov_validation = await self.ov.validate(
+                            query=prompt,
+                            response=final_response,
+                            pq_confidence=0.85,
+                            is_vague_query=is_vague_query_flag,
+                            vagueness_confidence=vagueness_confidence_val
+                        )
+                        result.ov_passed = ov_validation.passed
+                        result.ov_issues = [f"{r.safeguard.value}:{r.explanation}" for r in ov_validation.results.values() if r.score > 3]
+                    except Exception as e:
+                        # If OV fails due to missing SLMs or errors, record as ERROR
+                        logger.warning(f"Output Validator failed for {test_id}: {e}")
+                        result.ov_passed = False
+                        result.ov_issues = [str(e)]
+
                     # If judge is disabled, zero scores and continue (useful for debugging)
                     if not self._use_judge:
                         result.score_clarity = 0.0
@@ -1064,11 +1142,14 @@ class BrandonBotValidator:
                         judge_for_session = session_judge or self.judge
                         if not judge_for_session:
                             raise RuntimeError("LLM Judge not configured for this session")
+                        # Time judge scoring for latency checks
+                        t0 = time.time()
                         scores = await judge_for_session.score_response(
                             user_query=prompt,
                             bot_response=final_response,
                             context=full_conversation
                         )
+                        result.judge_latency_ms = int((time.time() - t0) * 1000)
 
                         result.score_clarity = scores.clarity
                         result.score_empathy = scores.empathy

@@ -242,7 +242,7 @@ class MultiSearchService:
     async def _search_duckduckgo(self, query: str, max_results: int) -> SearchResponse:
         """Search using DuckDuckGo (first fallback after SearxNG)"""
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 search_results = await asyncio.wait_for(
                     loop.run_in_executor(

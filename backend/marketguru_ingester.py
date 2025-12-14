@@ -438,7 +438,8 @@ class MarketGuruIngester:
                 return f.read()
         elif ext == '.pdf':
             try:
-                from PyPDF2 import PdfReader as PDFReader  # type: ignore
+                # Use `pypdf` package (successor to PyPDF2)
+                from pypdf import PdfReader as PDFReader  # type: ignore
             except Exception:
                 import pypdf
                 PDFReader = pypdf.PdfReader

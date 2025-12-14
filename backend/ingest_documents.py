@@ -11,8 +11,8 @@ import logging
 from pathlib import Path
 from typing import List, Dict
 try:
-    # Prefer PyPDF2 (actively maintained) to avoid deprecated cryptography imports
-    from PyPDF2 import PdfReader as PDFReader  # type: ignore
+    # Prefer pypdf (actively maintained successor to PyPDF2)
+    from pypdf import PdfReader as PDFReader  # type: ignore
 except Exception:
     import pypdf
     PDFReader = pypdf.PdfReader

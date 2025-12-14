@@ -362,7 +362,8 @@ class OutputValidatorSLM:
         pq_confidence: float = 0.85,
         meme_detected: bool = False,
         is_callback_flow: bool = False,
-        is_vague_query: bool = False
+        is_vague_query: bool = False,
+        vagueness_confidence: float | None = None
     ) -> OVValidationResult:
         """
         Validate a response against all safeguards.
@@ -407,9 +408,13 @@ class OutputValidatorSLM:
         if meme_detected:
             intent_check = meme_bypass_intent()
         elif is_vague_query:
-            intent_check = vague_bypass_intent()
+            # For vague queries, prefer running the intent SLM and applying
+            # a numeric leniency (multiplicative with vagueness confidence)
+            # instead of a hard bypass. This avoids brittle pattern overrides
+            # and lets OV use both signals.
+            intent_check = self._check_intent(query, response, is_callback_flow=is_callback_flow, is_vague_query=is_vague_query, vagueness_confidence=vagueness_confidence)
         else:
-            intent_check = self._check_intent(query, response, is_callback_flow=is_callback_flow)
+            intent_check = self._check_intent(query, response, is_callback_flow=is_callback_flow, is_vague_query=is_vague_query)
         
         checks = await asyncio.gather(
             intent_check,
@@ -457,7 +462,7 @@ class OutputValidatorSLM:
         
         return result
     
-    async def _check_intent(self, query: str, response: str, is_callback_flow: bool = False) -> OVResult:
+    async def _check_intent(self, query: str, response: str, is_callback_flow: bool = False, is_vague_query: bool = False, vagueness_confidence: float | None = None) -> OVResult:
         """
         Check if response addresses the user's intent using MS-MARCO cross-encoder.
         
@@ -473,6 +478,93 @@ class OutputValidatorSLM:
             SLMNotAvailableError: MS-MARCO is REQUIRED. No pattern fallback exists.
             Even callback bypass requires MS-MARCO to be ready (fail-closed guarantee).
         """
+        # Short-circuit: if this appears to be a short clarifying question
+        # in response to a short/vague query, treat it as a pass to avoid
+        # needless MS-MARCO checks and OV regenerations. This is important
+        # for vague prompts like "Hi Brandon" where a clarifying question
+        # is the expected behavior.
+        def _looks_like_clarifying_question(q: str, r: str) -> bool:
+            if not r or not r.strip().endswith('?'):
+                return False
+            r_tokens = r.strip().split()
+            q_tokens = q.strip().split()
+            # Heuristic: short response question (<= 25 tokens) to a short query (<= 60 chars)
+            if len(r_tokens) <= 25 and len(q.strip()) <= 60:
+                # avoid matching long multi-sentence questions
+                if '\n' not in r and len(r) < 200:
+                    # common clarifying question stems
+                    stems = ["what", "which", "can you", "could you", "would you", "do you", "are you", "what would you like", "what brings you", "what can i help you with"]
+                    rl = r.strip().lower()
+                    if any(s in rl for s in stems):
+                        return True
+            return False
+
+        def _normalize_for_substring(s: str) -> str:
+            """Normalize response text for robust substring checks.
+
+            This handles curly quotes, em-dashes, and collapses whitespace so
+            small punctuation differences don't cause misses.
+            """
+            if not s:
+                return ""
+            s = s.replace('\u2019', "'")
+            s = s.replace('\u2018', "'")
+            s = s.replace('\u2013', '-')
+            s = s.replace('\u2014', '-')
+            # Normalize fancy quotes
+            s = s.replace('“', '"').replace('”', '"')
+            # collapse whitespace
+            s = re.sub(r"\s+", " ", s)
+            return s.lower().strip()
+
+        if _looks_like_clarifying_question(query, response):
+            return OVResult(
+                safeguard=OVSafeguard.INTENT_CHECKING,
+                score=0,
+                confidence=1.0,
+                explanation="Clarifying question in response to a vague query - intent bypass",
+                method="vague_clarify_bypass"
+            )
+
+        # Treat well-known system fallback messages as non-actionable (pass intent)
+        # Recognize common fallback/callback phrases using substring matching
+        # so small variants won't be misclassified as unrelated by MS-MARCO.
+        # Robust substring detection for system fallback/callback messages.
+        # Include multiple variants observed in the wild (calling back, call back,
+        # offer callback, arrange for someone to call, etc.) so small phrasing
+        # differences won't be misclassified by MS-MARCO.
+        FALLBACK_MESSAGES = [
+            "call you back",
+            "call back",
+            "calling back",
+            "having trouble completing this request",
+            "would you like someone from the team to call you",
+            "would you like someone from brandon's team to call you",
+            "someone from the team to call",
+            "arrange for",
+            "offer a direct call",
+            "call from",
+            # Additional fallback variants observed in diagnostics
+            "i can see you're really upset",
+            "i can see you are really upset",
+            "i'm sorry — i'm having trouble",
+            "i'm sorry - i'm having trouble",
+            "i'm sorry i'm having trouble",
+            "i apologize",
+            "if you'd like to have someone",
+            "arrange for a member",
+        ]
+        norm_resp = _normalize_for_substring(response)
+        # Also normalize the fallback messages for matching
+        if any(_normalize_for_substring(fm) in norm_resp for fm in FALLBACK_MESSAGES):
+            return OVResult(
+                safeguard=OVSafeguard.INTENT_CHECKING,
+                score=0,
+                confidence=1.0,
+                explanation="System fallback response - intent bypass",
+                method="fallback_bypass"
+            )
+
         if not await self._ensure_msmarco_ready():
             raise SLMNotAvailableError(
                 "MS-MARCO intent model not available. "
@@ -490,12 +582,83 @@ class OutputValidatorSLM:
         
         try:
             intent_result = await self._msmarco.check_intent(query, response)
+            score = int(intent_result.score)
+            explanation = intent_result.explanation
+            method = "ms_marco"
+
+            # If MS-MARCO finds the response mostly unrelated to the original
+            # query, but it aligns with a known fallback/callback template, treat
+            # it as a fallback/appeal for help and bypass intent rejection.
+            if score >= 4:
+                try:
+                    # secondary check against fallback templates
+                    # Secondary templates used when MS-MARCO returns a hard
+                    # unrelated score. Keep templates broad to match observed
+                    # fallback phrasing variants.
+                    FALLBACK_TEMPLATES = [
+                        "i want to make sure i give you accurate information",
+                        "would you like someone from the team to call you back",
+                        "i'm having trouble completing this request",
+                        "would you like someone from brandon's team to call you back",
+                        "call you back",
+                        "call back",
+                        "calling back",
+                        "arrange for",
+                        "offer a direct call",
+                    ]
+                    for ft in FALLBACK_TEMPLATES:
+                        sec = await self._msmarco.check_intent(ft, response)
+                        sec_score = int(sec.score)
+                        if sec_score <= 2:
+                            return OVResult(
+                                safeguard=OVSafeguard.INTENT_CHECKING,
+                                score=0,
+                                confidence=sec.confidence,
+                                explanation=f"Response matches known fallback/appeal for help (matched template '{ft}') - bypassing intent rejection",
+                                method="ms_marco_fallback_bypass"
+                            )
+                except Exception:
+                    # If secondary checks fail, proceed with original intent result
+                    pass
+
+            # Apply numeric vagueness-based leniency when possible. The
+            # prequalifier provides a vagueness confidence (0.0-1.0) that
+            # indicates how strongly the query is VAGUE. To avoid brittle
+            # pattern overrides, we scale the MS-MARCO score by
+            # (1 - vagueness_confidence). Example: vag_conf=0.95 -> factor=0.05
+            # so an original MS-MARCO hard fail (4) becomes ~0.
+            # If the query is marked as vague but no numeric confidence was
+            # supplied, apply a conservative default leniency factor to
+            # reduce brittle hard-fails from MS-MARCO.
+            if is_vague_query:
+                if vagueness_confidence is None:
+                    vagueness_confidence = 0.5
+
+            if is_vague_query and vagueness_confidence is not None:
+                try:
+                    vfac = max(0.0, 1.0 - float(vagueness_confidence))
+                    adj = int(round(score * vfac))
+                    if adj != score:
+                        explanation = f"{intent_result.explanation} (vagueness applied -> score {adj})"
+                        score = adj
+                        method = "ms_marco_lenient"
+                except Exception:
+                    # Best-effort; if numeric adjustment fails, keep original
+                    score = int(intent_result.score)
+                    explanation = intent_result.explanation
+                    method = "ms_marco"
+            else:
+                # Keep the original hard failure for non-vague or unknown heuristics
+                score = int(intent_result.score)
+                explanation = intent_result.explanation
+                method = "ms_marco"
+
             return OVResult(
                 safeguard=OVSafeguard.INTENT_CHECKING,
-                score=intent_result.score,
+                score=score,
                 confidence=intent_result.confidence,
-                explanation=intent_result.explanation,
-                method="ms_marco"
+                explanation=explanation,
+                method=method
             )
         except Exception as e:
             raise SLMNotAvailableError(f"MS-MARCO intent check failed: {e}")

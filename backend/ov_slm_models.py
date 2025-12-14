@@ -248,7 +248,8 @@ class ME2BertEthicsChecker:
                     
                     return outputs
                 
-                outputs = await asyncio.get_event_loop().run_in_executor(None, _run_inference)
+                loop = asyncio.get_running_loop()
+                outputs = await loop.run_in_executor(None, _run_inference)
                 
                 if isinstance(outputs, torch.Tensor) and outputs.shape[-1] >= 5:
                     for i, virtue in enumerate(self.VIRTUE_NAMES):
@@ -423,7 +424,8 @@ class MSMarcoIntentChecker:
                 relevance = 1 / (1 + np.exp(-raw_score))
                 return float(relevance)
             
-            raw_relevance = await asyncio.get_event_loop().run_in_executor(None, _run_inference)
+            loop = asyncio.get_running_loop()
+            raw_relevance = await loop.run_in_executor(None, _run_inference)
             
             # Only apply heuristic boosts if MS-MARCO shows SOME relevance signal
             # This prevents truly off-topic responses from being rescued by keyword matching
@@ -577,7 +579,8 @@ class DeBertaPIIChecker:
             def _run_inference():
                 return self._pipeline(text_snippet)
             
-            entities = await asyncio.get_event_loop().run_in_executor(None, _run_inference)
+            loop = asyncio.get_running_loop()
+            entities = await loop.run_in_executor(None, _run_inference)
             
             pii_entities = []
             max_severity = 0
